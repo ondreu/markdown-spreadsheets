@@ -1,0 +1,552 @@
+# Markdown Grid — implementační spec pro Obsidian plugin
+
+Verze **0.4** · 28. 7. 2026
+Změny vs 0.3: cílová škála ≤ 500 řádků (D8) → **virtualizace kompletně odstraněna**, místo ní grow-on-demand.
+Změny vs 0.2: HTML mód odstraněn, přidána §8 (velikost buněk), odhady nahrazeny plánem implementace.
+
+---
+
+## 1. Co stavíme
+
+Obsidian plugin, který otevře markdown tabulku z noty **na nové kartě** v gridu ve stylu spreadsheetu
+(ribbon, nekonečná mřížka, klávesová navigace, nastavitelná velikost buněk) a zapíše ji zpátky jako
+**striktně validní GFM tabulku**. Plus jednorázové výpočty a export do CSV/XLSX.
+
+**Zdroj pravdy je markdown v notě.** Do souboru nepatří nic, co GFM nativně neumí.
+
+### Existující kód k převzetí (ne konkurence)
+- `@tgrosinger/md-advanced-tables` (MIT) — parser a formatter markdown tabulek. **Použít, nepsat vlastní.**
+- `ganesshkumar/obsidian-table-editor` (MIT, 2022) — reference, jak vypadá grid v Obsidian view.
+  Zastaralé, bez ribbonu a exportu, ale ušetří pár hodin tápání.
+- Ostatní spreadsheet pluginy (`Sheet Plus`, `obsidian-univer`) **nepracují s markdown tabulkami** —
+  mají vlastní formát. Nepoužitelné jako základ.
+
+---
+
+## 2. Rozhodnutí
+
+| # | Rozhodnutí | Důsledek |
+|---|---|---|
+| D1 | **Jen markdown.** Žádný HTML mód, žádné merged cells, žádné barvy buněk. | Odpadá HTML parser, sanitizer problémy, MD↔HTML konverze. |
+| D2 | **Žádné živé formule.** Jednorázový výpočet: označím rozsah → cílovou buňku → vloží se **literální hodnota**. | Odpadá formula engine i licenční past HyperFormula (GPL-3). |
+| D3 | **Anchoring bez značkování noty.** Block ID (`^grid-xxxx`) jen jako opt-in eskalace po opakovaném selhání heuristiky. | §7 |
+| D4 | **Soulad s konvencemi a review Obsidianu je hard requirement.** | §15. Mění parser (regex), ribbon (sentence case), virtualizaci (styly). |
+| D5 | Vzhled „as close as possible" k Excelu, ale nepodporované akce **viditelně disabled**, ne mlčky bez efektu. | §11 |
+| D6 | **Velikost buněk (šířka sloupců i výška řádků) je nastavitelná.** Jen vizuálně, v sidecaru. | §8 |
+| D7 | v1 je **desktop-only** (`isDesktopOnly: true`). | Ribbon na 380 px je vlastní projekt. |
+| D8 | **Cílová škála ≤ 500 řádků.** | **Žádná virtualizace.** Plain DOM, browser layout. Odpadá windowing, prefix-sum offsety, měření viditelného rozsahu. Místo toho grow-on-demand (§9). |
+
+---
+
+## 3. Omezení GFM — co určuje celý návrh
+
+| Excel feature | GFM | Řešení |
+|---|---|---|
+| Řádek 1 jako data | ❌ | GFM **vyžaduje** header + delimiter řádek. Řádek 1 = hlavička, data od řádku 2. Bez výjimky. |
+| Merged cells | ❌ | Nepodporováno (D1). Tlačítko neexistuje. |
+| Víceřádkový obsah buňky | ❌ | Buňka je vždy jednořádková. Text wrap v gridu je **jen vizuální** (§8.3). |
+| Zarovnání per buňka | ❌ | Jen per sloupec (`:---`, `:---:`, `---:`). |
+| Barvy, pozadí | ❌ | Nepodporováno (D1). |
+| Bold / italic / code | ✅ | Inline markdown v `Cell.raw`. |
+| Číselné formáty | ❌ | Buňka je text. „Formát" jen destruktivně (přepíše obsah). |
+| Živé formule | ❌ | Jednorázový výpočet (D2, §12). |
+| Šířky sloupců, výšky řádků, freeze | ❌ | Sidecar (§8.4). |
+| `\|` v buňce | ~ | Escapovat jako `\|`. Platí i pro wikilink aliasy a `![[img\|300]]`. |
+| Sparse data | ❌ | Tabulka je vždy rectangular. Hodnota v H1 vynutí prázdné A1–G1. |
+
+**Důsledek pro ribbon:** merge, barvy a per-cell align v UI **vůbec nejsou**. Číselné formáty jsou
+destruktivní a musí to být z tooltipu poznat.
+
+**Důsledek pro nekonečný grid:** used range = bounding box neprázdných buněk, ne sparse set.
+Hodnota v `C7` a `Z400` = zápis tabulky 26×400, tj. 10 000 prázdných buněk. Nutná pojistka (§13.1).
+
+---
+
+## 4. Architektura a struktura souborů
+
+```
+src/
+  main.ts              Plugin: registerView, commands, editor-menu, settings
+  view/
+    GridView.ts        ItemView: lifecycle, getState/setState, dirty tracking
+    Ribbon.ts          pásmo karet
+    GridHost.ts        integrace grid knihovny + grow-on-demand + sizing
+    StatusBar.ts       agregace výběru (Sum/Avg/Count)
+  model/
+    GridModel.ts       sparse cells, usedRange, undo stack
+    parse.ts           markdown → GridModel
+    serialize.ts       GridModel → markdown
+  file/
+    AnchorResolver.ts  najdi tabulku v souboru
+    Writer.ts          Vault.process splice + konflikty + backup
+  feature/
+    QuickCalc.ts
+    exportCsv.ts
+    exportXlsx.ts      lazy import exceljs
+  store/
+    Sidecar.ts         loadData/saveData: colWidths, rowHeights, freeze, decimals
+  settings.ts
+styles.css
+manifest.json
+eslint.config.mjs
+```
+
+```
+Entry point (command / editor-menu / reading-mode overlay / ribbon icon)
+   → AnchorResolver           {startLine, endLine}
+   → parse.ts                 GridModel
+   → GridView + GridHost      ←→ Sidecar (velikosti, freeze)
+   → (editace) → GridModel → serialize.ts → Writer → Vault.process
+```
+
+---
+
+## 5. Datový model
+
+```ts
+type CellAddr = string;                  // "r:c", 0-based, řádek 0 = hlavička
+
+interface Cell {
+  raw: string;                           // raw markdown text buňky — ZDROJ PRAVDY
+}
+
+interface GridModel {
+  cells: Map<CellAddr, Cell>;            // sparse; prázdná buňka v mapě NEEXISTUJE
+  colAlign: (null | 'left' | 'center' | 'right')[];
+  usedRange: { rows: number; cols: number };   // derived: bounding box
+}
+```
+
+**`Cell.raw` je raw markdown, ne rendered hodnota.** Buňka `**Ano**` se v read-only stavu zobrazí bold,
+při editaci (F2) se přepne na `**Ano**`. WYSIWYG round-trip markdown → rich text → markdown je zdroj
+tichých ztrát — **nedělat**.
+
+Ribbon toggle „Raw / Rendered". Rendered je perf riziko: `MarkdownRenderer.render()` na stovky viditelných
+buněk je drahé → renderovat jen viditelné, cachovat podle hashe `raw`, **default = raw**.
+`MarkdownRenderer.render()` musí dostat jako Component **view**, ne plugin (§15.2).
+
+---
+
+## 6. Parser a serializer
+
+Základ: `@tgrosinger/md-advanced-tables`. Vlastní kód jen tam, kde knihovna nesedí.
+
+**Pravidlo `regex-lookbehind` (§15.2) zakazuje lookbehind** kvůli starším iOS. Escapované pipe tedy
+**nelze** hledat jako `/(?<!\\)\|/`. Nutný ruční znakový scan:
+
+```ts
+export function splitRow(line: string): string[] {
+  const out: string[] = [];
+  let buf = '', esc = false, inCode = false;
+  for (const ch of line) {
+    if (esc)            { buf += ch; esc = false; continue; }
+    if (ch === '\\')    { buf += ch; esc = true;  continue; }
+    if (ch === '`')     { inCode = !inCode; buf += ch; continue; }
+    if (ch === '|' && !inCode) { out.push(buf); buf = ''; continue; }
+    buf += ch;
+  }
+  out.push(buf);
+  return out;
+}
+```
+
+Parser: zahodit první a poslední prvek pokud je prázdný (vedoucí/koncová `|`), trimovat buňky,
+delimiter řádek → `colAlign`, prázdné buňky **nezapisovat do mapy**.
+
+Serializer:
+1. zapsat jen `usedRange`;
+2. escapovat `|` → `\|` v každé buňce;
+3. znovu zarovnat pipe do sloupců podle nejdelší buňky (uživatelé to očekávají), strop např. 60 znaků;
+4. delimiter řádek podle `colAlign`;
+5. **žádný trailing whitespace**, ukončit `\n`.
+
+Round-trip test je povinný: `serialize(parse(x)) === serialize(parse(serialize(parse(x))))`.
+
+---
+
+## 7. Anchoring — najít tu samou tabulku podruhé
+
+Čísla řádků jsou nepoužitelná (uživatel edituje notu nad tabulkou). Vrstvy, block ID až nakonec (D3):
+
+**Vrstva 0 — za běhu.** Dokud je view otevřený, poslouchá `vault.on('modify')` a po každé změně souboru
+přepočítá pozici. Drift vzniká tedy jen **mezi sessions** (restart, sync z jiného zařízení).
+
+**Vrstva 1 — jedna tabulka v souboru.** `MetadataCache.getFileCache(file).sections` s `type: 'table'`.
+Jedna tabulka → hotovo, nulová nejednoznačnost. **Většina reálných případů.**
+
+**Vrstva 2 — strukturální fingerprint** (v sidecaru):
+```ts
+interface Anchor {
+  path: string;
+  tableIndex: number;         // n-tá tabulka v souboru
+  headerHash: string;         // hash normalizovaného header řádku
+  colCount: number;
+  rowCount: number;
+  precedingHeading?: string;  // nejbližší heading nad tabulkou
+}
+```
+Skórování všech tabulek v souboru: `headerHash` = 100 · `precedingHeading` = 40 · `colCount` = 20 ·
+`rowCount` blízkost = do 10 · penalizace −5 za každou pozici odstupu od `tableIndex`.
+Vítěz s odstupem ≥ 30 → otevřít. Jinak dialog s náhledy „Vyber správnou tabulku".
+
+**Vrstva 3 — block ID, opt-in.** Až po **opakovaném** selhání vrstvy 2 u téhož souboru nabídnout:
+„Nelze spolehlivě identifikovat tabulku. Přidat trvalou značku `^grid-a7f3`? (změní tvou notu)"
+Nikdy automaticky. Nastavení `anchorStrategy: 'fingerprint' | 'ask' | 'blockId'`, default `'fingerprint'`.
+
+---
+
+## 8. Velikost buněk (D6)
+
+Nic z toho nejde do markdownu — GFM to neumí. Vše je **vizuální stav v sidecaru**.
+
+### 8.1 Šířka sloupců
+- **Drag** na hranici v hlavičce sloupce. Min 40 px, max 800 px.
+- **Double-click** na hranici = autofit sloupce podle nejdelší viditelné buňky (+ padding), strop 400 px.
+- **Číselný input** v ribbonu (`Table ▸ Column width`) pro přesnou hodnotu.
+- Vybráno víc sloupců → drag/input nastaví **všem stejnou** šířku.
+- `Table ▸ Autofit all columns`.
+
+### 8.2 Výška řádků
+- **Drag** na hranici v číslování řádků. Min 18 px, max 400 px.
+- **Double-click** = autofit podle zabaleného textu.
+- Vybráno víc řádků → uniformní výška.
+- `Table ▸ Default row height` v nastavení pluginu (globálně) + per-tabulka override.
+
+### 8.3 Text wrap
+- Toggle `Home ▸ Wrap text` per sloupec. Zabalený text vyžaduje výšku řádku > 1 řádek.
+- **Zabalení je čistě vizuální.** Obsah buňky zůstává jednořádkový markdown; do souboru se nic nepřidává.
+- Bez wrapu: overflow `ellipsis`, plný obsah v tooltipu a ve formula baru.
+
+### 8.4 Persistence
+```json
+{
+  "tables": {
+    "Notes/Projekt.md::t1::a7f3c2": {
+      "colWidths": [120, 200, 80],
+      "rowHeights": { "0": 32, "5": 60 },
+      "wrapCols": [1],
+      "frozenRows": 1,
+      "frozenCols": 0,
+      "decimals": 2
+    }
+  },
+  "anchors": { "...": { "tableIndex": 1, "headerHash": "a7f3c2", "colCount": 3, "rowCount": 12 } }
+}
+```
+- `rowHeights` je **sparse mapa**, ne pole — většina řádků má default. Pole by u 5000 řádků bylo plýtvání.
+- Přes `loadData()` / `saveData()`. **Ne** vlastní cesta do `.obsidian` (`hardcoded-config-path`, §15.2).
+- Sidecar drží jen kosmetiku. Rozpadne se při přesunu souboru (řešit `vault.on('rename')`) a mimo tento
+  vault zmizí. Nota zůstane 100% čitelná — jen bez zapamatovaných velikostí. Přijatelný trade-off.
+- Insert/delete sloupce nebo řádku **musí přeindexovat** `colWidths` / `rowHeights` / `wrapCols`,
+  jinak se velikosti rozjedou o jeden. Snadné zapomenout, otravné debugovat.
+
+### 8.5 Dopad na implementaci
+
+Díky D8 (≤ 500 řádků) **nic z toho nepotřebuje virtualizaci** — variabilní výšky řádků jsou zdarma,
+layout řeší browser. Zbývají tři věci:
+
+1. **Šířky sloupců: CSS custom properties na jednom kontejneru**, ne inline styly na buňkách
+   (`no-static-styles-assignment`, §15.2):
+   ```ts
+   host.style.setProperty(`--mg-col-${i}`, `${w}px`);
+   ```
+   ```css
+   .mg-cell[data-col="3"] { width: var(--mg-col-3); }
+   ```
+   Jedno přiřazení na sloupec. Sloupců je málo (desítky) → v `styles.css` stačí vygenerovat pravidla
+   pro rozumný strop (např. 64 sloupců) a hotovo.
+
+2. **Výšky řádků: constructable stylesheet.** Tady předchozí trik nefunguje — řádků je 500 a nelze
+   předgenerovat CSS pravidlo pro každý index. Zároveň `no-forbidden-elements` nedovolí vložit
+   `<style>` element do DOM. Řešení je CSSOM bez elementu:
+   ```ts
+   const sheet = new CSSStyleSheet();
+   // rowHeights je SPARSE — pravidlo jen pro řádky, které uživatel skutečně zvětšil
+   const rules = Object.entries(rowHeights).map(([r, h]) => `.mg-r${r}{height:${h}px}`);
+   sheet.replaceSync(`.mg-row{height:var(--mg-row-default)}\n${rules.join('\n')}`);
+   activeDocument.adoptedStyleSheets = [...activeDocument.adoptedStyleSheets, sheet];
+   ```
+   Regenerovat celý sheet při změně (debounce ~300 ms), ne po pravidle. Typicky bude pravidel jednotky —
+   většina řádků má default.
+   **Fallback**, pokud by to narazilo: `el.style.height` s cíleným `// eslint-disable-next-line
+   obsidianmd/no-static-styles-assignment` a komentářem, že jde o data-driven geometrii.
+   Review to u odůvodněné dynamické geometrie akceptuje; nezneužívat na statický vzhled.
+
+3. **Drag handler** používá `activeDocument` / `activeWindow`, ne globální `document` / `window`
+   (`prefer-active-doc`, `no-global-this`) — jinak resize nefunguje ve vytrženém okně.
+   Totéž platí pro `adoptedStyleSheets` výše.
+
+4. **Debounce zápisu do sidecaru** při dragu (~300 ms po pustění), ne na každý `mousemove`.
+
+---
+
+## 9. Grid — plain DOM, grow-on-demand (D8)
+
+**Žádná virtualizace.** Cíl: **500 řádků × 30 sloupců** = ~15 000 DOM buněk, což moderní Chromium
+vyrenderuje bez problémů. Windowing by tady byl čistý overhead a zdroj bugů (scroll jitter, ztracený focus,
+rozbitá selekce při scrollu).
+
+- Startovní mřížka: `max(usedRows + 30, 100)` × `max(usedCols + 5, 26)`.
+- **Grow-on-demand:** při scrollu do posledních ~10 řádků **přidat** dalších 50 (a analogicky sloupce).
+  Řádky se nikdy neodebírají — o dva řády jednodušší než windowing.
+- Strop 2 000 řádků; nad ním hláška `Grid limit reached. This plugin targets tables up to ~500 rows.`
+  (pojistka proti nekonečnému rolování, ne funkce).
+- Vizuálně odlišit used range vs. „mimo", aby uživatel viděl, co se uloží.
+- Hlavičky: `A B C…` pro sloupce, `1 2 3…` pro řádky. Řádek 1 je markdown hlavička — vizuálně odlišit
+  (bold + jiné pozadí), aby bylo jasné, že ji nelze smazat.
+- Freeze: `frozenRows` default 1 (hlavička).
+
+Klávesy a interakce (v1): Tab/Shift+Tab · Enter/Shift+Enter · arrows · Ctrl+arrows na okraj dat ·
+Shift+arrows range · Ctrl+A · F2 / typing = edit · Esc = zrušit edit · Delete = vymazat obsah výběru ·
+Ctrl+C/V/X pro rozsahy (TSV do clipboardu, aby fungoval paste z/do Excelu) · fill handle ·
+Ctrl+Z/Ctrl+Y ve vlastním undo stacku.
+
+**Paste handler musí kontrolovat `evt.defaultPrevented` a volat `evt.preventDefault()`**
+(`editor-drop-paste`, §15.2).
+
+---
+
+## 10. Zkratky uvnitř view
+
+Uvnitř `GridView` použít Obsidian **`Scope`** API, ne globální commandy — commandy nesmí mít default
+hotkeys (`no-default-hotkeys`, §15.2) a globální listenery by kolidovaly s editorem.
+
+---
+
+## 11. Ribbon
+
+| Karta | Sekce |
+|---|---|
+| **Home** | Clipboard · Cells (insert/delete/move row & column) · Alignment (per sloupec) · Format (bold/italic/code) · Wrap text |
+| **Data** | Sort · Filter (jen zobrazení, nemění notu) · Find & replace · Fill · **Calculate** |
+| **Table** | Column width · Row height · Autofit · Freeze · Used range info · Reformat |
+| **Export** | CSV · XLSX · Copy as markdown |
+
+**Kolize s konvencemi (D4):** Obsidian vynucuje **sentence case** pro UI stringy (`ui/sentence-case`).
+Excelový Title Case („Insert Row Above") review neprojde → `Insert row above`. Ribbon bude *strukturou*
+Excel, *typografií* Obsidian. Neobejitelné.
+
+Barvy a rozměry výhradně přes Obsidian CSS variables (`--background-secondary`, `--text-muted`,
+`--interactive-accent`, `--background-modifier-border`…) v `styles.css`. Hardcoded barvy = rozbité
+v půlce témat a review to označí.
+
+---
+
+## 12. QuickCalc — jednorázový výpočet (D2)
+
+- **Status bar view** trvale zobrazuje `Sum · Avg · Count` aktuálního výběru (jako Excel vlevo dole).
+  Nezapisuje nikam. Tohle nejspíš pokryje většinu potřeby — implementovat **první**.
+- **Vložení hodnoty:** označit rozsah → `Data ▸ Calculate` → zvolit funkci → kliknout cílovou buňku →
+  do buňky se vloží **literální text výsledku**.
+- Funkce v1: `SUM`, `AVERAGE`, `COUNT`, `COUNTA`, `MIN`, `MAX`, `MEDIAN`, `PRODUCT`.
+- Parsing čísel respektuje locale (CZ: `1 234,56` i `1234.56`; ignorovat nezlomitelné mezery).
+  Nečíselné buňky se ignorují, ve status baru „ignored 3 non-numeric cells".
+- Formát výsledku: `decimals` ze sidecaru, oddělovač podle locale.
+- **Žádná provenience v notě.** Volitelně jen v paměti view: „Recalculate last" (zmizí se zavřením karty).
+
+---
+
+## 13. Zápis, souběžnost, konflikty
+
+Nejpravděpodobnější zdroj data lossu. Tato sekce je důležitější než celý ribbon.
+
+### 13.1 Zápis
+```
+1. usedRange = boundingBox(neprázdné buňky)
+2. hustota = |neprázdné| / (rows × cols)
+3. if (hustota < 0.3 && rows × cols > 200) → modal:
+     "Zapíše se tabulka 26×400 (10 400 buněk, z toho 312 neprázdných)."
+     [Shrink to actual data] [Write anyway] [Cancel]
+4. newBlock = serialize(model)
+5. await Vault.process(file, data => {
+     re-resolve anchor v data;              // soubor se mohl změnit mezitím
+     if (hash !== expected) return data;    // → conflict banner, NEZAPISOVAT
+     return splice(data, start, end, newBlock);
+   })
+```
+`Vault.process` je atomický read-modify-write. **Nepoužívat** `read()` + `modify()` — race condition.
+Ověřit, že `process` existuje v deklarované `minAppVersion` (`no-unsupported-api`).
+
+### 13.2 Souběžnost
+- **Ownership:** dokud je grid otevřený, je editorem toho regionu. Žádný live dvoucestný sync.
+- **Ukládání:** autosave, debounce 800 ms + na `onClose` + na blur karty. (Otevřená otázka §17/1.)
+- **Externí změna:** `vault.on('modify')` → přepočítat hash regionu.
+  - Region nezměněn (změna jinde v notě) → jen aktualizovat anchor, ticho.
+  - Region změněn → **conflict banner**: `File changed externally. [Reload] [Overwrite] [Show diff]`.
+    **Nikdy neřešit automaticky.**
+- **Anchor zmizel** → banner `Table no longer in file. [Append to note] [Export and close]`.
+- **Backup:** posledních 10 verzí serializovaného regionu v plugin datech + command
+  `Restore previous version`. Cena pár kB, hodnota nekonečná.
+- **Undo:** grid má vlastní stack. Obsidianovo undo v notě o gridu neví — po zápisu je Ctrl+Z v notě
+  jeden velký krok. Zdokumentovat v README, nebrat jako bug.
+
+---
+
+## 14. Export
+
+- **CSV** — vlastní, ~40 řádků. RFC 4180 quoting · volba delimiteru **`,` / `;`** (v CZ locale je `;`
+  pro Excel nutnost) · **BOM pro UTF-8** (jinak Excel na Windows zmrší diakritiku) · volba raw vs. rendered.
+- **XLSX** — **`exceljs`** (MIT, aktivně udržovaný, funguje v browseru), **lazy `import()`** (~1 MB).
+  - **Nepoužívat `xlsx` / SheetJS z npm:** verze 0.18.5 je 4 roky stará, 2 high-severity CVE (ReDoS,
+    prototype pollution) bez fixu na npm. Fix je jen na `cdn.sheetjs.com` a runtime načítání remote kódu
+    je pro community plugin **zakázané**.
+  - **`exceljs` může tahat Node builtins.** Pravidlo `no-nodejs-modules` je povoluje jen za
+    `Platform.isDesktop` guardem. Buď browser build bez Node deps, nebo esbuild alias/shim.
+    **Ověřit hned na začátku** — pokud to nejde rozumně, fallback je vlastní minimální XLSX zipper
+    (jen data, bez formátování; XLSX je zip s pár XML soubory).
+- Uložení: `Vault.createBinary()` do vaultu; případně systémový save dialog na desktopu.
+
+---
+
+## 15. Knihovny a konvence Obsidianu
+
+### 15.1 Knihovny
+
+| Potřeba | Volba | Licence | Poznámka |
+|---|---|---|---|
+| Grid komponenta | **`jspreadsheet-ce` v5** | MIT | ~93 kB gz, plain DOM mount, Excel-like ovládání, resize řádků i sloupců. Při D8 (≤ 500 řádků) s velkou rezervou dostačuje — jeho lazy loading ani nepotřebuješ |
+| — alternativa | `Univer` | Apache-2 + paid | MB-scale bundle, overkill po D1/D2 |
+| — nepoužívat | `Handsontable` | komerční od 2019 | Bez placené licence nelze |
+| — nepoužívat | `AG Grid Community` | MIT | Data grid, ne spreadsheet: row-oriented |
+| MD parser/formatter | `@tgrosinger/md-advanced-tables` | MIT | §6 |
+| XLSX | `exceljs`, lazy | MIT | §14 |
+| CSV | vlastní | — | papaparse zbytečný |
+
+**Ověřit na začátku, ne až v půlce:**
+1. **Popout okna.** `jspreadsheet-ce` sahající na globální `document` nebude fungovat ve vytrženém okně.
+   Výstupy: funguje / patch / vědomě nepodporujeme. (Vlastní grid layer už není potřeba uvažovat —
+   při D8 by šlo o ~300 řádků plain DOM tabulky, ne o virtualizační engine.)
+2. **`exceljs` + Node builtins** v esbuild bundlu (§14).
+3. **`Vault.process`** v cílové `minAppVersion`.
+4. **`new CSSStyleSheet()` + `adoptedStyleSheets`** v Obsidian rendereru a v popout okně (§8.5).
+
+Bundle budget: pod ~1 MB `main.js` bez exceljs.
+
+### 15.2 Pravidla, která mění tento návrh
+
+Obsidian má **oficiální ESLint plugin** — nasadit od prvního commitu jako blocking CI krok.
+Doladit to na konci je dvakrát dražší.
+
+```bash
+npm i -D eslint @typescript-eslint/parser eslint-plugin-obsidianmd
+```
+```js
+// eslint.config.mjs
+import tsparser from "@typescript-eslint/parser";
+import { defineConfig } from "eslint/config";
+import obsidianmd from "eslint-plugin-obsidianmd";
+
+export default defineConfig([
+  ...obsidianmd.configs.recommended,
+  { files: ["**/*.ts"],
+    languageOptions: { parser: tsparser, parserOptions: { project: "./tsconfig.json" } } },
+]);
+```
+
+| Pravidlo | Dopad |
+|---|---|
+| `regex-lookbehind` | Parser **nesmí** použít lookbehind na escapované pipe → znakový scan (§6) |
+| `no-static-styles-assignment` | Šířky/výšky ne inline na buňkách → CSS vars na kontejneru (§8.5) |
+| `ui/sentence-case` | Ribbon nesmí mít Title Case (§11) |
+| `prefer-active-doc`, `no-global-this`, `prefer-window-timers` | Popout okna: `activeDocument`, `activeWindow`, `window.setTimeout` |
+| `no-nodejs-modules` | `exceljs` bez Node builtins, nebo za `Platform.isDesktop` (§14) |
+| `no-plugin-as-component` | `MarkdownRenderer.render()` dostane view, ne plugin (§5) |
+| `no-view-references-in-plugin` | Žádné `this.gridView` → `workspace.getLeavesOfType()` |
+| `detach-leaves` | Žádné `detachLeavesOfType()` v `onunload()` |
+| `hardcoded-config-path` | Sidecar přes `loadData()`/`saveData()`, ne cesta do `.obsidian` (§8.4) |
+| `no-unsupported-api` | `Vault.process` musí existovat v `minAppVersion` |
+| `no-default-hotkeys` | Commandy bez default hotkeys; zkratky ve view přes `Scope` (§10) |
+| `commands/no-plugin-name-in-command-name`, `no-plugin-id-in-command-id`, `no-command-in-command-name/id` | id `open-table-in-grid`, name „Open table in grid". Obsidian prefixuje sám |
+| `settings-tab/no-manual-html-headings` | `new Setting(el).setHeading()`, ne `<h2>` |
+| `vault/iterate` | `vault.getFileByPath()`, ne iterace všech souborů |
+| `prefer-file-manager-trash-file` | `FileManager.trashFile()` místo `Vault.delete()` |
+| `no-forbidden-elements` | Nevkládat `<style>` / `<script>` do DOM — styly do `styles.css` |
+| `prefer-instanceof` | `node.instanceOf(HTMLElement)` u DOM nodů (cross-window) |
+| `editor-drop-paste` | Paste handler: kontrola `evt.defaultPrevented` + `preventDefault()` (§9) |
+| `object-assign` | `Object.assign({}, DEFAULTS, data)` — tři argumenty |
+| `no-sample-code`, `sample-names` | Vyčistit sample plugin, přejmenovat třídy |
+| `platform` | OS detekce přes `Platform`, ne `navigator` |
+| `validate-manifest`, `validate-license` | Struktura manifestu, copyright v LICENSE |
+
+### 15.3 Naming, manifest, release
+- Název **nesmí** obsahovat „Obsidian" ani „plugin" a nesmí začínat na „Obsidian".
+  → `Markdown Grid`, id `markdown-grid`.
+- `description`: krátká, bez „This plugin…", bez „Obsidian". Např.
+  `Edit Markdown tables in a spreadsheet-style grid in a dedicated tab.`
+- `manifest.json`: `id`, `name`, `version` (semver), `minAppVersion`, `description`, `author`,
+  `authorUrl`, `isDesktopOnly: true`.
+- **Git tag == `version`, přesně, bez `v` prefixu.** `1.0.0`, ne `v1.0.0`. Nejčastější důvod spadlé validace.
+- Release assety: `main.js`, `manifest.json`, `styles.css` jako **samostatné soubory**.
+- V rootu: `README.md`, `LICENSE`, atribuce třetích stran.
+- Developer policies: žádné remote načítání kódu · žádná telemetrie · žádné reklamy. Tento plugin
+  **nepotřebuje síť vůbec** — silný bod pro review.
+
+---
+
+## 16. Plán implementace
+
+Postavené tak, aby po každém kroku existovala spustitelná verze. Kroky 1–6 jsou jedna implementační
+session; 7+ vyžadují zpětnou vazbu z reálného běhu v Obsidianu.
+
+| # | Krok | Hotovo znamená |
+|---|---|---|
+| 1 | Skeleton: manifest, esbuild, ESLint config zelený, `registerView`, prázdná karta | Karta se otevře příkazem |
+| 2 | `parse.ts` + `serialize.ts` + round-trip testy na patologických tabulkách (escapované pipe, inline code s `\|`, wikilink aliasy, nerovné řádky, prázdné buňky) | `serialize(parse(x))` je stabilní |
+| 3 | `AnchorResolver` vrstvy 0–2 | Otevře správnou tabulku i po editaci noty nad ní |
+| 4 | `GridHost`: jspreadsheet-ce v ItemView, načtení modelu, klávesová navigace, editace buňky, grow-on-demand | Vidím a edituju tabulku; scroll dolů přidává řádky |
+| 5 | `Writer`: `Vault.process` splice + hash check + conflict banner + backup + hustota modal | Změna v gridu se objeví v notě, konflikt nepřepíše cizí změnu |
+| 6 | Velikost buněk (§8): drag šířek a výšek, autofit, wrap, constructable stylesheet, persistence do sidecaru, přeindexování při insert/delete | Velikosti přežijí zavření karty a smazání sloupce |
+| 7 | Ribbon (§11) + row/column operace + sort + find & replace + undo/redo | |
+| 8 | Status bar agregace, pak QuickCalc vložení hodnoty (§12) | |
+| 9 | CSV export, pak XLSX (lazy exceljs) | |
+| 10 | Settings tab, README, ESLint na nulu, release + submission PR | |
+
+**Pokud se do session nevejde vše, řezat v tomto pořadí (odzadu):** 10 → 9 → 8 → 7.
+**Nikdy neřezat 5** — bez hash checku a backupu je plugin nástroj na tichou ztrátu dat.
+
+### Co session neuzavře
+
+Kód není to, co u tohoto typu pluginu trvá. Tři věci se dají zjistit **jen spuštěním v Obsidianu**:
+
+1. **Chová se `jspreadsheet-ce` v `ItemView` a v popout okně?** Kolize CSS, keyboard scope, focus.
+   Po D8 už to není existenční riziko — fallback je plain `<table>` s vlastními handlery, ne
+   virtualizační engine.
+2. **Projde `exceljs` esbuildem bez Node builtins?** Pokud ne, fallback na vlastní XLSX zipper.
+3. **Funguje `adoptedStyleSheets` v Obsidian rendereru a popout okně?** (§8.5) Pokud ne, cílený
+   `eslint-disable` na `el.style.height`.
+4. **Chová se `AnchorResolver` na tvých reálných notách?** Skórovací váhy v §7 jsou odhad. Doladí je
+   až kolekce případů, kde selžou.
+
+Plus jedna kategorie, která se neprojeví hned: **write-back path selhává vzácně a tiše.**
+Konflikt při souběžné editaci, drift anchoru po syncu, přeindexování velikostí po smazání sloupce —
+nic z toho se neprojeví na první tabulce, ale projeví se to za měsíc na té, na které ti záleží.
+Proto §13.
+
+---
+
+## 17. Otevřené otázky
+
+1. **Ukládání:** autosave (Excel-like, žádné Ctrl+S) nebo explicitní save s dirty indikátorem?
+   Autosave nad gitovaným vaultem generuje hodně commitů, nad Obsidian Syncem hodně revizí.
+2. **Popout okna:** pokud `jspreadsheet-ce` v popout okně nefunguje — akceptovatelné omezení, nebo blocker?
+3. **Publikace:** oficiální community plugin store, nebo stačí lokální/BRAT instalace?
+   Pokud jen lokální, §15.2 se z povinnosti mění na doporučení — ale nechal bych to,
+   asi polovina těch pravidel jsou reálné bugy (popout okna, memory leaky), ne kosmetika.
+
+*Vyřešeno:* škála ≤ 500 řádků → D8, žádná virtualizace.
+
+---
+
+## 18. Rizika
+
+| Riziko | Dopad | Mitigace |
+|---|---|---|
+| **Data loss při zápisu do noty** | vysoký | `Vault.process` + hash check před spliceem · backup 10 verzí · konflikt nikdy automaticky |
+| `jspreadsheet-ce` nefunguje v ItemView / popout okně | střední (po D8) | Ověřit v kroku 4, dřív než na tom stojí ribbon a sizing. Fallback je plain `<table>`, ne engine |
+| `adoptedStyleSheets` nefunguje v Obsidian rendereru | výšky řádků nejdou nastavit čistě | Cílený `eslint-disable` na `el.style.height` s odůvodněním (§8.5) |
+| `exceljs` + `no-nodejs-modules` | XLSX jen desktop, nebo vůbec | Fallback: minimální vlastní XLSX zipper |
+| Anchoring selže u not s víc podobnými tabulkami | otevře se špatná tabulka | Odstup ≥ 30 · dialog s náhledem · eskalace na block ID |
+| Přeindexování `colWidths`/`rowHeights` po insert/delete | velikosti se rozjedou o jeden | Explicitní testy na insert/delete v kroku 6 (§8.4) |
+| Rendered mód pomalý (`MarkdownRenderer` × stovky buněk) | nepoužitelný toggle | Jen viditelné buňky, cache podle hashe, default raw |
+| Review Obsidianu vrátí PR na několik kol | zdržení | ESLint blocking v CI od prvního commitu |
+| Scope creep | nedokončeno | §2 ne-cíle jsou závazné: žádný HTML, žádné živé formule, žádný mobil |
