@@ -120,7 +120,9 @@ fails if it is stale.
 
 - `docs/design` — the specification this implements.
 - `docs/DECISIONS.md` — where the implementation departs from it, and why.
+- `docs/HANDOFF.md` — current state, what has never run inside Obsidian, known gaps.
 - `RELEASING.md` — release and store-submission procedure.
+- `CLAUDE.md` — the invariants and Obsidian conventions this code is built on.
 
 ## Third-party attribution
 

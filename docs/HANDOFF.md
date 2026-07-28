@@ -1,0 +1,101 @@
+# Handoff
+
+State as of **28 July 2026**, commit `dc6b79e`, version **0.1.0**.
+
+This file goes stale. `CLAUDE.md` holds the durable rules; this one holds what is done, what is
+not, and what to look at first.
+
+## Where things stand
+
+The plugin is complete against `docs/design` v0.4 — all ten steps of §16, not just the 1–6 the
+design scopes to one session. `main` and `claude/obsidian-plugin-design-13a7yl` point at the same
+commit; there is no open pull request.
+
+| | |
+| --- | --- |
+| Source | ~6 650 lines across 29 files |
+| Tests | 169, in 6 files, ~1 300 lines |
+| Lint | `eslint-plugin-obsidianmd` at 0 errors, 0 warnings |
+| Bundle | `main.js` 109 kB against the ~1 MB budget of §15.1 |
+| Runtime dependencies | none |
+| Release | [0.1.0](https://github.com/ondreu/markdown-spreadsheets/releases/tag/0.1.0), three assets, published |
+
+`npm run check` was green at this commit, and the released assets' SHA-256 digests matched a local
+build byte for byte.
+
+## What has never run inside Obsidian
+
+**This is the important part of the handoff.** Every line was written and tested outside Obsidian.
+The model, file and feature layers are covered by unit and integration tests, but nothing has been
+loaded into the app. Expect the first real session to be about the view layer.
+
+Install it before doing anything else — `RELEASING.md` has the manual and BRAT routes — and check,
+roughly in this order:
+
+1. **Does `GridHost` mount and behave in an `ItemView`?** Sticky headers and frozen rows and
+   columns rely on `position: sticky` inside a flex row within the scroll container. If the freeze
+   offsets are wrong, they come from `GridStyles.buildCss` and the constants in
+   `src/view/constants.ts` (`HEAD_HEIGHT`, `ROW_HEAD_WIDTH`), which are assumed, not measured.
+2. **Does `adoptedStyleSheets` work in the Obsidian renderer, and in a popped-out window?** §8.5's
+   open question. `GridStyles.attach` probes it and falls back to per-row `setCssStyles`; the
+   status bar says "Row sizing uses the fallback path" when it did. If the fallback is in use,
+   find out why before accepting it.
+3. **Does the view `Scope` capture the keys it should, and only those?** `shouldIgnoreKey()` bails
+   out when focus is in any input inside the view. The interaction between the `Scope` handlers and
+   the cell editor's own `keydown` is the part most likely to need adjusting.
+4. **Do the clipboard events fire?** Copy/cut/paste are DOM events on the scroll container, which
+   needs focus. `Ctrl+C` is deliberately *not* registered in the `Scope` so the native `copy` event
+   can happen. The ribbon buttons use `navigator.clipboard` instead and may need a permission the
+   DOM path does not.
+5. **Is rendered mode usable?** Off by default for the reason in §5. It renders only cells that
+   intersect the viewport and caches by content hash, but "hundreds of `MarkdownRenderer` calls" is
+   still the plausible way to make this view feel slow.
+6. **Do the §7 scoring weights hold up on real notes?** The one open question the design predicts
+   will survive. They are the spec's numbers, untuned. Collect the cases where the picker appears
+   and it should have been obvious.
+
+## Deliberate deviations — do not "fix" these
+
+Full reasoning in `docs/DECISIONS.md`. In short:
+
+- The grid is **our own plain DOM**, not `jspreadsheet-ce`. This is the fallback §18 names, chosen
+  up front because every constraint in §8–§10 fights the library and because the risk §15.1 says to
+  verify first cannot be verified without running Obsidian.
+- **`parse.ts` / `serialize.ts` are ours**, not `@tgrosinger/md-advanced-tables`. §6 specifies the
+  algorithm anyway.
+- **XLSX uses an own stored-only zip writer**, not `exceljs` — §14's named fallback, taken to avoid
+  the Node-builtin problem `no-nodejs-modules` creates.
+
+§17's three open questions are resolved there too: autosave with a manual mode, popout supported,
+built to community-store standards.
+
+## Known gaps and rough edges
+
+Small, honest, and none of them data-affecting:
+
+- **Tab title after a rename.** The view follows the renamed file, but Obsidian's typed API has no
+  supported way to force a tab header repaint, so the label stays stale until the tab is reopened.
+- **`getSettingDefinitions()`** (Obsidian 1.13+ declarative settings) is not implemented — it is
+  absent from the typings we build against, and `minAppVersion` is 1.7.2 where `display()` is
+  correct. `settings-tab/prefer-setting-definitions` is off in `eslint.config.mjs` for that reason.
+  Revisit when `minAppVersion` reaches 1.13.
+- **128-column cap**, because column widths need one pre-generated CSS rule per index. Raising it
+  is one constant in `src/view/constants.ts` plus regenerating `styles.css`.
+- **`GridHost` and `GridView` have no unit tests** — no DOM in the test environment. Logic worth
+  testing belongs in the Obsidian-free layers.
+- **Row heights are measured, not predicted**, so `autofitRows` depends on the DOM already being
+  laid out. It is called after a paint in every current path; a new caller may need to wait.
+
+## Not done, and not asked for
+
+- **Community-store submission.** Everything it needs is in place — a published release whose tag
+  matches the manifest, `README.md` and `LICENSE` in the root, the naming rules of §15.3 followed.
+  The `community-plugins.json` entry is ready to copy in `RELEASING.md`. It is a pull request
+  against someone else's repository, so it needs a decision, not just a command.
+- **Mobile.** `isDesktopOnly: true` per D7. A ribbon at 380 px is its own project.
+
+## If you are picking this up cold
+
+Read in this order: `docs/design` §2 (the decisions), §3 (what GFM cannot do — it explains most of
+the design), §13 (the write path, which matters more than the whole ribbon), then `CLAUDE.md`.
+Then install the plugin and work down the list above.
