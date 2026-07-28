@@ -1,7 +1,7 @@
 # Handoff
 
-State as of **28 July 2026**, on branch `claude/markdown-spreadsheets-plugin-3xpmnl`, version
-**0.1.0** — a released 0.1.0 plus the first round of feedback from actually running it.
+State as of **28 July 2026**, on `main`, version **0.2.0** — the released 0.1.0 plus the first
+round of feedback from actually running it, released as 0.2.0 under the new name.
 
 This file goes stale. `CLAUDE.md` holds the durable rules; this one holds what is done, what is
 not, and what to look at first.
@@ -19,7 +19,7 @@ commit; there is no open pull request.
 | Lint | `eslint-plugin-obsidianmd` at 0 errors, 0 warnings |
 | Bundle | `main.js` 109 kB against the ~1 MB budget of §15.1 |
 | Runtime dependencies | none |
-| Release | [0.1.0](https://github.com/ondreu/markdown-spreadsheets/releases/tag/0.1.0), three assets, published |
+| Release | [0.2.0](https://github.com/ondreu/markdown-spreadsheets/releases/tag/0.2.0), three assets, published. 0.1.0 was published under the old `markdown-grid` id |
 
 `npm run check` was green at this commit, and the released assets' SHA-256 digests matched a local
 build byte for byte.
