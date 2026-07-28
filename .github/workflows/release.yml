@@ -1,13 +1,23 @@
 name: Release
 
-# Pushing a tag is the whole release procedure. The tag name must equal manifest.json's
-# `version` exactly, with no `v` prefix — that mismatch is the most common reason an Obsidian
-# plugin release fails validation, so the job checks it before building anything.
+# Two ways in, one code path.
+#
+# - Pushing a bare semver tag (no `v` prefix, which is what Obsidian's validator requires) is the
+#   normal route.
+# - Running the workflow by hand takes the version from manifest.json and lets `gh release create`
+#   create the tag on the server. Useful when the local environment cannot push tags, and it makes
+#   the manifest the single source of truth for the version either way.
 on:
   push:
     tags:
       - "[0-9]+.[0-9]+.[0-9]+"
       - "[0-9]+.[0-9]+.[0-9]+-*"
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "release" to publish the version in manifest.json'
+        required: true
+        default: ""
 
 permissions:
   contents: write
@@ -23,17 +33,43 @@ jobs:
           node-version: "22"
           cache: npm
 
-      - name: Verify the tag matches manifest.json
+      - name: Guard the manual route
+        if: github.event_name == 'workflow_dispatch'
         run: |
-          TAG="${GITHUB_REF_NAME}"
+          # Publishing is not undoable for anyone who already fetched the release, so the manual
+          # route asks for the word rather than firing on a stray click.
+          [ "${{ inputs.confirm }}" = "release" ] || {
+            echo '::error::type "release" in the confirm input to publish'; exit 1; }
+
+      - name: Resolve and verify the version
+        id: meta
+        run: |
           MANIFEST=$(node -p "require('./manifest.json').version")
           PKG=$(node -p "require('./package.json').version")
           MIN=$(node -p "require('./manifest.json').minAppVersion")
           RECORDED=$(node -p "require('./versions.json')[require('./manifest.json').version] ?? ''")
-          echo "tag=$TAG manifest=$MANIFEST package=$PKG minAppVersion=$MIN"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="$MANIFEST"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=$TAG manifest=$MANIFEST package=$PKG minAppVersion=$MIN recorded=$RECORDED"
+
+          # Obsidian matches the tag against manifest.json character for character.
           [ "$TAG" = "$MANIFEST" ] || { echo "::error::tag '$TAG' != manifest version '$MANIFEST'"; exit 1; }
           [ "$PKG" = "$MANIFEST" ] || { echo "::error::package.json '$PKG' != manifest '$MANIFEST'"; exit 1; }
           [ "$RECORDED" = "$MIN" ] || { echo "::error::versions.json has no entry '$MANIFEST' -> '$MIN'"; exit 1; }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse to overwrite an existing release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${{ steps.meta.outputs.tag }}" >/dev/null 2>&1; then
+            echo "::error::release ${{ steps.meta.outputs.tag }} already exists — bump the version"
+            exit 1
+          fi
 
       - run: npm ci
 
@@ -55,13 +91,15 @@ jobs:
           done
           ls -l main.js manifest.json styles.css
 
-      # Individual files, never a zip: Obsidian fetches main.js, manifest.json and styles.css
-      # from the release assets by name.
-      - name: Create the release
+      # Individual files, never a zip: Obsidian fetches main.js, manifest.json and styles.css from
+      # the release assets by name. `--target` makes gh create the tag when it does not exist yet.
+      - name: Publish the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            --title "${GITHUB_REF_NAME}" \
+          gh release create "${{ steps.meta.outputs.tag }}" \
+            --target "${GITHUB_SHA}" \
+            --title "${{ steps.meta.outputs.tag }}" \
             --generate-notes \
             main.js manifest.json styles.css
+          gh release view "${{ steps.meta.outputs.tag }}" --json tagName,isDraft,isPrerelease,assets

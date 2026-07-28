@@ -44,21 +44,27 @@ code loading, no telemetry, no ads, no network access at all.
 
 3. **Commit and push** the version bump to `main`.
 
-4. **Tag the commit and push the tag.**
+4. **Publish.** Either route runs the same job in `.github/workflows/release.yml`, which
+   re-verifies the version, runs the same gates as CI, builds `main.js`, and publishes a release
+   with `main.js`, `manifest.json` and `styles.css` attached as separate files.
+
+   Pushing the tag:
 
    ```bash
    git tag -a 0.2.0 -m "0.2.0"
    git push origin 0.2.0
    ```
 
-   That is the entire release trigger. `.github/workflows/release.yml` then re-verifies the tag
-   against the manifest, runs the same gates as CI, builds `main.js`, and publishes a release with
-   `main.js`, `manifest.json` and `styles.css` attached as separate files.
+   Or run the **Release** workflow by hand — from the Actions tab, or with
+   `gh workflow run release.yml -f confirm=release`. The version then comes from `manifest.json`
+   and the tag is created on the server, which is the way out when the local environment cannot
+   push tags. The confirm input exists so a stray click cannot publish.
 
-   If the tag does not match the manifest, the job fails before building anything rather than
-   publishing something broken.
+   Whichever route, the job fails *before* building if the version is inconsistent or a release
+   with that version already exists, rather than publishing something broken.
 
-5. **Check the result** on the repository's releases page: three assets, no zip, published.
+5. **Check the result** on the repository's releases page: three assets, no zip, published. The
+   job prints the same thing at the end.
 
 ## If something went wrong
 
