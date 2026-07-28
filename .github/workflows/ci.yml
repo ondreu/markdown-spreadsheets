@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+
+      # Blocking from the first commit, per §15.2 — deferring the Obsidian lint rules to the end
+      # of the project costs twice as much as satisfying them along the way.
+      - name: Lint
+        run: npx eslint .
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Test
+        run: npx vitest run
+
+      - name: Build
+        run: node esbuild.config.mjs production
+
+      - name: Check styles.css is up to date
+        run: |
+          node scripts/gen-styles.mjs
+          git diff --exit-code -- styles.css
+
+      - name: Check the manifest version matches package.json
+        run: |
+          node -e '
+            const m = require("./manifest.json");
+            const p = require("./package.json");
+            const v = require("./versions.json");
+            if (m.version !== p.version) throw new Error(`manifest ${m.version} != package ${p.version}`);
+            if (v[m.version] !== m.minAppVersion) throw new Error("versions.json is missing this version");
+          '

@@ -1,0 +1,10 @@
+{
+  "id": "markdown-grid",
+  "name": "Markdown Grid",
+  "version": "1.0.0",
+  "minAppVersion": "1.7.2",
+  "description": "Edit Markdown tables in a spreadsheet-style grid in a dedicated tab.",
+  "author": "ondreu",
+  "authorUrl": "https://github.com/ondreu/markdown-spreadsheets",
+  "isDesktopOnly": true
+}

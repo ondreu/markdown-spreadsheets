@@ -1,0 +1,633 @@
+/*
+ * Markdown Grid styles.
+ *
+ * Every colour and radius comes from an Obsidian CSS variable. Hardcoded colours look wrong in
+ * half the themes and review flags them (§11).
+ */
+
+.markdown-grid-view {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	padding: 0;
+	overflow: hidden;
+}
+
+.mg-hidden {
+	display: none !important;
+}
+
+/* ------------------------------------------------------------------ ribbon */
+
+.mg-ribbon {
+	flex: 0 0 auto;
+	border-bottom: 1px solid var(--background-modifier-border);
+	background-color: var(--background-secondary);
+}
+
+.mg-ribbon-tabs {
+	display: flex;
+	gap: 2px;
+	padding: 4px 8px 0;
+}
+
+.mg-ribbon-tab {
+	padding: 4px 12px;
+	border: 1px solid transparent;
+	border-bottom: none;
+	border-radius: var(--radius-s) var(--radius-s) 0 0;
+	background: transparent;
+	box-shadow: none;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	cursor: pointer;
+}
+
+.mg-ribbon-tab:hover {
+	color: var(--text-normal);
+	background-color: var(--background-modifier-hover);
+}
+
+.mg-ribbon-tab.is-active {
+	color: var(--text-normal);
+	background-color: var(--background-primary);
+	border-color: var(--background-modifier-border);
+	font-weight: var(--font-semibold);
+}
+
+.mg-ribbon-panel {
+	display: flex;
+	align-items: stretch;
+	gap: 4px;
+	padding: 6px 8px;
+	overflow-x: auto;
+	background-color: var(--background-primary);
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.mg-ribbon-group {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 0 8px;
+	border-right: 1px solid var(--background-modifier-border);
+}
+
+.mg-ribbon-group:last-child {
+	border-right: none;
+}
+
+.mg-ribbon-items {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 2px;
+	min-height: 28px;
+}
+
+.mg-ribbon-group-label {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	text-align: center;
+}
+
+.mg-ribbon-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 3px 8px;
+	border: 1px solid transparent;
+	border-radius: var(--radius-s);
+	background: transparent;
+	box-shadow: none;
+	color: var(--text-normal);
+	font-size: var(--font-ui-smaller);
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+.mg-ribbon-btn:hover:not(.is-disabled) {
+	background-color: var(--background-modifier-hover);
+	border-color: var(--background-modifier-border);
+}
+
+.mg-ribbon-btn.is-active {
+	background-color: var(--background-modifier-active-hover);
+	border-color: var(--interactive-accent);
+	color: var(--text-normal);
+}
+
+/* D5: an unsupported action is visibly dead, never a silent no-op. */
+.mg-ribbon-btn.is-disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
+.mg-ribbon-btn-icon {
+	display: inline-flex;
+	align-items: center;
+}
+
+.mg-ribbon-btn-icon .svg-icon {
+	width: 14px;
+	height: 14px;
+}
+
+.mg-ribbon-sep {
+	width: 1px;
+	align-self: stretch;
+	margin: 2px 4px;
+	background-color: var(--background-modifier-border);
+}
+
+.mg-ribbon-number {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.mg-ribbon-number-input {
+	width: 64px;
+	padding: 2px 4px;
+	font-size: var(--font-ui-smaller);
+}
+
+/* ------------------------------------------------------------ formula bar */
+
+.mg-formulabar {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: 0 0 auto;
+	padding: 4px 8px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	background-color: var(--background-primary);
+}
+
+.mg-formula-address {
+	flex: 0 0 auto;
+	min-width: 68px;
+	padding: 2px 6px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	background-color: var(--background-secondary);
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	text-align: center;
+	color: var(--text-muted);
+}
+
+.mg-formula-input {
+	flex: 1 1 auto;
+	min-width: 0;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-small);
+}
+
+/* ---------------------------------------------------------------- banner */
+
+.mg-banner {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: 0 0 auto;
+	padding: 6px 10px;
+	background-color: var(--background-modifier-error-hover);
+	border-bottom: 1px solid var(--background-modifier-border);
+	font-size: var(--font-ui-small);
+}
+
+.mg-banner-icon {
+	display: inline-flex;
+	color: var(--text-error);
+}
+
+.mg-banner-text {
+	flex: 1 1 auto;
+}
+
+.mg-banner-actions {
+	display: flex;
+	gap: 6px;
+}
+
+/* ------------------------------------------------------------------- grid */
+
+.mg-body {
+	flex: 1 1 auto;
+	min-height: 0;
+	display: flex;
+}
+
+.mg-host {
+	position: relative;
+	flex: 1 1 auto;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+
+	--mg-col-default: 120px;
+	--mg-row-default: 24px;
+	--mg-head-h: 26px;
+	--mg-rowhead-w: 52px;
+}
+
+.mg-host.is-resizing {
+	cursor: col-resize;
+	user-select: none;
+}
+
+.mg-scroll {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow: auto;
+	outline: none;
+	background-color: var(--background-primary);
+}
+
+.mg-canvas {
+	position: relative;
+	width: max-content;
+	min-width: 100%;
+	font-size: var(--font-ui-small);
+}
+
+.mg-row {
+	display: flex;
+	height: var(--mg-row-default);
+	box-sizing: border-box;
+}
+
+.mg-row.is-filtered {
+	display: none;
+}
+
+/* Freeze via sticky positioning; the offsets are written by GridStyles (§8.5). */
+.mg-row.mg-head-row {
+	position: sticky;
+	top: 0;
+	z-index: 4;
+	height: var(--mg-head-h);
+}
+
+.mg-row.is-frozen-row {
+	position: sticky;
+	z-index: 3;
+	background-color: var(--background-primary);
+}
+
+.mg-corner,
+.mg-colhead,
+.mg-rowhead {
+	box-sizing: border-box;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+	border-right: 1px solid var(--background-modifier-border);
+	border-bottom: 1px solid var(--background-modifier-border);
+	background-color: var(--background-secondary);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	user-select: none;
+}
+
+.mg-corner,
+.mg-rowhead {
+	position: sticky;
+	left: 0;
+	z-index: 2;
+	width: var(--mg-rowhead-w);
+	min-width: var(--mg-rowhead-w);
+}
+
+.mg-corner {
+	z-index: 5;
+}
+
+.mg-colhead {
+	cursor: pointer;
+}
+
+.mg-colhead:hover,
+.mg-rowhead:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+.mg-colhead.is-selected,
+.mg-rowhead.is-selected {
+	background-color: var(--background-modifier-active-hover);
+	color: var(--text-normal);
+	font-weight: var(--font-semibold);
+}
+
+.mg-colhead.is-frozen-col {
+	position: sticky;
+	z-index: 3;
+}
+
+.mg-head-row.is-col-resize .mg-colhead {
+	cursor: col-resize;
+}
+
+.mg-rowhead.is-row-resize {
+	cursor: row-resize;
+}
+
+.mg-cell {
+	box-sizing: border-box;
+	flex: 0 0 auto;
+	width: var(--mg-col-default);
+	min-width: var(--mg-col-default);
+	padding: 2px 6px;
+	border-right: 1px solid var(--background-modifier-border);
+	border-bottom: 1px solid var(--background-modifier-border);
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	line-height: 1.4;
+	color: var(--text-normal);
+}
+
+.mg-cell.is-frozen-col {
+	position: sticky;
+	z-index: 1;
+	background-color: var(--background-primary);
+}
+
+/* §8.3: wrapping is purely visual — the cell stays one line of Markdown. */
+.mg-cell.is-wrap {
+	white-space: normal;
+	overflow-wrap: anywhere;
+	text-overflow: clip;
+}
+
+.mg-cell.is-align-center {
+	text-align: center;
+}
+
+.mg-cell.is-align-right {
+	text-align: right;
+}
+
+/* Row 1 is the GFM header row and cannot be deleted, so it must not look like data (§9). */
+.mg-row.is-header-row .mg-cell {
+	background-color: var(--background-secondary-alt);
+	font-weight: var(--font-semibold);
+}
+
+.mg-row.is-header-row .mg-rowhead {
+	color: var(--text-normal);
+	font-weight: var(--font-semibold);
+}
+
+/* Anything outside the used range is not written to the note; say so visually (§9). */
+.mg-cell.is-outside {
+	background-color: transparent;
+	color: var(--text-faint);
+}
+
+.mg-cell.is-selected {
+	background-color: var(--text-selection);
+}
+
+.mg-cell.is-active {
+	box-shadow: inset 0 0 0 2px var(--interactive-accent);
+	background-color: var(--background-primary);
+}
+
+.mg-cell.is-fill-preview {
+	box-shadow: inset 0 0 0 1px var(--interactive-accent);
+}
+
+.mg-cell.is-editing {
+	padding: 0;
+	overflow: visible;
+	box-shadow: inset 0 0 0 2px var(--interactive-accent);
+}
+
+.mg-cell.is-rendered {
+	white-space: nowrap;
+}
+
+.mg-cell.is-rendered.is-wrap {
+	white-space: normal;
+}
+
+.mg-cell.is-rendered p {
+	margin: 0;
+	display: inline;
+}
+
+.mg-editor {
+	width: 100%;
+	height: 100%;
+	padding: 2px 6px;
+	border: none;
+	border-radius: 0;
+	background-color: var(--background-primary);
+	box-shadow: none;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-small);
+	color: var(--text-normal);
+}
+
+.mg-editor:focus {
+	box-shadow: none;
+	outline: none;
+}
+
+.mg-fill-handle {
+	position: absolute;
+	left: var(--mg-fill-x, 0);
+	top: var(--mg-fill-y, 0);
+	width: 8px;
+	height: 8px;
+	margin: -4px 0 0 -4px;
+	z-index: 6;
+	background-color: var(--interactive-accent);
+	border: 1px solid var(--background-primary);
+	cursor: crosshair;
+}
+
+.mg-host.is-placing .mg-scroll {
+	cursor: cell;
+}
+
+/* Off-screen probe used to autofit a column to its widest cell (§8.1). */
+.mg-measure {
+	position: absolute;
+	visibility: hidden;
+	pointer-events: none;
+	top: -9999px;
+	left: -9999px;
+	white-space: pre;
+	font: var(--mg-measure-font, inherit);
+}
+
+.mg-render-scratch {
+	position: absolute;
+	visibility: hidden;
+	pointer-events: none;
+	top: -9999px;
+	left: -9999px;
+}
+
+/* ------------------------------------------------------------------- hint */
+
+.mg-hint {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: 0 0 auto;
+	padding: 4px 10px;
+	background-color: var(--background-modifier-success);
+	font-size: var(--font-ui-smaller);
+}
+
+.mg-hint-hint {
+	color: var(--text-muted);
+}
+
+/* -------------------------------------------------------------- statusbar */
+
+.mg-statusbar {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	flex: 0 0 auto;
+	padding: 3px 10px;
+	border-top: 1px solid var(--background-modifier-border);
+	background-color: var(--background-secondary);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.mg-status-address {
+	font-family: var(--font-monospace);
+	min-width: 68px;
+}
+
+.mg-status-aggregate {
+	font-variant-numeric: tabular-nums;
+}
+
+.mg-status-hint {
+	color: var(--text-accent);
+}
+
+.mg-status-used {
+	margin-left: auto;
+}
+
+.mg-status-state {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	cursor: pointer;
+}
+
+.mg-status-state.is-dirty {
+	color: var(--text-warning);
+}
+
+.mg-status-state-icon .svg-icon {
+	width: 12px;
+	height: 12px;
+}
+
+/* ----------------------------------------------------------------- modals */
+
+.mg-modal-note {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+
+.mg-table-picker,
+.mg-restore-list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	max-height: 320px;
+	overflow-y: auto;
+	margin-bottom: 12px;
+}
+
+.mg-table-picker-item,
+.mg-restore-item {
+	display: block;
+	width: 100%;
+	padding: 8px 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	background-color: var(--background-secondary);
+	box-shadow: none;
+	text-align: left;
+	cursor: pointer;
+}
+
+.mg-table-picker-item:hover,
+.mg-restore-item:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+.mg-table-picker-head {
+	font-family: var(--font-monospace);
+	color: var(--text-normal);
+}
+
+.mg-table-picker-meta,
+.mg-restore-when {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.mg-restore-preview {
+	margin: 4px 0 0;
+	max-height: 64px;
+	overflow: hidden;
+	font-size: var(--font-ui-smaller);
+	white-space: pre;
+}
+
+.mg-calc-preview {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	padding: 8px 0;
+	font-family: var(--font-monospace);
+}
+
+.mg-calc-fn {
+	color: var(--text-muted);
+}
+
+.mg-calc-value {
+	font-size: var(--font-ui-medium);
+	color: var(--text-normal);
+	font-variant-numeric: tabular-nums;
+}
+
+.mg-diff {
+	display: flex;
+	gap: 12px;
+}
+
+.mg-diff-side {
+	flex: 1 1 0;
+	min-width: 0;
+}
+
+.mg-diff-title {
+	font-weight: var(--font-semibold);
+	margin-bottom: 4px;
+}
+
+.mg-diff-side pre {
+	max-height: 320px;
+	overflow: auto;
+	font-size: var(--font-ui-smaller);
+	white-space: pre;
+}
