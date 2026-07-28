@@ -6,6 +6,8 @@ The note is the source of truth. Nothing is written into it that GFM cannot expr
 no HTML, no merged cells, no cell colours, no live formulas. What comes back out is a strictly
 valid GitHub-Flavored Markdown table.
 
+!(herobanner)[assets/1785265709_00.png]
+
 ## What it does
 
 - **Opens a table in its own tab** — from the ribbon icon in the left sidebar, the button that
