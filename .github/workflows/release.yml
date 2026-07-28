@@ -1,0 +1,67 @@
+name: Release
+
+# Pushing a tag is the whole release procedure. The tag name must equal manifest.json's
+# `version` exactly, with no `v` prefix — that mismatch is the most common reason an Obsidian
+# plugin release fails validation, so the job checks it before building anything.
+on:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+      - "[0-9]+.[0-9]+.[0-9]+-*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Verify the tag matches manifest.json
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          MANIFEST=$(node -p "require('./manifest.json').version")
+          PKG=$(node -p "require('./package.json').version")
+          MIN=$(node -p "require('./manifest.json').minAppVersion")
+          RECORDED=$(node -p "require('./versions.json')[require('./manifest.json').version] ?? ''")
+          echo "tag=$TAG manifest=$MANIFEST package=$PKG minAppVersion=$MIN"
+          [ "$TAG" = "$MANIFEST" ] || { echo "::error::tag '$TAG' != manifest version '$MANIFEST'"; exit 1; }
+          [ "$PKG" = "$MANIFEST" ] || { echo "::error::package.json '$PKG' != manifest '$MANIFEST'"; exit 1; }
+          [ "$RECORDED" = "$MIN" ] || { echo "::error::versions.json has no entry '$MANIFEST' -> '$MIN'"; exit 1; }
+
+      - run: npm ci
+
+      # The same gates as CI. A release that skips them is a release nobody checked.
+      - run: npx eslint .
+      - run: npx tsc --noEmit
+      - run: npx vitest run
+
+      - name: Build
+        run: |
+          node scripts/gen-styles.mjs
+          git diff --exit-code -- styles.css
+          node esbuild.config.mjs production
+
+      - name: Verify the release artefacts exist
+        run: |
+          for f in main.js manifest.json styles.css; do
+            [ -s "$f" ] || { echo "::error::$f is missing or empty"; exit 1; }
+          done
+          ls -l main.js manifest.json styles.css
+
+      # Individual files, never a zip: Obsidian fetches main.js, manifest.json and styles.css
+      # from the release assets by name.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            main.js manifest.json styles.css

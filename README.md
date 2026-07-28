@@ -111,15 +111,16 @@ npm test
 `npm run check` is what CI runs. The Obsidian ESLint plugin is blocking at zero errors and zero
 warnings.
 
-Release: `node scripts/bump-version.mjs <semver>`, then tag the commit with the version **exactly**
-— `1.0.0`, never `v1.0.0` — and attach `main.js`, `manifest.json` and `styles.css` as separate
-files.
+Releasing is `node scripts/bump-version.mjs <semver>`, then pushing a tag named exactly like the
+version — `0.2.0`, never `v0.2.0`. A workflow does the rest. See `RELEASING.md` for what Obsidian
+expects and how to recover from a bad release.
 
 `styles.css` is generated from `src/styles.src.css` by `scripts/gen-styles.mjs` and committed; CI
 fails if it is stale.
 
 - `docs/design` — the specification this implements.
 - `docs/DECISIONS.md` — where the implementation departs from it, and why.
+- `RELEASING.md` — release and store-submission procedure.
 
 ## Third-party attribution
 
