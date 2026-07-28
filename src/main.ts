@@ -12,7 +12,7 @@ import {
 } from "obsidian";
 import { anchorFromRegion, regionAtLine, type Anchor } from "./file/AnchorResolver";
 import { scanTables } from "./file/scanTables";
-import { MarkdownSpreadsheetsSettingTab } from "./settings";
+import { MarkdownSpreadsheetsSettingTab } from "./view/SettingTab";
 import { Sidecar } from "./store/Sidecar";
 import { VIEW_TYPE_GRID } from "./view/constants";
 import { GridView, type GridViewState } from "./view/GridView";

@@ -84,12 +84,41 @@ Obsidian caches by version.
 
 ## Submitting to the community plugin store
 
-Only needed once, for the first release.
+Only needed once. Everything on this list was checked against the review guidelines on the 0.3.0
+release; the four steps at the end are the part that needs a GitHub account, because the
+submission is a pull request against someone else's repository.
 
-1. There must be a published release whose tag matches `manifest.json`.
-2. `README.md` and `LICENSE` must be in the repository root — they are.
-3. Fork [`obsidianmd/obsidian-releases`](https://github.com/obsidianmd/obsidian-releases), add an
-   entry to `community-plugins.json`, and open a pull request:
+### Pre-flight, all verified
+
+| Requirement | State |
+| --- | --- |
+| A published release whose tag matches `manifest.json` exactly, no `v` prefix | 0.3.0 |
+| `main.js`, `manifest.json`, `styles.css` as individual assets | three assets per release |
+| `README.md` and `LICENSE` in the repository root | MIT |
+| `id` has no `obsidian` prefix, `name` contains neither "Obsidian" nor "plugin" | `markdown-spreadsheets` / "Markdown Spreadsheets" |
+| `description` is one sentence, under 250 characters, does not start with "This plugin" | 68 characters |
+| `authorUrl` points at the author, not at the plugin repository | `github.com/ondreu` |
+| `isDesktopOnly` justified | true — D7, a ribbon at 380 px is its own project |
+| `minAppVersion` is a real released version and matches the APIs used | 1.7.2, enforced by `no-unsupported-api` |
+| `versions.json` maps every released version to its `minAppVersion` | 0.1.0, 0.2.0, 0.3.0 |
+| No `innerHTML` / `outerHTML` / `insertAdjacentHTML` | none; Obsidian's DOM helpers throughout |
+| No `console` output left in | none |
+| No `document` / `window` globals for DOM lookups | `ownerDocument` / `.win` everywhere (§8.5/3) |
+| Writes go through `Vault.process`, never `read()` + `modify()` | `src/file/Writer.ts` (§13.1) |
+| Vault paths built from settings go through `normalizePath` | export paths in `GridView.targetPath` |
+| No default hotkeys, and command names do not repeat the plugin name | §15.2 |
+| Sentence case in every UI string | `ui/sentence-case`, blocking |
+| `MarkdownRenderer.render` gets the view as its component, not the plugin | `GridHost.renderCell` |
+| No `detachLeavesOfType` in `onunload` | §15.2 |
+| Settings and cosmetic state through `loadData` / `saveData` only | `src/store/Sidecar.ts` |
+| No network, no telemetry, no remote code, no runtime dependencies | `dependencies` is empty |
+| `eslint-plugin-obsidianmd` at zero errors and zero warnings, as a blocking CI step | `npm run check` |
+
+### The four steps that need your account
+
+1. Fork [`obsidianmd/obsidian-releases`](https://github.com/obsidianmd/obsidian-releases).
+2. Add this entry to the **end** of `community-plugins.json`, keeping the file's formatting. Every
+   field is byte-identical to `manifest.json`, which is what the validator compares:
 
    ```json
    {
@@ -101,11 +130,12 @@ Only needed once, for the first release.
    }
    ```
 
-   `id`, `name`, `author` and `description` must be byte-identical to `manifest.json`.
-
-4. Expect review comments. The naming rules of §15.3 are already followed — the name contains
-   neither "Obsidian" nor "plugin", the description does not begin with "This plugin…", and the
-   ESLint plugin runs as a blocking CI step, which is what most review rounds are about.
+3. Open the pull request from the fork. Their template asks you to tick the checklist above; the
+   table is there so it can be answered without re-reading the source.
+4. Expect review comments and answer them in the pull request. The usual rounds are about the
+   ESLint plugin (already blocking here), `innerHTML` (none), and detaching leaves on unload (not
+   done). If a reviewer asks for a change, ship it as a normal release — the submission follows
+   the repository, so no second pull request is needed.
 
 Later releases need no further submission: the store follows the repository's releases.
 

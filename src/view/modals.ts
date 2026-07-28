@@ -591,10 +591,10 @@ export class RestoreModal extends Modal {
 		for (const entry of this.opts.backups) {
 			const item = list.createEl("button", { cls: "mds-restore-item", attr: { type: "button" } });
 			item.createDiv({ cls: "mds-restore-when", text: relativeTime(entry.at, this.opts.now) });
-			item.createDiv({ cls: "mds-restore-stamp", text: new Date(entry.at).toLocaleString() });
-			const shape = tableShape(entry.text);
 			const same = entry.text.trimEnd() === this.opts.current.trimEnd();
-			item.createDiv({ cls: "mds-restore-shape", text: same ? `${shape} · same as now` : shape });
+			const meta = [new Date(entry.at).toLocaleString(), tableShape(entry.text)];
+			if (same) meta.push("same as now");
+			item.createDiv({ cls: "mds-restore-meta", text: meta.join(" · ") });
 			this.itemEls.push(item);
 			item.addEventListener("click", () => this.select(entry, item));
 		}

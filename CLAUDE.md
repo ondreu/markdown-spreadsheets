@@ -43,6 +43,11 @@ that are easy to trip over:
   per-index rules, or through the constructable stylesheet in `GridStyles` (§8.5). `setCssStyles`
   is the sanctioned escape hatch for genuinely dynamic geometry.
 - **No `<style>` or `<script>` elements** in the DOM. Styles live in `styles.css`.
+- **Every class the plugin adds is prefixed `mds-`,** including the generated per-column rules.
+- **A multi-line `<button>` needs its geometry reset.** Obsidian's own `button` rule fixes the
+  height at 30 px with `white-space: nowrap` and centred text, so a list item built from a button
+  spills its last line over the item below unless it sets `height: auto`, `min-height: 0`,
+  `white-space: normal` and `text-align: left`. That is what broke the restore list.
 - **`ownerDocument` / `ownerDocument.defaultView` / `.win`, never the globals.** A popped-out
   window is a different document with its own class identities. Narrow event targets with
   `asElement` / `asNode` from `src/view/dom.ts`, not `instanceof HTMLElement`.
@@ -89,12 +94,15 @@ src/model/     parse, serialize, sparse cell map, addressing, locale numbers   (
 src/file/      table scanning, anchor scoring, the write path                  (Writer needs Vault)
 src/store/     Sidecar: cosmetic per-table state through loadData/saveData
 src/feature/   row/column ops, undo, aggregation, clipboard TSV, CSV, XLSX + zip
-src/view/      GridView (orchestration), GridHost (the grid), Ribbon, StatusBar, modals, gridStyles
+src/view/      GridView (orchestration), GridHost (the grid), Ribbon, StatusBar, modals, gridStyles,
+               SettingTab
 ```
 
-`src/model/`, `src/feature/` and `src/file/scanTables.ts`/`AnchorResolver.ts` are free of Obsidian
-imports and directly unit-testable — keep them that way. Put new logic there rather than in the
-view when there is a choice; that is what makes the 169 tests possible without an Obsidian harness.
+`src/model/`, `src/feature/`, `src/store/`, `src/settings.ts` (types and defaults only; the tab
+lives in `src/view/SettingTab.ts`) and `src/file/scanTables.ts`/`AnchorResolver.ts` are free of
+Obsidian imports and directly unit-testable — keep them that way. Put new logic there rather than
+in the view when there is a choice; that is what makes the 190 tests possible without an Obsidian
+harness.
 
 ## Testing expectations
 

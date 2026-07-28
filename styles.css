@@ -639,16 +639,28 @@
 	margin-bottom: 12px;
 }
 
+/*
+ * These are `<button>`s, and Obsidian's own button rule gives every button a fixed height, centred
+ * text and `white-space: nowrap`. A multi-line list item has to undo all three or its last line
+ * spills out of the box and over the item below it.
+ */
 .mds-table-picker-item,
 .mds-restore-item {
-	display: block;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 2px;
 	width: 100%;
+	height: auto;
+	min-height: 0;
 	padding: 8px 10px;
 	border: 1px solid var(--background-modifier-border);
 	border-radius: var(--radius-s);
 	background-color: var(--background-secondary);
 	box-shadow: none;
 	text-align: left;
+	white-space: normal;
+	line-height: 1.4;
 	cursor: pointer;
 }
 
@@ -671,17 +683,22 @@
 /* -------------------------------------------------- restore a version */
 
 .mds-restore-modal {
-	width: min(880px, 90vw);
+	width: min(880px, 92vw);
+	max-width: 100%;
 }
 
+/* Wraps to one column in a narrow window rather than pushing the diff off the edge. */
 .mds-restore-layout {
 	display: flex;
+	flex-wrap: wrap;
 	gap: 12px;
 	margin: 10px 0 12px;
 }
 
 .mds-restore-list {
-	flex: 0 0 220px;
+	flex: 1 1 200px;
+	min-width: 0;
+	max-width: 100%;
 	max-height: 360px;
 }
 
@@ -695,14 +712,13 @@
 	font-weight: var(--font-semibold);
 }
 
-.mds-restore-stamp,
-.mds-restore-shape {
+.mds-restore-meta {
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
 }
 
 .mds-restore-preview-pane {
-	flex: 1 1 auto;
+	flex: 4 1 300px;
 	min-width: 0;
 	display: flex;
 	flex-direction: column;
@@ -723,9 +739,10 @@
 
 .mds-restore-diff-head {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: baseline;
 	justify-content: space-between;
-	gap: 8px;
+	gap: 4px 8px;
 }
 
 .mds-restore-diff-summary {
@@ -734,6 +751,7 @@
 
 .mds-restore-diff {
 	flex: 1 1 auto;
+	min-width: 0;
 	max-height: 340px;
 	overflow: auto;
 	padding: 4px 0;

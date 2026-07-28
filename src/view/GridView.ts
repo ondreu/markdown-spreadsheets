@@ -3,6 +3,7 @@ import {
 	Notice,
 	Scope,
 	TFile,
+	normalizePath,
 	setIcon,
 	type ViewStateResult,
 	type WorkspaceLeaf,
@@ -1267,11 +1268,14 @@ export class GridView extends ItemView {
 		const settings = this.plugin.sidecar.settings;
 		const folder = settings.exportFolder !== "" ? settings.exportFolder : (this.file?.parent?.path ?? "");
 		const safe = fileName.replace(/[\\/:*?"<>|]/g, "-").trim() || "table";
-		const base = folder === "" || folder === "/" ? safe : `${folder}/${safe}`;
-		if (folder !== "" && folder !== "/" && !this.app.vault.getFolderByPath(folder)) {
-			await this.app.vault.createFolder(folder);
+		// `normalizePath` is what the review guidelines ask for on any path built from a setting:
+		// it strips a leading slash, collapses doubles and normalizes the unicode form.
+		const target = folder === "" || folder === "/" ? safe : normalizePath(`${folder}/${safe}`);
+		if (folder !== "" && folder !== "/") {
+			const dir = normalizePath(folder);
+			if (!this.app.vault.getFolderByPath(dir)) await this.app.vault.createFolder(dir);
 		}
-		return this.uniquePath(base);
+		return this.uniquePath(target);
 	}
 
 	/** Never overwrite an existing export; add a counter instead. */

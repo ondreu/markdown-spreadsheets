@@ -1,7 +1,6 @@
 # Handoff
 
-State as of **28 July 2026**, on `main`, version **0.2.0** — the released 0.1.0 plus the first
-round of feedback from actually running it, released as 0.2.0 under the new name.
+State as of **28 July 2026**, on `main`, version **0.3.0**.
 
 This file goes stale. `CLAUDE.md` holds the durable rules; this one holds what is done, what is
 not, and what to look at first.
@@ -15,11 +14,11 @@ commit; there is no open pull request.
 | | |
 | --- | --- |
 | Source | ~7 000 lines across 30 files |
-| Tests | 183, in 7 files |
+| Tests | 190, in 8 files |
 | Lint | `eslint-plugin-obsidianmd` at 0 errors, 0 warnings |
 | Bundle | `main.js` 109 kB against the ~1 MB budget of §15.1 |
 | Runtime dependencies | none |
-| Release | [0.2.0](https://github.com/ondreu/markdown-spreadsheets/releases/tag/0.2.0), three assets, published. 0.1.0 was published under the old `markdown-grid` id |
+| Release | [0.3.0](https://github.com/ondreu/markdown-spreadsheets/releases/tag/0.3.0), three assets, published. 0.1.0 was published under the old `markdown-grid` id |
 
 `npm run check` was green at this commit, and the released assets' SHA-256 digests matched a local
 build byte for byte.
@@ -89,10 +88,9 @@ Small, honest, and none of them data-affecting:
 
 ## Not done, and not asked for
 
-- **Community-store submission.** Everything it needs is in place — a published release whose tag
-  matches the manifest, `README.md` and `LICENSE` in the root, the naming rules of §15.3 followed.
-  The `community-plugins.json` entry is ready to copy in `RELEASING.md`. It is a pull request
-  against someone else's repository, so it needs a decision, not just a command.
+- **Community-store submission.** Pre-flight is done and verified item by item in `RELEASING.md`,
+  including the `community-plugins.json` entry to copy. What is left is the fork and the pull
+  request against `obsidianmd/obsidian-releases`, which needs the author's GitHub account.
 - **Mobile.** `isDesktopOnly: true` per D7. A ribbon at 380 px is its own project.
 
 ## If you are picking this up cold
@@ -145,3 +143,26 @@ still applies, plus:
   the render cache and observer in `GridHost` are where to look.
 - **The in-note button** inside callouts, embeds, tables in table cells and Live Preview versus
   reading mode.
+
+## Round three: the restore list
+
+Two things, both from a screenshot of the restore dialog:
+
+1. **List items overflowed their own box.** They are `<button>`s, and Obsidian's own button rule
+   sets a fixed `height: 30px` with `white-space: nowrap` and centred text, so the third line of a
+   multi-line item spilled out over the item below it. `.mds-restore-item` and
+   `.mds-table-picker-item` — same bug, unreported — now reset height, wrapping and alignment. The
+   layout also wraps to one column in a narrow pane instead of pushing the diff off the edge, and
+   each item is two lines rather than three. Reproduced and verified in Chromium against the real
+   `styles.css` with Obsidian's button defaults, at 430 px and at 900 px.
+2. **Ten versions of the same minute.** Autosave writes 800 ms after a keystroke and every write
+   pushed a backup, so the list filled with "Just now" and the versions worth returning to fell off
+   the end. Writes within `BACKUP_COALESCE_MS` (two minutes) of the newest entry now replace it,
+   keeping its original timestamp. `tests/sidecar.test.ts` covers the burst, the cap, an
+   out-of-order timestamp and a rename.
+
+`src/settings.ts` lost its Obsidian import in the process — the tab moved to
+`src/view/SettingTab.ts` — which is what makes `Sidecar` unit-testable at all.
+
+Store pre-flight also produced two real changes: `authorUrl` points at the author rather than at
+the repository, and export paths built from the `exportFolder` setting go through `normalizePath`.

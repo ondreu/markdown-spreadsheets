@@ -38,6 +38,9 @@ export interface PluginData {
 
 export const MAX_BACKUPS = 10;
 
+/** Writes closer together than this share one backup slot. Two minutes of editing is one version. */
+export const BACKUP_COALESCE_MS = 120_000;
+
 export function defaultLayout(settings: MarkdownSpreadsheetsSettings): TableLayout {
 	return {
 		colWidths: [],
@@ -133,11 +136,21 @@ export class Sidecar {
 		return Object.entries(this.data.anchors).map(([key, anchor]) => ({ key, anchor }));
 	}
 
-	/** Keeps the last {@link MAX_BACKUPS} serialized versions of a region (§13.2). */
+	/**
+	 * Keeps the last {@link MAX_BACKUPS} serialized versions of a region (§13.2).
+	 *
+	 * Autosave writes 800 ms after a keystroke, so appending blindly filled the list with ten
+	 * versions of the same minute and pushed out everything worth going back to. Writes inside
+	 * {@link BACKUP_COALESCE_MS} of the newest entry replace it instead of adding one, which keeps
+	 * the ten slots spread over the session. The entry keeps its original timestamp: it is still
+	 * "the state as of when this burst of editing started".
+	 */
 	pushBackup(key: string, text: string, at: number): void {
 		const list = this.data.backups[key] ?? [];
-		if (list.length > 0 && list[list.length - 1].text === text) return;
-		list.push({ at, text });
+		const newest = list.length > 0 ? list[list.length - 1] : null;
+		if (newest && newest.text === text) return;
+		if (newest && at - newest.at < BACKUP_COALESCE_MS && at >= newest.at) newest.text = text;
+		else list.push({ at, text });
 		while (list.length > MAX_BACKUPS) list.shift();
 		this.data.backups[key] = list;
 		this.queueSave();
