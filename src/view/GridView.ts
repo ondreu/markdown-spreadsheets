@@ -18,11 +18,11 @@ import { aggregate, applyFunction, formatResult, summaryLine, type CalcFunction 
 import { csvBytes, type CsvOptions } from "../feature/exportCsv";
 import { DEFAULT_XLSX_OPTIONS, xlsxBuffer } from "../feature/exportXlsx";
 import { fillRange, findAll, normalizeRect, rectCols, rectRows, replaceAll, sortRows, type FindOptions } from "../feature/ops";
-import type MarkdownGridPlugin from "../main";
+import type MarkdownSpreadsheetsPlugin from "../main";
 import { asElement, asNode } from "./dom";
 import { MAX_COL_WIDTH, MAX_ROW_HEIGHT, MIN_COL_WIDTH, MIN_ROW_HEIGHT, VIEW_TYPE_GRID } from "./constants";
 import { GridHost, type Selection } from "./GridHost";
-import { Ribbon, type RibbonItem, type RibbonTab } from "./Ribbon";
+import { Ribbon, type RibbonAction, type RibbonItem, type RibbonTab } from "./Ribbon";
 import { StatusBar } from "./StatusBar";
 import {
 	CalculateModal,
@@ -53,7 +53,7 @@ type BannerAction = { label: string; cta?: boolean; warning?: boolean; onClick()
  */
 export class GridView extends ItemView {
 	private host: GridHost | null = null;
-	private readonly ribbon = new Ribbon(() => this.refreshRibbon());
+	private readonly ribbon: Ribbon;
 	private readonly statusBar = new StatusBar();
 	private readonly writer: Writer;
 
@@ -75,10 +75,18 @@ export class GridView extends ItemView {
 
 	constructor(
 		leaf: WorkspaceLeaf,
-		private readonly plugin: MarkdownGridPlugin,
+		private readonly plugin: MarkdownSpreadsheetsPlugin,
 	) {
 		super(leaf);
 		this.writer = new Writer(this.app.vault);
+		this.ribbon = new Ribbon({
+			onTabChange: () => this.refreshRibbon(),
+			collapsed: plugin.sidecar.settings.ribbonCollapsed,
+			onCollapseChange: (collapsed) => {
+				plugin.sidecar.settings.ribbonCollapsed = collapsed;
+				plugin.sidecar.queueSave();
+			},
+		});
 		this.navigation = true;
 		// Hotkeys live in a view scope, not in commands with default bindings (§10, §15.2).
 		this.scope = new Scope(this.app.scope);
@@ -94,8 +102,8 @@ export class GridView extends ItemView {
 	}
 
 	override getDisplayText(): string {
-		if (!this.file) return "Grid";
-		return `${this.file.basename} — grid`;
+		if (!this.file) return "Spreadsheet";
+		return `${this.file.basename} — spreadsheet`;
 	}
 
 	/* ---------------------------------------------------------- view state */
@@ -118,11 +126,11 @@ export class GridView extends ItemView {
 	/* ----------------------------------------------------------- lifecycle */
 
 	override async onOpen(): Promise<void> {
-		this.contentEl.addClass("markdown-grid-view");
+		this.contentEl.addClass("markdown-spreadsheet-view");
 		this.ribbon.mount(this.contentEl);
 		this.buildFormulaBar();
-		this.bannerEl = this.contentEl.createDiv({ cls: "mg-banner mg-hidden" });
-		this.bodyEl = this.contentEl.createDiv({ cls: "mg-body" });
+		this.bannerEl = this.contentEl.createDiv({ cls: "mds-banner mds-hidden" });
+		this.bodyEl = this.contentEl.createDiv({ cls: "mds-body" });
 		this.statusBar.mount(this.contentEl, () => void this.save(true));
 		this.refreshRibbon();
 
@@ -512,11 +520,11 @@ export class GridView extends ItemView {
 
 	private showBanner(message: string, actions: BannerAction[]): void {
 		this.bannerEl.empty();
-		this.bannerEl.removeClass("mg-hidden");
-		const icon = this.bannerEl.createSpan({ cls: "mg-banner-icon" });
+		this.bannerEl.removeClass("mds-hidden");
+		const icon = this.bannerEl.createSpan({ cls: "mds-banner-icon" });
 		setIcon(icon, "alert-triangle");
-		this.bannerEl.createSpan({ cls: "mg-banner-text", text: message });
-		const buttons = this.bannerEl.createDiv({ cls: "mg-banner-actions" });
+		this.bannerEl.createSpan({ cls: "mds-banner-text", text: message });
+		const buttons = this.bannerEl.createDiv({ cls: "mds-banner-actions" });
 		for (const action of actions) {
 			const btn = buttons.createEl("button", { text: action.label, attr: { type: "button" } });
 			if (action.cta) btn.addClass("mod-cta");
@@ -528,16 +536,16 @@ export class GridView extends ItemView {
 	private hideBanner(): void {
 		this.conflictShown = false;
 		this.bannerEl.empty();
-		this.bannerEl.addClass("mg-hidden");
+		this.bannerEl.addClass("mds-hidden");
 	}
 
 	/* ---------------------------------------------------------- formula bar */
 
 	private buildFormulaBar(): void {
-		const bar = this.contentEl.createDiv({ cls: "mg-formulabar" });
-		this.formulaAddressEl = bar.createDiv({ cls: "mg-formula-address", text: "A1" });
+		const bar = this.contentEl.createDiv({ cls: "mds-formulabar" });
+		this.formulaAddressEl = bar.createDiv({ cls: "mds-formula-address", text: "A1" });
 		this.formulaInputEl = bar.createEl("input", {
-			cls: "mg-formula-input",
+			cls: "mds-formula-input",
 			attr: { type: "text", placeholder: "Cell contents as Markdown", spellcheck: "false" },
 		});
 		this.formulaInputEl.addEventListener("keydown", (evt) => {
@@ -598,7 +606,7 @@ export class GridView extends ItemView {
 		const active = asElement(this.contentEl.ownerDocument.activeElement);
 		if (active === null) return false;
 		if (!this.contentEl.contains(active)) return true;
-		if (active.hasClass("mg-editor")) return true;
+		if (active.hasClass("mds-editor")) return true;
 		const tag = active.tagName;
 		return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 	}
@@ -666,117 +674,165 @@ export class GridView extends ItemView {
 	private refreshRibbon(): void {
 		const host = this.host;
 		const settings = this.plugin.sidecar.settings;
+		const action = (
+			id: string,
+			label: string,
+			icon: string,
+			onClick: () => void,
+			extra?: { tooltip?: string; disabled?: boolean; active?: boolean; primary?: boolean },
+		): RibbonAction => ({
+			id,
+			label,
+			icon,
+			onClick,
+			...(extra?.tooltip === undefined ? {} : { tooltip: extra.tooltip }),
+			...(extra?.disabled === undefined ? {} : { disabled: extra.disabled }),
+			...(extra?.active === undefined ? {} : { active: extra.active }),
+			...(extra?.primary === undefined ? {} : { primary: extra.primary }),
+		});
 		const button = (
 			id: string,
 			label: string,
 			icon: string,
 			onClick: () => void,
-			extra?: { tooltip?: string; disabled?: boolean; active?: boolean },
-		): RibbonItem => ({
-			kind: "button",
-			action: {
-				id,
-				label,
-				icon,
-				onClick,
-				...(extra?.tooltip === undefined ? {} : { tooltip: extra.tooltip }),
-				...(extra?.disabled === undefined ? {} : { disabled: extra.disabled }),
-				...(extra?.active === undefined ? {} : { active: extra.active }),
-			},
-		});
+			extra?: { tooltip?: string; disabled?: boolean; active?: boolean; primary?: boolean },
+		): RibbonItem => ({ kind: "button", action: action(id, label, icon, onClick, extra) });
+		/** Related actions as one segmented run of icons; the label lives in the tooltip. */
+		const cluster = (id: string, actions: RibbonAction[]): RibbonItem => ({ kind: "cluster", id, actions });
 
 		const rect = host?.getSelection().rect ?? { r1: 0, c1: 0, r2: 0, c2: 0 };
 		const cols = host ? rectCols(rect) : [0];
 		const rows = host ? rectRows(rect) : [0];
 		const headerOnly = rect.r1 === 0 && rect.r2 === 0;
+		const singleRow = rect.r1 === rect.r2;
+		const singleCol = rect.c1 === rect.c2;
 		const wrapped = host ? cols.every((c) => host.getLayout().wrapCols.includes(c)) : false;
+		const rendered = host?.getRenderMode() === "rendered";
+		const alignOf = (align: Align) => (host ? cols.every((c) => (host.getModel().colAlign[c] ?? null) === align) : false);
 
 		const tabs: RibbonTab[] = [
 			{
 				id: "home",
 				label: "Home",
+				icon: "home",
 				groups: [
 					{
 						label: "Clipboard",
 						items: [
-							button("copy", "Copy", "copy", () => this.copyToClipboard(false), { tooltip: "Copy the selection as tab-separated text (Ctrl+C)" }),
-							button("cut", "Cut", "scissors", () => this.copyToClipboard(true), { tooltip: "Cut the selection (Ctrl+X)" }),
-							button("paste", "Paste", "clipboard-paste", () => void this.pasteFromClipboard(), { tooltip: "Paste tab-separated text (Ctrl+V)" }),
-							{ kind: "separator" },
-							button("undo", "Undo", "undo-2", () => host?.undoLast(), {
-								disabled: !host?.undo.canUndo(),
-								tooltip: host?.undo.undoLabel() ? `Undo ${host.undo.undoLabel()?.toLowerCase()}` : "Nothing to undo",
-							}),
-							button("redo", "Redo", "redo-2", () => host?.redoLast(), {
-								disabled: !host?.undo.canRedo(),
-								tooltip: host?.undo.redoLabel() ? `Redo ${host.undo.redoLabel()?.toLowerCase()}` : "Nothing to redo",
-							}),
+							cluster("clipboard", [
+								action("copy", "Copy", "copy", () => this.copyToClipboard(false), {
+									tooltip: "the selection as tab-separated text (Ctrl+C)",
+								}),
+								action("cut", "Cut", "scissors", () => this.copyToClipboard(true), { tooltip: "Ctrl+X" }),
+								action("paste", "Paste", "clipboard-paste", () => void this.pasteFromClipboard(), {
+									tooltip: "tab-separated text (Ctrl+V)",
+								}),
+							]),
+							cluster("history", [
+								action("undo", "Undo", "undo-2", () => host?.undoLast(), {
+									disabled: !host?.undo.canUndo(),
+									tooltip: host?.undo.undoLabel() ? `${host.undo.undoLabel()?.toLowerCase()} (Ctrl+Z)` : "nothing to undo",
+								}),
+								action("redo", "Redo", "redo-2", () => host?.redoLast(), {
+									disabled: !host?.undo.canRedo(),
+									tooltip: host?.undo.redoLabel() ? `${host.undo.redoLabel()?.toLowerCase()} (Ctrl+Y)` : "nothing to redo",
+								}),
+							]),
 						],
 					},
 					{
-						label: "Cells",
+						label: "Rows",
 						items: [
-							button("row-above", "Insert row above", "between-vertical-start", () => host?.insertRowsAt("above"), {
-								disabled: headerOnly,
-								tooltip: headerOnly ? "Row 1 is the table header, so nothing can go above it" : undefined,
-							}),
-							button("row-below", "Insert row below", "between-vertical-end", () => host?.insertRowsAt("below")),
-							button("row-delete", "Delete row", "trash-2", () => host?.deleteSelectedRows(), {
-								disabled: headerOnly,
-								tooltip: headerOnly ? "Markdown tables require a header row" : undefined,
-							}),
-							{ kind: "separator" },
-							button("col-left", "Insert column left", "between-horizontal-start", () => host?.insertColsAt("left")),
-							button("col-right", "Insert column right", "between-horizontal-end", () => host?.insertColsAt("right")),
-							button("col-delete", "Delete column", "trash-2", () => host?.deleteSelectedCols()),
-							{ kind: "separator" },
-							button("row-up", "Move row up", "arrow-up", () => host?.moveSelectedRow(-1), { disabled: rect.r1 !== rect.r2 || rect.r1 <= 1 }),
-							button("row-down", "Move row down", "arrow-down", () => host?.moveSelectedRow(1), { disabled: rect.r1 !== rect.r2 || rect.r1 === 0 }),
-							button("col-left-move", "Move column left", "arrow-left", () => host?.moveSelectedCol(-1), { disabled: rect.c1 !== rect.c2 || rect.c1 === 0 }),
-							button("col-right-move", "Move column right", "arrow-right", () => host?.moveSelectedCol(1), { disabled: rect.c1 !== rect.c2 }),
+							cluster("rows", [
+								action("row-above", "Insert row above", "between-vertical-start", () => host?.insertRowsAt("above"), {
+									disabled: headerOnly,
+									tooltip: headerOnly ? "row 1 is the table header, so nothing can go above it" : undefined,
+								}),
+								action("row-below", "Insert row below", "between-vertical-end", () => host?.insertRowsAt("below")),
+								action("row-delete", "Delete row", "trash-2", () => host?.deleteSelectedRows(), {
+									disabled: headerOnly,
+									tooltip: headerOnly ? "Markdown tables require a header row" : undefined,
+								}),
+							]),
+							cluster("rows-move", [
+								action("row-up", "Move row up", "arrow-up", () => host?.moveSelectedRow(-1), {
+									disabled: !singleRow || rect.r1 <= 1,
+								}),
+								action("row-down", "Move row down", "arrow-down", () => host?.moveSelectedRow(1), {
+									disabled: !singleRow || rect.r1 === 0,
+								}),
+							]),
+						],
+					},
+					{
+						label: "Columns",
+						items: [
+							cluster("cols", [
+								action("col-left", "Insert column left", "between-horizontal-start", () => host?.insertColsAt("left")),
+								action("col-right", "Insert column right", "between-horizontal-end", () => host?.insertColsAt("right")),
+								action("col-delete", "Delete column", "trash-2", () => host?.deleteSelectedCols()),
+							]),
+							cluster("cols-move", [
+								action("col-left-move", "Move column left", "arrow-left", () => host?.moveSelectedCol(-1), {
+									disabled: !singleCol || rect.c1 === 0,
+								}),
+								action("col-right-move", "Move column right", "arrow-right", () => host?.moveSelectedCol(1), {
+									disabled: !singleCol,
+								}),
+							]),
 						],
 					},
 					{
 						label: "Alignment",
-						items: (["left", "center", "right"] as const).map((align) =>
-							button(
-								`align-${align}`,
-								align === "left" ? "Align left" : align === "center" ? "Align centre" : "Align right",
-								align === "left" ? "align-left" : align === "center" ? "align-center" : "align-right",
-								() => host?.setAlignment(align),
-								{
-									// GFM stores alignment per column, never per cell (§3).
-									tooltip: `Applies to the whole column — Markdown has no per-cell alignment`,
-									active: host ? cols.every((c) => host.getModel().colAlign[c] === align) : false,
-								},
-							),
-						).concat([
-							button("align-none", "Default alignment", "remove-formatting", () => host?.setAlignment(null as Align), {
-								tooltip: "Removes the alignment marker from the column",
-							}),
-						]),
+						items: [
+							cluster("align", [
+								// GFM stores alignment per column, never per cell (§3).
+								action("align-left", "Align left", "align-left", () => host?.setAlignment("left"), {
+									tooltip: "applies to the whole column — Markdown has no per-cell alignment",
+									active: alignOf("left"),
+								}),
+								action("align-center", "Align centre", "align-center", () => host?.setAlignment("center"), {
+									tooltip: "applies to the whole column",
+									active: alignOf("center"),
+								}),
+								action("align-right", "Align right", "align-right", () => host?.setAlignment("right"), {
+									tooltip: "applies to the whole column",
+									active: alignOf("right"),
+								}),
+								action("align-none", "Default alignment", "remove-formatting", () => host?.setAlignment(null), {
+									tooltip: "removes the alignment marker from the column",
+									active: alignOf(null),
+								}),
+							]),
+						],
 					},
 					{
 						label: "Format",
 						items: [
-							button("bold", "Bold", "bold", () => host?.format("bold"), { tooltip: "Wraps the cell in ** (Ctrl+B)" }),
-							button("italic", "Italic", "italic", () => host?.format("italic"), { tooltip: "Wraps the cell in * (Ctrl+I)" }),
-							button("code", "Code", "code", () => host?.format("code"), { tooltip: "Wraps the cell in backticks" }),
-							button("strike", "Strikethrough", "strikethrough", () => host?.format("strikethrough")),
-							{ kind: "separator" },
-							button("wrap", "Wrap text", "wrap-text", () => host?.toggleWrap(cols), {
+							cluster("emphasis", [
+								action("bold", "Bold", "bold", () => host?.format("bold"), { tooltip: "wraps the cell in ** (Ctrl+B)" }),
+								action("italic", "Italic", "italic", () => host?.format("italic"), { tooltip: "wraps the cell in * (Ctrl+I)" }),
+								action("code", "Code", "code", () => host?.format("code"), { tooltip: "wraps the cell in backticks" }),
+								action("strike", "Strikethrough", "strikethrough", () => host?.format("strikethrough")),
+							]),
+							button("wrap", "Wrap", "wrap-text", () => host?.toggleWrap(cols), {
 								active: wrapped,
-								tooltip: "Visual only — the cell stays a single line of Markdown",
+								tooltip: "visual only — the cell stays a single line of Markdown",
 							}),
 							button(
 								"render",
-								host?.getRenderMode() === "rendered" ? "Show raw" : "Show rendered",
-								host?.getRenderMode() === "rendered" ? "file-code-2" : "eye",
+								rendered ? "Raw" : "Rendered",
+								rendered ? "file-code-2" : "eye",
 								() => {
-									host?.setRenderMode(host.getRenderMode() === "rendered" ? "raw" : "rendered");
+									host?.setRenderMode(rendered ? "raw" : "rendered");
 									this.refreshRibbon();
 								},
-								{ tooltip: "Rendered mode formats each visible cell, which costs a Markdown render per cell" },
+								{
+									active: rendered,
+									tooltip: rendered
+										? "show the Markdown source of every cell instead"
+										: "format each visible cell the way the note does",
+								},
 							),
 						],
 					},
@@ -785,12 +841,15 @@ export class GridView extends ItemView {
 			{
 				id: "data",
 				label: "Data",
+				icon: "database",
 				groups: [
 					{
 						label: "Sort",
 						items: [
-							button("sort-asc", "Sort ascending", "arrow-down-a-z", () => this.sort(true)),
-							button("sort-desc", "Sort descending", "arrow-up-z-a", () => this.sort(false)),
+							cluster("sort", [
+								action("sort-asc", "Sort ascending", "arrow-down-a-z", () => this.sort(true)),
+								action("sort-desc", "Sort descending", "arrow-up-z-a", () => this.sort(false)),
+							]),
 							button("sort-dialog", "Sort by…", "list-ordered", () => this.openSortDialog()),
 						],
 					},
@@ -799,33 +858,49 @@ export class GridView extends ItemView {
 						items: [
 							button("filter", "Filter", "filter", () => this.openFilterDialog(), {
 								active: (host?.getFilters().length ?? 0) > 0,
-								tooltip: "Hides rows in the grid only — the note keeps every row",
+								tooltip: "hides rows in the grid only — the note keeps every row",
 							}),
-							button("filter-clear", "Clear filter", "filter-x", () => {
-								host?.setFilters([]);
-								this.refreshStatus();
-								this.refreshRibbon();
-							}, { disabled: (host?.getFilters().length ?? 0) === 0 }),
+							button(
+								"filter-clear",
+								"Clear",
+								"filter-x",
+								() => {
+									host?.setFilters([]);
+									this.refreshStatus();
+									this.refreshRibbon();
+								},
+								{ disabled: (host?.getFilters().length ?? 0) === 0, tooltip: "show every row again" },
+							),
 						],
 					},
 					{
 						label: "Editing",
 						items: [
 							button("find", "Find and replace", "search", () => this.openFindReplace()),
-							button("fill-down", "Fill down", "arrow-down-to-line", () => this.fill("down")),
-							button("fill-right", "Fill right", "arrow-right-to-line", () => this.fill("right")),
-							button("clear", "Clear contents", "eraser", () => host?.clearSelectionContents()),
+							cluster("fill", [
+								action("fill-down", "Fill down", "arrow-down-to-line", () => this.fill("down"), {
+									tooltip: "copies the first row of the selection into the rest",
+								}),
+								action("fill-right", "Fill right", "arrow-right-to-line", () => this.fill("right"), {
+									tooltip: "copies the first column of the selection into the rest",
+								}),
+								action("clear", "Clear contents", "eraser", () => host?.clearSelectionContents(), {
+									tooltip: "Delete",
+								}),
+							]),
 						],
 					},
 					{
 						label: "Calculate",
 						items: [
 							button("calc", "Calculate", "sigma", () => this.openCalculate(), {
-								tooltip: "Inserts a one-off value — Markdown has no live formulas",
+								tooltip: "inserts a one-off value — Markdown has no live formulas",
 							}),
-							button("calc-again", "Recalculate last", "rotate-ccw", () => this.recalculateLast(), {
+							button("calc-again", "Again", "rotate-ccw", () => this.recalculateLast(), {
 								disabled: this.lastCalc === null,
-								tooltip: this.lastCalc ? `Recompute ${this.lastCalc.fn} over the current selection` : "Nothing calculated yet in this tab",
+								tooltip: this.lastCalc
+									? `recompute ${this.lastCalc.fn} over the current selection`
+									: "nothing calculated yet in this tab",
 							}),
 						],
 					},
@@ -834,6 +909,7 @@ export class GridView extends ItemView {
 			{
 				id: "table",
 				label: "Table",
+				icon: "table",
 				groups: [
 					{
 						label: "Size",
@@ -841,7 +917,7 @@ export class GridView extends ItemView {
 							{
 								kind: "number",
 								id: "colw",
-								label: "Column width",
+								label: "Width",
 								value: host?.getLayout().colWidths[rect.c1] || settings.defaultColWidth,
 								min: MIN_COL_WIDTH,
 								max: MAX_COL_WIDTH,
@@ -851,7 +927,7 @@ export class GridView extends ItemView {
 							{
 								kind: "number",
 								id: "rowh",
-								label: "Row height",
+								label: "Height",
 								value: host?.getLayout().rowHeights[String(rect.r1)] || settings.defaultRowHeight,
 								min: MIN_ROW_HEIGHT,
 								max: MAX_ROW_HEIGHT,
@@ -863,45 +939,56 @@ export class GridView extends ItemView {
 					{
 						label: "Autofit",
 						items: [
-							button("autofit-col", "Autofit columns", "move-horizontal", () => host?.autofitColumns(cols)),
-							button("autofit-row", "Autofit rows", "move-vertical", () => host?.autofitRows(rows)),
-							button("autofit-all", "Autofit all columns", "maximize-2", () => {
-								if (!host) return;
-								const all: number[] = [];
-								for (let c = 0; c < Math.max(host.getModel().usedRange.cols, 1); c++) all.push(c);
-								host.autofitColumns(all);
-							}),
-							button("reset-row", "Reset row height", "rotate-ccw", () => host?.resetRowHeights(rows)),
+							cluster("autofit", [
+								action("autofit-col", "Autofit columns", "move-horizontal", () => host?.autofitColumns(cols), {
+									tooltip: "widen the selected columns to their widest cell",
+								}),
+								action("autofit-row", "Autofit rows", "move-vertical", () => host?.autofitRows(rows)),
+								action("autofit-all", "Autofit all columns", "maximize-2", () => {
+									if (!host) return;
+									const all: number[] = [];
+									for (let c = 0; c < Math.max(host.getModel().usedRange.cols, 1); c++) all.push(c);
+									host.autofitColumns(all);
+								}),
+								action("reset-row", "Reset row height", "rotate-ccw", () => host?.resetRowHeights(rows)),
+							]),
 						],
 					},
 					{
 						label: "Freeze",
 						items: [
-							button("freeze-header", "Freeze header row", "pin", () => host?.setFreeze(1, host.getLayout().frozenCols), {
-								active: host?.getLayout().frozenRows === 1,
-							}),
-							button("freeze-none", "Unfreeze", "pin-off", () => host?.setFreeze(0, 0), {
-								disabled: (host?.getLayout().frozenRows ?? 0) === 0 && (host?.getLayout().frozenCols ?? 0) === 0,
-							}),
-							button("freeze-col", "Freeze first column", "pin", () => host?.setFreeze(host.getLayout().frozenRows, 1), {
-								active: (host?.getLayout().frozenCols ?? 0) >= 1,
-							}),
+							cluster("freeze", [
+								action("freeze-header", "Freeze header row", "pin", () => host?.setFreeze(1, host.getLayout().frozenCols), {
+									active: host?.getLayout().frozenRows === 1,
+								}),
+								action("freeze-col", "Freeze first column", "pin", () => host?.setFreeze(host.getLayout().frozenRows, 1), {
+									active: (host?.getLayout().frozenCols ?? 0) >= 1,
+								}),
+								action("freeze-none", "Unfreeze", "pin-off", () => host?.setFreeze(0, 0), {
+									disabled: (host?.getLayout().frozenRows ?? 0) === 0 && (host?.getLayout().frozenCols ?? 0) === 0,
+								}),
+							]),
 						],
 					},
 					{
 						label: "Table",
 						items: [
-							button("info", "Used range", "info", () => new Notice(host?.usedRangeLabel() ?? ""), {
-								tooltip: host?.usedRangeLabel(),
-							}),
 							button("reformat", "Reformat", "align-justify", () => void this.reformat(), {
-								tooltip: "Rewrites the table in the note with the pipes realigned",
+								tooltip: "rewrites the table in the note with the pipes realigned",
 							}),
-							button("shrink", "Shrink to data", "minimize-2", () => {
-								if (!host) return;
-								host.mutate("Shrink to data", () => shrinkToData(host.getModel()));
-							}, { tooltip: "Drops the empty rows and columns around the data" }),
-							button("restore", "Restore a previous version", "history", () => this.openRestore()),
+							button(
+								"shrink",
+								"Shrink to data",
+								"minimize-2",
+								() => {
+									if (!host) return;
+									host.mutate("Shrink to data", () => shrinkToData(host.getModel()));
+								},
+								{ tooltip: "drops the empty rows and columns around the data" },
+							),
+							button("restore", "Restore a version", "history", () => this.openRestore(), {
+								tooltip: "compare the grid with an earlier version of this table",
+							}),
 						],
 					},
 				],
@@ -909,6 +996,7 @@ export class GridView extends ItemView {
 			{
 				id: "export",
 				label: "Export",
+				icon: "upload",
 				groups: [
 					{
 						label: "Files",
@@ -927,11 +1015,14 @@ export class GridView extends ItemView {
 					{
 						label: "Note",
 						items: [
-							button("save", "Save to the note", "save", () => void this.save(true), {
+							button("save", "Save", "save", () => void this.save(true), {
 								disabled: !this.dirty,
-								tooltip: this.dirty ? "Write the table back into the note" : "The note already matches the grid",
+								primary: this.dirty,
+								tooltip: this.dirty ? "write the table back into the note (Ctrl+S)" : "the note already matches the grid",
 							}),
-							button("reload", "Reload from the note", "refresh-cw", () => void this.confirmReload()),
+							button("reload", "Reload", "refresh-cw", () => void this.confirmReload(), {
+								tooltip: "take the note's version of the table",
+							}),
 							button("open-note", "Open the note", "file-text", () => void this.openSourceNote()),
 						],
 					},
@@ -1112,6 +1203,8 @@ export class GridView extends ItemView {
 	private openRestore(): void {
 		new RestoreModal(this.app, {
 			backups: this.plugin.sidecar.getBackups(this.layoutKey),
+			current: this.host ? serializeTable(this.host.getModel()) : "",
+			now: Date.now(),
 			onRestore: (entry) => {
 				if (!this.host) return;
 				this.host.replaceData(parseTable(entry.text), this.host.getLayout());

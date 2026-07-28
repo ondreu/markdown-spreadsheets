@@ -23,7 +23,7 @@ const maxCols = Number.parseInt(match[1], 10);
 const rules = [];
 for (let c = 0; c < maxCols; c++) {
 	rules.push(
-		`.mg-cell[data-col="${c}"],.mg-colhead[data-col="${c}"]{width:var(--mg-col-${c},var(--mg-col-default));min-width:var(--mg-col-${c},var(--mg-col-default))}`,
+		`.mds-cell[data-col="${c}"],.mds-colhead[data-col="${c}"]{width:var(--mds-col-${c},var(--mds-col-default));min-width:var(--mds-col-${c},var(--mds-col-default))}`,
 	);
 }
 

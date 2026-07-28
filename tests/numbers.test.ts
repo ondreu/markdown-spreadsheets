@@ -63,6 +63,21 @@ describe("parseNumber", () => {
 		}
 	});
 
+	it("keeps dates out of the numeric path", () => {
+		// A dotted date used to lose its dots and export to Excel as 07072026.
+		for (const text of ["07.07.2026", "7.7.2026", "1.1.99", "2026-07-07", "07/07/2026", "10.000.5"]) {
+			expect(parseNumber(text)).toBe(null);
+			expect(parseNumber(text, { decimalSeparator: "," })).toBe(null);
+			expect(parseNumber(text, { decimalSeparator: "." })).toBe(null);
+		}
+	});
+
+	it("still accepts well-formed grouping", () => {
+		expect(parseNumber("1.234.567", { decimalSeparator: "," })).toBe(1234567);
+		expect(parseNumber("12.345,60", { decimalSeparator: "," })).toBeCloseTo(12345.6);
+		expect(parseNumber("1,234,567.89", { decimalSeparator: "." })).toBeCloseTo(1234567.89);
+	});
+
 	it("round-trips its own formatted output", () => {
 		for (const locale of ["cs-CZ", "en-US", "de-DE"]) {
 			const text = formatNumber(1234.56, 2, locale);

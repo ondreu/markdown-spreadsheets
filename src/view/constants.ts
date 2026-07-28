@@ -1,6 +1,6 @@
 /** Shared grid limits. `scripts/gen-styles.mjs` reads MAX_COLS to emit the per-column rules. */
 
-export const VIEW_TYPE_GRID = "markdown-grid-view";
+export const VIEW_TYPE_GRID = "markdown-spreadsheet-view";
 
 /**
  * Hard stop on rows (§9). Not a feature — a guard so that holding the down arrow cannot grow

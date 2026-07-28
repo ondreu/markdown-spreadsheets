@@ -65,6 +65,9 @@ export function parseNumber(text: string, opts: NumberParseOptions = {}): number
 	}
 
 	const decSep = resolveDecimalSeparator(s, opts.decimalSeparator ?? "auto");
+	// `07.07.2026` is a date, not 07072026. A separator is only dropped as grouping when the digit
+	// runs it separates really are thousands groups.
+	if (!groupingIsValid(s, decSep)) return null;
 	if (decSep === ",") s = s.split(".").join("").replace(",", ".");
 	else s = s.split(",").join("");
 
@@ -76,13 +79,36 @@ export function parseNumber(text: string, opts: NumberParseOptions = {}): number
 	return n;
 }
 
+/**
+ * True when the grouping separator, if present at all, groups digits the way a number does:
+ * one to three digits, then groups of exactly three, and never in the fractional part.
+ *
+ * This is what keeps `07.07.2026`, `1.2.3` and `10.000.5` out of the numeric path. Without it a
+ * dotted date exports to Excel as the integer 07072026 (§14).
+ */
+function groupingIsValid(s: string, decSep: "," | "."): boolean {
+	const groupSep = decSep === "," ? "." : ",";
+	if (!s.includes(groupSep)) return true;
+	const body = s.replace(/^[+-]/, "");
+	const cut = body.indexOf(decSep);
+	const integer = cut === -1 ? body : body.slice(0, cut);
+	const fraction = cut === -1 ? "" : body.slice(cut + 1);
+	if (fraction.includes(groupSep)) return false;
+	const groups = integer.split(groupSep);
+	if (groups.length < 2) return false;
+	if (!/^\d{1,3}$/.test(groups[0])) return false;
+	return groups.slice(1).every((g) => /^\d{3}$/.test(g));
+}
+
 function resolveDecimalSeparator(s: string, pref: "auto" | "," | "."): "," | "." {
 	const commas = (s.match(/,/g) ?? []).length;
 	const dots = (s.match(/\./g) ?? []).length;
 	if (pref !== "auto") {
-		// An explicit preference still has to defer when only the other separator is present.
-		if (pref === "," && commas === 0 && dots > 0) return ".";
-		if (pref === "." && dots === 0 && commas > 0) return ",";
+		// An explicit preference defers when only the other separator is present *and* it appears
+		// once, which is the ambiguous case (`1.5` under a comma preference). A repeated separator
+		// is grouping, so the preference stands.
+		if (pref === "," && commas === 0 && dots === 1) return ".";
+		if (pref === "." && dots === 0 && commas === 1) return ",";
 		return pref;
 	}
 	if (commas > 0 && dots > 0) return s.lastIndexOf(",") > s.lastIndexOf(".") ? "," : ".";

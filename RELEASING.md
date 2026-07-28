@@ -93,8 +93,8 @@ Only needed once, for the first release.
 
    ```json
    {
-     "id": "markdown-grid",
-     "name": "Markdown Grid",
+     "id": "markdown-spreadsheets",
+     "name": "Markdown Spreadsheets",
      "author": "ondreu",
      "description": "Edit Markdown tables in a spreadsheet-style grid in a dedicated tab.",
      "repo": "ondreu/markdown-spreadsheets"
@@ -115,6 +115,6 @@ For testing a build, or for anyone who does not want to wait for review:
 
 - **BRAT** — add `ondreu/markdown-spreadsheets` in the BRAT settings. It reads the same release
   assets, and unlike the store it will also take a pre-release.
-- **By hand** — create `<vault>/.obsidian/plugins/markdown-grid/` and put `main.js`,
+- **By hand** — create `<vault>/.obsidian/plugins/markdown-spreadsheets/` and put `main.js`,
   `manifest.json` and `styles.css` in it, then enable the plugin in Obsidian's settings. Use
   `npm run dev` and copy the files there while developing; `npm run dev` rebuilds on save.

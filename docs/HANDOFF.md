@@ -1,6 +1,7 @@
 # Handoff
 
-State as of **28 July 2026**, commit `dc6b79e`, version **0.1.0**.
+State as of **28 July 2026**, on branch `claude/markdown-spreadsheets-plugin-3xpmnl`, version
+**0.1.0** — a released 0.1.0 plus the first round of feedback from actually running it.
 
 This file goes stale. `CLAUDE.md` holds the durable rules; this one holds what is done, what is
 not, and what to look at first.
@@ -13,8 +14,8 @@ commit; there is no open pull request.
 
 | | |
 | --- | --- |
-| Source | ~6 650 lines across 29 files |
-| Tests | 169, in 6 files, ~1 300 lines |
+| Source | ~7 000 lines across 30 files |
+| Tests | 183, in 7 files |
 | Lint | `eslint-plugin-obsidianmd` at 0 errors, 0 warnings |
 | Bundle | `main.js` 109 kB against the ~1 MB budget of §15.1 |
 | Runtime dependencies | none |
@@ -99,3 +100,48 @@ Small, honest, and none of them data-affecting:
 Read in this order: `docs/design` §2 (the decisions), §3 (what GFM cannot do — it explains most of
 the design), §13 (the write path, which matters more than the whole ribbon), then `CLAUDE.md`.
 Then install the plugin and work down the list above.
+
+## Round two: what the first real session in Obsidian produced
+
+The plugin was installed and used. Nine things came back; all nine are addressed on
+`claude/markdown-spreadsheets-plugin-3xpmnl`, and the two that are answers rather than code are
+marked as such.
+
+1. **Renamed** to `markdown-spreadsheets` / "Markdown Spreadsheets" — decision 7 in
+   `docs/DECISIONS.md` lists what the new `id`, view type and CSS prefix cost an existing install.
+2. **The ribbon was rebuilt** — segmented tabs with icons, group names above their actions, icon
+   clusters for alignment/emphasis/insert/delete/freeze, a collapse toggle persisted in
+   `ribbonCollapsed`. Decision 9.
+3. **Alignment did nothing.** `buildCell` applied `is-align-*` once at build time and `paintCell`
+   never touched it, so `setAlignment` — which repaints — appeared to do nothing until the tab was
+   reopened. `paintCell` now owns the alignment classes.
+4. **`&nbsp;` is not ours.** Nothing in the plugin writes an HTML entity; the notes in question
+   carry it, which is what pasting a web or Word table produces. Rendered mode shows it as a space,
+   and find and replace removes it. Answer, not a change.
+5. **Restore was unusable.** It dumped three lines of every version at once and restored on a
+   single click. It is now a version list, a line diff against the current grid once one is picked
+   (`src/feature/diff.ts`, unit-tested), and an explicit `Restore this version`. The conflict
+   dialog uses the same diff view.
+6. **A click inside an open cell editor** hit the grid's `mousedown`, which committed the edit and
+   re-selected the cell, so the caret could never be placed mid-word. `mousedown` and `dblclick`
+   now leave events inside `.mds-editor` alone. The editor's own listeners are also released per
+   edit instead of accumulating in `cleanup` for the life of the grid.
+7. **`07.07.2026` exported to Excel as `07072026`.** `parseNumber` stripped repeated dots as
+   grouping without validating the digit runs. Decision 10.
+8. **Rendered by default**, raw as the option. Decision 8.
+9. **Two more ways in** — a sidebar ribbon icon, and a hover `Edit` button on tables in the note
+   itself (a post processor over the rendered DOM; the note is never modified). Decision 11.
+
+### Still not verified in Obsidian
+
+Everything in this round was written outside the app again, so the list at the top of this file
+still applies, plus:
+
+- **The ribbon's Lucide icon names.** Obsidian ships a subset, and a name it does not have renders
+  as nothing at all rather than failing. The tab icons (`home`, `database`, `table`, `upload`) and
+  the cluster icons are the conservative picks, but they want a look.
+- **Rendered mode as the default** on a real, wide table: this is the one change with a plausible
+  performance cost. If it drags, `Home ▸ Raw` and the `Cell display` setting are the escape, and
+  the render cache and observer in `GridHost` are where to look.
+- **The in-note button** inside callouts, embeds, tables in table cells and Live Preview versus
+  reading mode.

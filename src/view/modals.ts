@@ -1,5 +1,6 @@
 import { Modal, Setting, type App } from "obsidian";
 import { colName } from "../model/address";
+import { describeDiff, diffLines, diffStats, relativeTime, tableShape } from "../feature/diff";
 import type { GridModel } from "../model/GridModel";
 import { previewOf } from "../file/scanTables";
 import type { ScoredRegion } from "../file/AnchorResolver";
@@ -30,7 +31,7 @@ export class ConfirmModal extends Modal {
 
 	override onOpen(): void {
 		this.titleEl.setText(this.opts.title);
-		const body = this.contentEl.createDiv({ cls: "mg-modal-body" });
+		const body = this.contentEl.createDiv({ cls: "mds-modal-body" });
 		if (typeof this.opts.body === "string") body.createEl("p", { text: this.opts.body });
 		else this.opts.body(body);
 
@@ -77,21 +78,21 @@ export class TablePickerModal extends Modal {
 	override onOpen(): void {
 		this.titleEl.setText("Choose the right table");
 		this.contentEl.createEl("p", {
-			cls: "mg-modal-note",
+			cls: "mds-modal-note",
 			text: "Several tables in this note look alike, so the earlier one could not be identified with confidence.",
 		});
-		const list = this.contentEl.createDiv({ cls: "mg-table-picker" });
+		const list = this.contentEl.createDiv({ cls: "mds-table-picker" });
 		for (const candidate of this.candidates) {
-			const item = list.createEl("button", { cls: "mg-table-picker-item", attr: { type: "button" } });
+			const item = list.createEl("button", { cls: "mds-table-picker-item", attr: { type: "button" } });
 			const region = candidate.region;
-			item.createDiv({ cls: "mg-table-picker-head", text: previewOf(region, 6) });
+			item.createDiv({ cls: "mds-table-picker-head", text: previewOf(region, 6) });
 			const meta = [
 				`Table ${region.index + 1}`,
 				`line ${region.startLine + 1}`,
 				`${region.rowCount} × ${region.colCount}`,
 				region.precedingHeading === undefined ? null : `under “${region.precedingHeading}”`,
 			].filter((p): p is string => p !== null);
-			item.createDiv({ cls: "mg-table-picker-meta", text: meta.join(" · ") });
+			item.createDiv({ cls: "mds-table-picker-meta", text: meta.join(" · ") });
 			item.addEventListener("click", () => {
 				this.close();
 				this.onPick(candidate);
@@ -132,7 +133,7 @@ export class DensityModal extends Modal {
 			text: `Writing it back produces a ${cols} × ${rows} table — ${total.toLocaleString()} cells, of which ${filled.toLocaleString()} hold anything.`,
 		});
 		this.contentEl.createEl("p", {
-			cls: "mg-modal-note",
+			cls: "mds-modal-note",
 			text: "Markdown tables are always rectangular, so the empty cells have to be written out too.",
 		});
 
@@ -181,17 +182,17 @@ export class CalculateModal extends Modal {
 	override onOpen(): void {
 		this.titleEl.setText("Calculate");
 		this.contentEl.createEl("p", {
-			cls: "mg-modal-note",
+			cls: "mds-modal-note",
 			text: `${this.opts.rangeLabel} · ${this.opts.aggregate.numericCount} numeric ${this.opts.aggregate.numericCount === 1 ? "cell" : "cells"}${this.opts.aggregate.ignoredCount > 0 ? `, ignoring ${this.opts.aggregate.ignoredCount} non-numeric` : ""}`,
 		});
 
-		const preview = this.contentEl.createDiv({ cls: "mg-calc-preview" });
+		const preview = this.contentEl.createDiv({ cls: "mds-calc-preview" });
 		const refresh = () => {
 			preview.empty();
 			const text = this.resultText();
-			preview.createSpan({ cls: "mg-calc-fn", text: this.fn });
-			preview.createSpan({ cls: "mg-calc-eq", text: "=" });
-			preview.createSpan({ cls: "mg-calc-value", text: text === null ? "not available" : text });
+			preview.createSpan({ cls: "mds-calc-fn", text: this.fn });
+			preview.createSpan({ cls: "mds-calc-eq", text: "=" });
+			preview.createSpan({ cls: "mds-calc-value", text: text === null ? "not available" : text });
 		};
 
 		new Setting(this.contentEl).setName("Function").addDropdown((d) => {
@@ -204,7 +205,7 @@ export class CalculateModal extends Modal {
 		refresh();
 
 		this.contentEl.createEl("p", {
-			cls: "mg-modal-note",
+			cls: "mds-modal-note",
 			text: "The result is inserted as plain text. Markdown has no formulas, so it will not update when the data changes.",
 		});
 
@@ -258,7 +259,7 @@ export class FindReplaceModal extends Modal {
 
 	override onOpen(): void {
 		this.titleEl.setText("Find and replace");
-		const status = this.contentEl.createDiv({ cls: "mg-modal-note" });
+		const status = this.contentEl.createDiv({ cls: "mds-modal-note" });
 
 		new Setting(this.contentEl).setName("Find").addText((t) =>
 			t.setValue(this.options.query).onChange((value) => {
@@ -398,7 +399,7 @@ export class FilterModal extends Modal {
 	override onOpen(): void {
 		this.titleEl.setText("Filter rows");
 		this.contentEl.createEl("p", {
-			cls: "mg-modal-note",
+			cls: "mds-modal-note",
 			text: "Filtering only hides rows in the grid. The note is never changed and hidden rows are still written back.",
 		});
 		const cols = Math.max(this.opts.model.usedRange.cols, 1);
@@ -544,12 +545,25 @@ export class ExportModal extends Modal {
 	}
 }
 
-/** `Restore previous version` (§13.2): the last ten serialized regions, newest first. */
+/**
+ * `Restore previous version` (§13.2): the last ten serialized regions, newest first.
+ *
+ * Nothing is previewed until a version is picked. A restore replaces the whole grid, so the
+ * decision needs the diff against what is in the grid right now, not three lines of context.
+ */
 export class RestoreModal extends Modal {
+	private selected: BackupEntry | null = null;
+	private itemEls: HTMLElement[] = [];
+	private previewEl!: HTMLElement;
+	private restoreButtonEl: HTMLButtonElement | null = null;
+
 	constructor(
 		app: App,
 		private readonly opts: {
 			backups: BackupEntry[];
+			/** The grid as it stands, which is what a restore would replace. */
+			current: string;
+			now: number;
 			onRestore(entry: BackupEntry): void;
 		},
 	) {
@@ -557,34 +571,94 @@ export class RestoreModal extends Modal {
 	}
 
 	override onOpen(): void {
+		this.modalEl.addClass("mds-restore-modal");
 		this.titleEl.setText("Restore a previous version");
 		if (this.opts.backups.length === 0) {
-			this.contentEl.createEl("p", { text: "No earlier versions of this table have been recorded yet." });
+			this.contentEl.createEl("p", {
+				text: "No earlier versions of this table have been recorded yet. One is kept every time the table is opened or written back.",
+			});
+			new Setting(this.contentEl).addButton((b) => b.setButtonText("Close").setCta().onClick(() => this.close()));
 			return;
 		}
+
 		this.contentEl.createEl("p", {
-			cls: "mg-modal-note",
-			text: "Restoring replaces what is in the grid. Nothing is written to the note until the next save.",
+			cls: "mds-modal-note",
+			text: "Pick a version to see what it would change. Restoring replaces the grid; nothing reaches the note until the next save.",
 		});
-		const list = this.contentEl.createDiv({ cls: "mg-restore-list" });
+
+		const layout = this.contentEl.createDiv({ cls: "mds-restore-layout" });
+		const list = layout.createDiv({ cls: "mds-restore-list" });
 		for (const entry of this.opts.backups) {
-			const item = list.createEl("button", { cls: "mg-restore-item", attr: { type: "button" } });
-			item.createDiv({ cls: "mg-restore-when", text: new Date(entry.at).toLocaleString() });
-			const firstLines = entry.text.split("\n").slice(0, 3).join("\n");
-			item.createEl("pre", { cls: "mg-restore-preview", text: firstLines });
-			item.addEventListener("click", () => {
-				this.close();
-				this.opts.onRestore(entry);
-			});
+			const item = list.createEl("button", { cls: "mds-restore-item", attr: { type: "button" } });
+			item.createDiv({ cls: "mds-restore-when", text: relativeTime(entry.at, this.opts.now) });
+			item.createDiv({ cls: "mds-restore-stamp", text: new Date(entry.at).toLocaleString() });
+			const shape = tableShape(entry.text);
+			const same = entry.text.trimEnd() === this.opts.current.trimEnd();
+			item.createDiv({ cls: "mds-restore-shape", text: same ? `${shape} · same as now` : shape });
+			this.itemEls.push(item);
+			item.addEventListener("click", () => this.select(entry, item));
+		}
+
+		this.previewEl = layout.createDiv({ cls: "mds-restore-preview-pane" });
+		this.previewEl.createDiv({
+			cls: "mds-restore-placeholder",
+			text: "Select a version on the left.",
+		});
+
+		new Setting(this.contentEl)
+			.addButton((b) => {
+				b.setButtonText("Restore this version")
+					.setCta()
+					.onClick(() => {
+						const entry = this.selected;
+						if (!entry) return;
+						this.close();
+						this.opts.onRestore(entry);
+					});
+				b.setDisabled(true);
+				this.restoreButtonEl = b.buttonEl;
+			})
+			.addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()));
+	}
+
+	private select(entry: BackupEntry, item: HTMLElement): void {
+		this.selected = entry;
+		for (const el of this.itemEls) el.toggleClass("is-selected", el === item);
+		this.restoreButtonEl?.removeAttribute("disabled");
+		this.renderDiff(entry);
+	}
+
+	private renderDiff(entry: BackupEntry): void {
+		this.previewEl.empty();
+		const lines = diffLines(this.opts.current, entry.text);
+		const stats = diffStats(lines);
+		const head = this.previewEl.createDiv({ cls: "mds-restore-diff-head" });
+		head.createSpan({ cls: "mds-restore-diff-summary", text: describeDiff(stats) });
+		if (stats.added > 0 || stats.removed > 0) {
+			head.createSpan({ cls: "mds-modal-note", text: "− the grid now · + the version picked" });
+		}
+
+		const body = this.previewEl.createDiv({ cls: "mds-restore-diff" });
+		for (const line of lines) {
+			const row = body.createDiv({ cls: `mds-diff-line is-${line.kind}` });
+			row.createSpan({ cls: "mds-diff-gutter", text: line.kind === "add" ? "+" : line.kind === "remove" ? "−" : " " });
+			row.createSpan({ cls: "mds-diff-text", text: line.text });
 		}
 	}
 
 	override onClose(): void {
 		this.contentEl.empty();
+		this.itemEls = [];
+		this.restoreButtonEl = null;
 	}
 }
 
-/** Side-by-side text of the region as the grid has it vs. as the note has it. */
+/**
+ * The region as the grid has it against the region as the note has it (§13.2).
+ *
+ * Same unified view as the restore dialog: with a conflict banner on screen the question is which
+ * lines differ, and two `pre` blocks side by side leave that to the reader.
+ */
 export class DiffModal extends Modal {
 	constructor(
 		app: App,
@@ -594,14 +668,18 @@ export class DiffModal extends Modal {
 	}
 
 	override onOpen(): void {
+		this.modalEl.addClass("mds-restore-modal");
 		this.titleEl.setText("Compare with the note");
-		const wrap = this.contentEl.createDiv({ cls: "mg-diff" });
-		const left = wrap.createDiv({ cls: "mg-diff-side" });
-		left.createDiv({ cls: "mg-diff-title", text: "In this grid" });
-		left.createEl("pre", { text: this.opts.mine });
-		const right = wrap.createDiv({ cls: "mg-diff-side" });
-		right.createDiv({ cls: "mg-diff-title", text: "In the note" });
-		right.createEl("pre", { text: this.opts.theirs });
+		const lines = diffLines(this.opts.mine, this.opts.theirs);
+		const head = this.contentEl.createDiv({ cls: "mds-restore-diff-head" });
+		head.createSpan({ cls: "mds-restore-diff-summary", text: describeDiff(diffStats(lines)) });
+		head.createSpan({ cls: "mds-modal-note", text: "− in this grid · + in the note" });
+		const body = this.contentEl.createDiv({ cls: "mds-restore-diff" });
+		for (const line of lines) {
+			const row = body.createDiv({ cls: `mds-diff-line is-${line.kind}` });
+			row.createSpan({ cls: "mds-diff-gutter", text: line.kind === "add" ? "+" : line.kind === "remove" ? "\u2212" : " " });
+			row.createSpan({ cls: "mds-diff-text", text: line.text });
+		}
 	}
 
 	override onClose(): void {

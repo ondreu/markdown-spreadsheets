@@ -1,11 +1,11 @@
 import { PluginSettingTab, Setting, type App } from "obsidian";
-import type MarkdownGridPlugin from "./main";
+import type MarkdownSpreadsheetsPlugin from "./main";
 
 export type AnchorStrategy = "fingerprint" | "ask" | "blockId";
 export type SaveMode = "auto" | "manual";
 export type CsvDelimiter = "," | ";" | "\t";
 
-export interface MarkdownGridSettings {
+export interface MarkdownSpreadsheetsSettings {
 	/** §13.2: autosave is the Excel-like default; manual suits a git-tracked vault. */
 	saveMode: SaveMode;
 	autosaveDebounceMs: number;
@@ -14,8 +14,12 @@ export interface MarkdownGridSettings {
 	/** §8.2 global default; a table can override it. */
 	defaultRowHeight: number;
 	defaultColWidth: number;
-	/** Rendered mode is a perf risk, so raw is the default (§5). */
+	/** Rendered is the default: a cell full of link syntax is unreadable (D9). */
 	defaultRenderMode: "raw" | "rendered";
+	/** A hover button on tables in the note itself, next to the context-menu route (§11). */
+	showTableButton: boolean;
+	/** The ribbon panel starts collapsed; the tab strip stays visible either way. */
+	ribbonCollapsed: boolean;
 	defaultDecimals: number;
 	/** Empty follows the host locale. */
 	numberLocale: string;
@@ -30,13 +34,15 @@ export interface MarkdownGridSettings {
 	confirmSparseWrite: boolean;
 }
 
-export const DEFAULT_SETTINGS: MarkdownGridSettings = {
+export const DEFAULT_SETTINGS: MarkdownSpreadsheetsSettings = {
 	saveMode: "auto",
 	autosaveDebounceMs: 800,
 	anchorStrategy: "fingerprint",
 	defaultRowHeight: 24,
 	defaultColWidth: 120,
-	defaultRenderMode: "raw",
+	defaultRenderMode: "rendered",
+	showTableButton: true,
+	ribbonCollapsed: false,
 	defaultDecimals: 2,
 	numberLocale: "",
 	decimalSeparator: "auto",
@@ -48,10 +54,10 @@ export const DEFAULT_SETTINGS: MarkdownGridSettings = {
 	confirmSparseWrite: true,
 };
 
-export class MarkdownGridSettingTab extends PluginSettingTab {
+export class MarkdownSpreadsheetsSettingTab extends PluginSettingTab {
 	constructor(
 		app: App,
-		private readonly plugin: MarkdownGridPlugin,
+		private readonly plugin: MarkdownSpreadsheetsPlugin,
 	) {
 		super(app, plugin);
 	}
@@ -156,17 +162,29 @@ export class MarkdownGridSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Cell display")
 			.setDesc(
-				"Raw shows the Markdown source of every cell. Rendered formats it, which costs a Markdown render per visible cell.",
+				"Rendered formats every visible cell, so links and emphasis read the way they do in the note. Raw shows the Markdown source instead, which is faster on a very wide table. Either way editing a cell always shows the raw Markdown.",
 			)
 			.addDropdown((d) =>
 				d
-					.addOption("raw", "Raw Markdown")
 					.addOption("rendered", "Rendered")
+					.addOption("raw", "Raw Markdown")
 					.setValue(settings.defaultRenderMode)
 					.onChange((value) => {
-						settings.defaultRenderMode = value === "rendered" ? "rendered" : "raw";
+						settings.defaultRenderMode = value === "raw" ? "raw" : "rendered";
 						commit();
 					}),
+			);
+
+		new Setting(containerEl)
+			.setName("Show a button on tables in the note")
+			.setDesc(
+				"Adds a small button to the top right of every table while the pointer is over it, which opens that table in the spreadsheet editor. The note itself is never changed.",
+			)
+			.addToggle((t) =>
+				t.setValue(settings.showTableButton).onChange((value) => {
+					settings.showTableButton = value;
+					commit();
+				}),
 			);
 
 		new Setting(containerEl)
@@ -220,7 +238,7 @@ export class MarkdownGridSettingTab extends PluginSettingTab {
 					.addOption(".", "Period")
 					.setValue(settings.decimalSeparator)
 					.onChange((value) => {
-						settings.decimalSeparator = value as MarkdownGridSettings["decimalSeparator"];
+						settings.decimalSeparator = value as MarkdownSpreadsheetsSettings["decimalSeparator"];
 						commit();
 					}),
 			);

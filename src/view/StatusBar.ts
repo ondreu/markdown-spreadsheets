@@ -28,12 +28,12 @@ export class StatusBar {
 	private stateEl!: HTMLElement;
 
 	mount(parent: HTMLElement, onSave: () => void): void {
-		this.el = parent.createDiv({ cls: "mg-statusbar" });
-		this.addressEl = this.el.createDiv({ cls: "mg-status-address" });
-		this.aggregateEl = this.el.createDiv({ cls: "mg-status-aggregate" });
-		this.hintEl = this.el.createDiv({ cls: "mg-status-hint" });
-		this.usedEl = this.el.createDiv({ cls: "mg-status-used" });
-		this.stateEl = this.el.createDiv({ cls: "mg-status-state" });
+		this.el = parent.createDiv({ cls: "mds-statusbar" });
+		this.addressEl = this.el.createDiv({ cls: "mds-status-address" });
+		this.aggregateEl = this.el.createDiv({ cls: "mds-status-aggregate" });
+		this.hintEl = this.el.createDiv({ cls: "mds-status-hint" });
+		this.usedEl = this.el.createDiv({ cls: "mds-status-used" });
+		this.stateEl = this.el.createDiv({ cls: "mds-status-state" });
 		this.stateEl.addEventListener("click", onSave);
 	}
 
@@ -42,11 +42,11 @@ export class StatusBar {
 		this.aggregateEl.setText(model.aggregate);
 		this.usedEl.setText(model.usedRange);
 		this.hintEl.setText(model.hint ?? "");
-		this.hintEl.toggleClass("mg-hidden", (model.hint ?? "") === "");
+		this.hintEl.toggleClass("mds-hidden", (model.hint ?? "") === "");
 
 		this.stateEl.empty();
 		this.stateEl.toggleClass("is-dirty", model.dirty);
-		const icon = this.stateEl.createSpan({ cls: "mg-status-state-icon" });
+		const icon = this.stateEl.createSpan({ cls: "mds-status-state-icon" });
 		if (model.dirty) {
 			setIcon(icon, model.saveMode === "manual" ? "save" : "loader");
 			this.stateEl.createSpan({ text: model.saveMode === "manual" ? "Unsaved" : "Saving…" });

@@ -3,7 +3,7 @@ import { cellLabel, colName, rangeLabel } from "../model/address";
 import { getRaw, recomputeUsedRange, setRaw, type Align, type GridModel } from "../model/GridModel";
 import { fnv1a } from "../model/hash";
 import type { NumberParseOptions } from "../model/numbers";
-import type { MarkdownGridSettings } from "../settings";
+import type { MarkdownSpreadsheetsSettings } from "../settings";
 import type { TableLayout } from "../store/Sidecar";
 import { fromTsv, looksLikeGrid, toTsv } from "../feature/clipboard";
 import {
@@ -72,7 +72,7 @@ export interface GridHostContext {
 	/** The view, never the plugin — `no-plugin-as-component` (§15.2, §5). */
 	component: Component;
 	sourcePath: string;
-	settings: MarkdownGridSettings;
+	settings: MarkdownSpreadsheetsSettings;
 	callbacks: GridHostCallbacks;
 }
 
@@ -134,11 +134,11 @@ export class GridHost {
 	/* ------------------------------------------------------------- lifecycle */
 
 	mount(parent: HTMLElement): void {
-		this.hostEl = parent.createDiv({ cls: "mg-host" });
-		this.hintEl = this.hostEl.createDiv({ cls: "mg-hint mg-hidden" });
-		this.scrollEl = this.hostEl.createDiv({ cls: "mg-scroll", attr: { tabindex: "0" } });
-		this.canvasEl = this.scrollEl.createDiv({ cls: "mg-canvas" });
-		this.fillHandleEl = this.canvasEl.createDiv({ cls: "mg-fill-handle mg-hidden" });
+		this.hostEl = parent.createDiv({ cls: "mds-host" });
+		this.hintEl = this.hostEl.createDiv({ cls: "mds-hint mds-hidden" });
+		this.scrollEl = this.hostEl.createDiv({ cls: "mds-scroll", attr: { tabindex: "0" } });
+		this.canvasEl = this.scrollEl.createDiv({ cls: "mds-canvas" });
+		this.fillHandleEl = this.canvasEl.createDiv({ cls: "mds-fill-handle mds-hidden" });
 
 		const mode = this.styles.attach(this.hostEl);
 		if (mode === "inline") {
@@ -240,9 +240,9 @@ export class GridHost {
 		this.observer?.disconnect();
 		this.observer = null;
 
-		this.fillHandleEl = this.canvasEl.createDiv({ cls: "mg-fill-handle mg-hidden" });
-		this.headRowEl = this.canvasEl.createDiv({ cls: "mg-row mg-head-row" });
-		this.headRowEl.createDiv({ cls: "mg-corner", attr: { "aria-hidden": "true" } });
+		this.fillHandleEl = this.canvasEl.createDiv({ cls: "mds-fill-handle mds-hidden" });
+		this.headRowEl = this.canvasEl.createDiv({ cls: "mds-row mds-head-row" });
+		this.headRowEl.createDiv({ cls: "mds-corner", attr: { "aria-hidden": "true" } });
 		for (let c = 0; c < this.cols; c++) this.appendColHead(c);
 
 		const frag = this.canvasEl.ownerDocument.win.createFragment();
@@ -256,7 +256,7 @@ export class GridHost {
 
 	private appendColHead(c: number): void {
 		const el = this.headRowEl.createDiv({
-			cls: "mg-colhead",
+			cls: "mds-colhead",
 			text: colName(c),
 			attr: { "data-col": String(c) },
 		});
@@ -266,12 +266,12 @@ export class GridHost {
 
 	private buildRow(r: number): HTMLElement {
 		const win = this.canvasEl.ownerDocument.win;
-		const rowEl = win.createDiv({ cls: `mg-row mg-r${r}`, attr: { "data-row": String(r) } });
+		const rowEl = win.createDiv({ cls: `mds-row mds-r${r}`, attr: { "data-row": String(r) } });
 		if (r === 0) rowEl.addClass("is-header-row");
 		if (r < this.layout.frozenRows) rowEl.addClass("is-frozen-row");
 
 		// Row 0 is the markdown header row; label it so its special status is visible (§9).
-		rowEl.createDiv({ cls: "mg-rowhead", text: String(r + 1), attr: { "data-row": String(r) } });
+		rowEl.createDiv({ cls: "mds-rowhead", text: String(r + 1), attr: { "data-row": String(r) } });
 
 		for (let c = 0; c < this.cols; c++) rowEl.append(this.buildCell(r, c));
 		this.rowEls.set(r, rowEl);
@@ -280,15 +280,24 @@ export class GridHost {
 
 	private buildCell(r: number, c: number): HTMLElement {
 		const el = this.canvasEl.ownerDocument.win.createDiv({
-			cls: "mg-cell",
+			cls: "mds-cell",
 			attr: { "data-row": String(r), "data-col": String(c) },
 		});
 		if (c < this.layout.frozenCols) el.addClass("is-frozen-col");
 		if (this.layout.wrapCols.includes(c)) el.addClass("is-wrap");
-		const align = this.model.colAlign[c];
-		if (align) el.addClass(`is-align-${align}`);
 		this.paintCell(el, r, c);
 		return el;
+	}
+
+	/**
+	 * Alignment is a column property in GFM (§3), and it changes under the grid: a repaint has
+	 * to re-apply it, otherwise `setAlignment` only shows up after the tab is reopened.
+	 */
+	private applyAlign(el: HTMLElement, c: number): void {
+		const align = this.model.colAlign[c] ?? null;
+		for (const candidate of ["left", "center", "right"] as const) {
+			el.toggleClass(`is-align-${candidate}`, align === candidate);
+		}
 	}
 
 	private cellEl(r: number, c: number): HTMLElement | null {
@@ -302,6 +311,7 @@ export class GridHost {
 		const raw = getRaw(this.model, r, c);
 		el.empty();
 		el.removeClass("is-rendered");
+		this.applyAlign(el, c);
 		if (raw === "") {
 			el.removeAttribute("aria-label");
 			return;
@@ -516,13 +526,13 @@ export class GridHost {
 		const rect = this.selection.rect;
 		const anchor = this.cellEl(rect.r2, rect.c2);
 		if (!anchor || this.editing) {
-			this.fillHandleEl.addClass("mg-hidden");
+			this.fillHandleEl.addClass("mds-hidden");
 			return;
 		}
-		this.fillHandleEl.removeClass("mg-hidden");
+		this.fillHandleEl.removeClass("mds-hidden");
 		this.fillHandleEl.setCssProps({
-			"--mg-fill-x": `${anchor.offsetLeft + anchor.offsetWidth}px`,
-			"--mg-fill-y": `${anchor.offsetTop + anchor.offsetHeight}px`,
+			"--mds-fill-x": `${anchor.offsetLeft + anchor.offsetWidth}px`,
+			"--mds-fill-y": `${anchor.offsetTop + anchor.offsetHeight}px`,
 		});
 	}
 
@@ -632,10 +642,10 @@ export class GridHost {
 		const original = getRaw(this.model, row, col);
 		el.empty();
 		el.addClass("is-editing");
-		const input = el.createEl("input", { cls: "mg-editor", attr: { type: "text" } });
+		const input = el.createEl("input", { cls: "mds-editor", attr: { type: "text" } });
 		input.value = initial ?? original;
 		this.editing = { row, col, input, original };
-		this.fillHandleEl.addClass("mg-hidden");
+		this.fillHandleEl.addClass("mds-hidden");
 		input.focus();
 		if (initial === undefined) input.select();
 		else input.setSelectionRange(input.value.length, input.value.length);
@@ -644,11 +654,19 @@ export class GridHost {
 		const onBlur = () => this.commitEdit(0, 0);
 		input.addEventListener("keydown", onKey);
 		input.addEventListener("blur", onBlur);
-		this.editing.input.dataset.bound = "1";
-		this.cleanup.push(() => {
+		// Per-edit, not appended to `cleanup`: that array lives as long as the grid, so pushing
+		// two closures per edited cell would keep every editor ever opened reachable.
+		this.editorCleanup = () => {
 			input.removeEventListener("keydown", onKey);
 			input.removeEventListener("blur", onBlur);
-		});
+		};
+	}
+
+	private editorCleanup: (() => void) | null = null;
+
+	private releaseEditor(): void {
+		this.editorCleanup?.();
+		this.editorCleanup = null;
 	}
 
 	private onEditorKey(evt: KeyboardEvent): void {
@@ -679,6 +697,7 @@ export class GridHost {
 		const editing = this.editing;
 		if (!editing) return;
 		this.editing = null;
+		this.releaseEditor();
 		const value = editing.input.value;
 		const el = this.cellEl(editing.row, editing.col);
 		el?.removeClass("is-editing");
@@ -698,6 +717,7 @@ export class GridHost {
 		const editing = this.editing;
 		if (!editing) return;
 		this.editing = null;
+		this.releaseEditor();
 		const el = this.cellEl(editing.row, editing.col);
 		if (el) {
 			el.removeClass("is-editing");
@@ -902,10 +922,10 @@ export class GridHost {
 	private measureEl: HTMLElement | null = null;
 
 	private measureText(text: string, sample: HTMLElement): number {
-		if (!this.measureEl) this.measureEl = this.hostEl.createDiv({ cls: "mg-measure" });
+		if (!this.measureEl) this.measureEl = this.hostEl.createDiv({ cls: "mds-measure" });
 		const style = sample.ownerDocument.defaultView?.getComputedStyle(sample);
 		this.measureEl.setCssProps({
-			"--mg-measure-font": style ? `${style.fontSize} ${style.fontFamily}` : "inherit",
+			"--mds-measure-font": style ? `${style.fontSize} ${style.fontFamily}` : "inherit",
 		});
 		this.measureEl.setText(text);
 		return this.measureEl.offsetWidth;
@@ -990,7 +1010,7 @@ export class GridHost {
 			el.append(cached.cloneNode(true));
 			return;
 		}
-		const holder = this.hostEl.createDiv({ cls: "mg-render-scratch" });
+		const holder = this.hostEl.createDiv({ cls: "mds-render-scratch" });
 		// The component is the view, so rendered children are unloaded with the tab and not
 		// with the plugin (`no-plugin-as-component`, §15.2).
 		await MarkdownRenderer.render(this.ctx.app, raw, holder, this.ctx.sourcePath, this.ctx.component);
@@ -1040,14 +1060,14 @@ export class GridHost {
 		this.pendingCalc = { label, text };
 		this.hintEl.empty();
 		this.hintEl.createSpan({ text: `Click a cell to insert ${label} = ${text}` });
-		this.hintEl.createSpan({ cls: "mg-hint-hint", text: "Esc to cancel" });
-		this.hintEl.removeClass("mg-hidden");
+		this.hintEl.createSpan({ cls: "mds-hint-hint", text: "Esc to cancel" });
+		this.hintEl.removeClass("mds-hidden");
 		this.hostEl.addClass("is-placing");
 	}
 
 	cancelCalcPlacement(): void {
 		this.pendingCalc = null;
-		this.hintEl.addClass("mg-hidden");
+		this.hintEl.addClass("mds-hidden");
 		this.hostEl.removeClass("is-placing");
 	}
 
@@ -1175,21 +1195,24 @@ export class GridHost {
 	private hit(evt: MouseEvent): { kind: "cell" | "colhead" | "rowhead" | "corner" | "none"; row: number; col: number; el: HTMLElement | null } {
 		const target = asElement(evt.target);
 		if (target === null) return { kind: "none", row: -1, col: -1, el: null };
-		const el = target.closest(".mg-cell, .mg-colhead, .mg-rowhead, .mg-corner, .mg-fill-handle");
+		const el = target.closest(".mds-cell, .mds-colhead, .mds-rowhead, .mds-corner, .mds-fill-handle");
 		if (el === null || !el.instanceOf(HTMLElement)) return { kind: "none", row: -1, col: -1, el: null };
 		const row = Number.parseInt(el.dataset.row ?? "-1", 10);
 		const col = Number.parseInt(el.dataset.col ?? "-1", 10);
-		if (el.hasClass("mg-fill-handle")) return { kind: "none", row: -1, col: -1, el };
-		if (el.hasClass("mg-cell")) return { kind: "cell", row, col, el };
-		if (el.hasClass("mg-colhead")) return { kind: "colhead", row: -1, col, el };
-		if (el.hasClass("mg-rowhead")) return { kind: "rowhead", row, col: -1, el };
+		if (el.hasClass("mds-fill-handle")) return { kind: "none", row: -1, col: -1, el };
+		if (el.hasClass("mds-cell")) return { kind: "cell", row, col, el };
+		if (el.hasClass("mds-colhead")) return { kind: "colhead", row: -1, col, el };
+		if (el.hasClass("mds-rowhead")) return { kind: "rowhead", row, col: -1, el };
 		return { kind: "corner", row: -1, col: -1, el };
 	}
 
 	private onMouseDown(evt: MouseEvent): void {
 		if (evt.button !== 0) return;
 		const target = asElement(evt.target);
-		if (target !== null && target.hasClass("mg-fill-handle")) {
+		// A click inside the open editor belongs to the editor: it places the caret or starts a
+		// text selection. Committing here would make it impossible to click into a word.
+		if (this.editing !== null && target !== null && target.hasClass("mds-editor")) return;
+		if (target !== null && target.hasClass("mds-fill-handle")) {
 			evt.preventDefault();
 			this.fillDrag = { source: this.selection.rect, last: this.selection.rect };
 			return;
@@ -1314,6 +1337,9 @@ export class GridHost {
 	}
 
 	private onDoubleClick(evt: MouseEvent): void {
+		const target = asElement(evt.target);
+		// Double-click inside the editor selects a word, which is the input's job, not ours.
+		if (this.editing !== null && target !== null && target.hasClass("mds-editor")) return;
 		const hit = this.hit(evt);
 		if (hit.kind === "colhead" && hit.el) {
 			const edge = this.colResizeEdge(evt, hit.el, hit.col);

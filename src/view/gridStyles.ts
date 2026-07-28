@@ -40,7 +40,7 @@ let hostCounter = 0;
 
 export class GridStyles {
 	/** Unique per host so two open grids never restyle each other. */
-	readonly hostClass = `mg-host-${++hostCounter}`;
+	readonly hostClass = `mds-host-${++hostCounter}`;
 	private sheet: CSSStyleSheet | null = null;
 	private doc: Document | null = null;
 	private mode: GeometryMode = "inline";
@@ -58,7 +58,7 @@ export class GridStyles {
 			const win = doc.defaultView;
 			if (!win || typeof win.CSSStyleSheet !== "function") throw new Error("no CSSStyleSheet");
 			const sheet = new win.CSSStyleSheet();
-			sheet.replaceSync(`.${this.hostClass}{--mg-probe:1}`);
+			sheet.replaceSync(`.${this.hostClass}{--mds-probe:1}`);
 			doc.adoptedStyleSheets = [...doc.adoptedStyleSheets, sheet];
 			this.sheet = sheet;
 			this.mode = "stylesheet";
@@ -88,14 +88,14 @@ export class GridStyles {
 	 */
 	applyColumnWidths(host: HTMLElement, spec: GeometrySpec): void {
 		const props: Record<string, string> = {
-			"--mg-col-default": `${spec.colDefault}px`,
-			"--mg-row-default": `${spec.rowDefault}px`,
-			"--mg-head-h": `${spec.headHeight}px`,
-			"--mg-rowhead-w": `${spec.rowHeadWidth}px`,
+			"--mds-col-default": `${spec.colDefault}px`,
+			"--mds-row-default": `${spec.rowDefault}px`,
+			"--mds-head-h": `${spec.headHeight}px`,
+			"--mds-rowhead-w": `${spec.rowHeadWidth}px`,
 		};
 		for (let c = 0; c < spec.colCount; c++) {
 			const w = spec.colWidths[c];
-			props[`--mg-col-${c}`] = `${w !== undefined && w > 0 ? w : spec.colDefault}px`;
+			props[`--mds-col-${c}`] = `${w !== undefined && w > 0 ? w : spec.colDefault}px`;
 		}
 		host.setCssProps(props);
 	}
@@ -131,18 +131,18 @@ export class GridStyles {
 			const row = Number.parseInt(key, 10);
 			if (!Number.isFinite(row) || row < 0 || row >= spec.rowCount) continue;
 			if (!(value > 0)) continue;
-			rules.push(`${h} .mg-r${row}{height:${value}px}`);
+			rules.push(`${h} .mds-r${row}{height:${value}px}`);
 		}
 
 		// Frozen rows stack below the column-letter header, each offset by the ones above it.
 		for (let r = 0; r < Math.min(spec.frozenRows, spec.rowCount); r++) {
-			rules.push(`${h} .mg-row.is-frozen-row[data-row="${r}"]{top:${spec.headHeight + this.rowOffset(spec, r)}px}`);
+			rules.push(`${h} .mds-row.is-frozen-row[data-row="${r}"]{top:${spec.headHeight + this.rowOffset(spec, r)}px}`);
 		}
 
 		for (let c = 0; c < Math.min(spec.frozenCols, spec.colCount); c++) {
 			const left = spec.rowHeadWidth + this.colOffset(spec, c);
-			rules.push(`${h} .mg-cell.is-frozen-col[data-col="${c}"]{left:${left}px}`);
-			rules.push(`${h} .mg-colhead.is-frozen-col[data-col="${c}"]{left:${left}px}`);
+			rules.push(`${h} .mds-cell.is-frozen-col[data-col="${c}"]{left:${left}px}`);
+			rules.push(`${h} .mds-colhead.is-frozen-col[data-col="${c}"]{left:${left}px}`);
 		}
 
 		return rules.join("\n");

@@ -1,4 +1,4 @@
-# Markdown Grid
+# Markdown Spreadsheets
 
 Edit Markdown tables in a spreadsheet-style grid in a dedicated tab.
 
@@ -8,8 +8,12 @@ valid GitHub-Flavored Markdown table.
 
 ## What it does
 
-- **Opens a table in its own tab** — from the command palette, the editor context menu, or the
-  file menu. A ribbon of tabs, an infinite grid, keyboard navigation, resizable cells.
+- **Opens a table in its own tab** — from the ribbon icon in the left sidebar, the button that
+  appears on a table while the pointer is over it, the command palette, the editor context menu,
+  or the file menu. A toolbar of tabs, an infinite grid, keyboard navigation, resizable cells.
+- **Shows the cells the way the note does.** Markdown in a cell is rendered by default; links and
+  emphasis read as they do in the note, and editing a cell always shows the raw Markdown. `Raw` is
+  one button away when the source matters more.
 - **Writes back as valid GFM.** The pipes are realigned to the widest cell, alignment markers come
   from the column alignment, and there is never any trailing whitespace.
 - **Finds the same table again** after you have edited the note above it, without marking up your
@@ -41,7 +45,8 @@ without the remembered sizes.
 ## Getting started
 
 1. Put the cursor in a Markdown table.
-2. Run **Open table in grid** from the command palette, or right-click and pick it from the menu.
+2. Click the table's **Edit** button, the spreadsheet icon in the left sidebar, or run
+   **Open table as a spreadsheet** from the command palette or the right-click menu.
 3. Edit. In automatic save mode the note is updated shortly after you stop typing.
 
 ### Keys inside the grid
@@ -77,8 +82,14 @@ several columns or rows first to size them all alike. `Table ▸ Column width` t
 - **A sparse table gets a warning.** A value in `Z400` forces every cell above and to the left of
   it to be written, because GFM tables are always rectangular. You will be told how many empty
   cells that adds, and offered `Shrink to actual data`.
-- **The last ten versions are kept.** `Restore previous version` brings back an earlier state of
-  the table into the grid; nothing reaches the note until the next save.
+- **The last ten versions are kept.** `Table ▸ Restore a version` lists them; picking one shows a
+  line diff against what the grid holds now, and restoring only replaces the grid — nothing
+  reaches the note until the next save.
+- **A dotted date stays a date.** `07.07.2026` is not a number, so it exports to Excel as text
+  rather than losing its separators.
+- **`&nbsp;` in a cell comes from the note, not from here.** Tables pasted from a web page or from
+  Word often carry that HTML entity, and the plugin never adds or removes one. Rendered mode shows
+  it as the space it is; `Data ▸ Find and replace` clears it out if you would rather it were gone.
 - **Filtering is display-only.** Hidden rows are still written back.
 - **Desktop only** in this version.
 - **Aimed at tables up to roughly 500 rows.** There is no virtualization; the grid stops growing
@@ -93,6 +104,9 @@ several columns or rows first to size them all alike. `Table ▸ Column width` t
 - **CSV delimiter and byte order mark** — a semicolon and a BOM by default, which is what Excel
   needs in locales that use the comma as a decimal mark.
 - **Number locale and decimal separator** — how `1 234,56` is read and how results are written.
+- **Cell display** — rendered by default. Raw is faster on a very wide table.
+- **Show a button on tables in the note** — on by default; turn it off if you would rather reach
+  the editor from the sidebar or the context menu only.
 
 ## No network, no telemetry
 

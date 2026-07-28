@@ -112,3 +112,66 @@ blocking CI step at zero errors *and* zero warnings, and the naming, manifest an
    are the spec's, the decisive margin is 30, and everything below it asks the user. The failure
    mode is therefore "asks too often", not "opens the wrong table" — `tests/anchor.test.ts`
    pins that direction.
+
+## 7. Renamed to Markdown Spreadsheets
+
+**Design:** §15.3 fixes the naming rules, not the name; the plugin shipped 0.1.0 as
+`markdown-grid` / "Markdown Grid".
+
+**Built:** `markdown-spreadsheets` / "Markdown Spreadsheets", matching the repository.
+
+What the rename touches, and the cost of each:
+
+- **`manifest.json` `id`.** Obsidian keys the plugin folder and `loadData()`/`saveData()` off it,
+  so an existing 0.1.0 install becomes a second, separate plugin and its sidecar — column widths,
+  row heights, freeze state, the ten backups per table — is not carried over. Nothing in the notes
+  is affected, because none of that ever lived there (§8.4). Uninstall the old one.
+- **`VIEW_TYPE`,** now `markdown-spreadsheet-view`. A saved workspace that had a grid tab open
+  reopens it as an empty pane once; closing and reopening the table fixes it for good.
+- **The CSS prefix,** `mg-` → `mds-`, including the generated per-column rules. A user snippet
+  written against the old class names needs the same substitution.
+
+## 8. Rendered cells by default
+
+**Design:** §5 makes raw the default and calls rendered mode the perf risk.
+
+**Built:** `defaultRenderMode: "rendered"`.
+
+The risk §5 names is real but bounded by what is already implemented: only cells that intersect
+the viewport are rendered, and identical content is rendered once and cloned by content hash. What
+§5 did not weigh is the cost of the other default — a column of wikilinks or footnotes is close to
+unreadable as raw text, which is most of the value of a grid view gone. `Home ▸ Raw` toggles per
+tab and the setting flips the default back; editing a cell always shows the raw Markdown, so the
+D2 hazard (a WYSIWYG round trip) never arises.
+
+## 9. The ribbon is not laid out like Excel's
+
+**Design:** §11 describes Excel's ribbon — groups with the label under the buttons, every action a
+labelled button.
+
+**Built:** the same four tabs and the same grouping, presented as a segmented tab control with the
+group name above its actions, related actions folded into segmented icon clusters (alignment,
+emphasis, insert/delete, freeze), and the whole panel collapsible from the tab strip.
+
+The tab and group structure of §11 is what makes the surface learnable; the button-per-action
+rendering of it is what made four tabs of dense text unreadable. Icon clusters keep every action
+one click away with its name in the tooltip and its `aria-label`, which is also what the
+accessibility side of review asks for. `ribbonCollapsed` is a setting so the choice survives a
+restart.
+
+## 10. Grouping separators are validated, so dates are not numbers
+
+`parseNumber` used to strip a repeated separator as grouping without checking the digit runs, so
+`07.07.2026` parsed as 7 072 026 and Excel export wrote `07072026`. A separator is now only
+dropped when the runs it separates are real thousands groups (1–3 digits, then exactly 3), which
+keeps dotted dates, `1.2.3` and `10.000.5` on the text path. Dates are exported as text rather
+than as Excel serial numbers on purpose: `07.07.2026` and `07/07/2026` cannot be told apart
+without guessing a locale, and guessing wrong silently rewrites the day and the month.
+
+## 11. The in-note button decorates the rendered DOM only
+
+`Table ▸ Edit` on a note's table is a Markdown post processor: it wraps the rendered `<table>` and
+adds a hover button. The note's text is never touched, which keeps it inside the §7 rule that the
+note is only marked up on explicit opt-in — a block ID still needs confirmation. The source line
+comes from `getSectionInfo`, so the button opens the table it sits on instead of an index guess; a
+table inside a callout or an embed has no section info and falls back to the picker.

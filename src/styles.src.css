@@ -1,11 +1,11 @@
 /*
- * Markdown Grid styles.
+ * Markdown Spreadsheets styles.
  *
  * Every colour and radius comes from an Obsidian CSS variable. Hardcoded colours look wrong in
  * half the themes and review flags them (§11).
  */
 
-.markdown-grid-view {
+.markdown-spreadsheet-view {
 	display: flex;
 	flex-direction: column;
 	height: 100%;
@@ -13,92 +13,142 @@
 	overflow: hidden;
 }
 
-.mg-hidden {
+.mds-hidden {
 	display: none !important;
 }
 
 /* ------------------------------------------------------------------ ribbon */
 
-.mg-ribbon {
+.mds-ribbon {
 	flex: 0 0 auto;
 	border-bottom: 1px solid var(--background-modifier-border);
 	background-color: var(--background-secondary);
 }
 
-.mg-ribbon-tabs {
+.mds-ribbon-bar {
 	display: flex;
-	gap: 2px;
-	padding: 4px 8px 0;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 8px;
 }
 
-.mg-ribbon-tab {
+/* Segmented control rather than folder tabs: it reads as one object and survives every theme. */
+.mds-ribbon-tabs {
+	display: flex;
+	gap: 2px;
+	padding: 2px;
+	border-radius: var(--radius-m);
+	background-color: var(--background-modifier-form-field);
+}
+
+.mds-ribbon-tab {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
 	padding: 4px 12px;
-	border: 1px solid transparent;
-	border-bottom: none;
-	border-radius: var(--radius-s) var(--radius-s) 0 0;
+	border: none;
+	border-radius: calc(var(--radius-m) - 2px);
 	background: transparent;
 	box-shadow: none;
 	color: var(--text-muted);
 	font-size: var(--font-ui-small);
+	line-height: 1.2;
 	cursor: pointer;
 }
 
-.mg-ribbon-tab:hover {
+.mds-ribbon-tab:hover {
 	color: var(--text-normal);
 	background-color: var(--background-modifier-hover);
 }
 
-.mg-ribbon-tab.is-active {
+.mds-ribbon-tab.is-active {
 	color: var(--text-normal);
 	background-color: var(--background-primary);
-	border-color: var(--background-modifier-border);
+	box-shadow: var(--shadow-s);
 	font-weight: var(--font-semibold);
 }
 
-.mg-ribbon-panel {
-	display: flex;
-	align-items: stretch;
-	gap: 4px;
-	padding: 6px 8px;
-	overflow-x: auto;
-	background-color: var(--background-primary);
-	border-top: 1px solid var(--background-modifier-border);
+.mds-ribbon-tab-icon .svg-icon {
+	width: 14px;
+	height: 14px;
 }
 
-.mg-ribbon-group {
+.mds-ribbon-collapse {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	margin-left: auto;
+	padding: 0;
+	border: none;
+	border-radius: var(--radius-s);
+	background: transparent;
+	box-shadow: none;
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+.mds-ribbon-collapse:hover {
+	background-color: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.mds-ribbon-collapse .svg-icon {
+	width: 14px;
+	height: 14px;
+}
+
+.mds-ribbon-panel {
+	display: flex;
+	align-items: flex-start;
+	gap: 2px;
+	padding: 2px 8px 8px;
+	overflow-x: auto;
+}
+
+.mds-ribbon-group {
 	display: flex;
 	flex-direction: column;
-	gap: 2px;
-	padding: 0 8px;
+	gap: 4px;
+	padding: 0 10px;
 	border-right: 1px solid var(--background-modifier-border);
 }
 
-.mg-ribbon-group:last-child {
+.mds-ribbon-group:first-child {
+	padding-left: 0;
+}
+
+.mds-ribbon-group:last-child {
 	border-right: none;
 }
 
-.mg-ribbon-items {
+/* The group name above its actions, quiet enough to scan past when you know where things are. */
+.mds-ribbon-group-label {
+	font-size: var(--font-ui-smaller);
+	line-height: 1.2;
+	color: var(--text-faint);
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+}
+
+.mds-ribbon-items {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
-	gap: 2px;
-	min-height: 28px;
+	gap: 6px;
+	min-height: 26px;
 }
 
-.mg-ribbon-group-label {
-	font-size: var(--font-ui-smaller);
-	color: var(--text-faint);
-	text-align: center;
-}
-
-.mg-ribbon-btn {
+.mds-ribbon-btn {
 	display: inline-flex;
 	align-items: center;
-	gap: 4px;
-	padding: 3px 8px;
-	border: 1px solid transparent;
+	gap: 5px;
+	height: 26px;
+	padding: 0 8px;
+	border: none;
 	border-radius: var(--radius-s);
-	background: transparent;
+	background-color: var(--background-modifier-form-field);
 	box-shadow: none;
 	color: var(--text-normal);
 	font-size: var(--font-ui-smaller);
@@ -106,57 +156,86 @@
 	cursor: pointer;
 }
 
-.mg-ribbon-btn:hover:not(.is-disabled) {
-	background-color: var(--background-modifier-hover);
-	border-color: var(--background-modifier-border);
+.mds-ribbon-btn.is-icon-only {
+	width: 28px;
+	padding: 0;
+	justify-content: center;
 }
 
-.mg-ribbon-btn.is-active {
-	background-color: var(--background-modifier-active-hover);
-	border-color: var(--interactive-accent);
+.mds-ribbon-btn:hover:not(.is-disabled) {
+	background-color: var(--background-modifier-hover);
 	color: var(--text-normal);
 }
 
+.mds-ribbon-btn.is-active {
+	background-color: var(--background-modifier-active-hover);
+	color: var(--text-accent);
+	box-shadow: inset 0 0 0 1px var(--interactive-accent);
+}
+
 /* D5: an unsupported action is visibly dead, never a silent no-op. */
-.mg-ribbon-btn.is-disabled {
+.mds-ribbon-btn.is-disabled {
 	opacity: 0.4;
 	cursor: not-allowed;
 }
 
-.mg-ribbon-btn-icon {
+.mds-ribbon-btn-icon {
 	display: inline-flex;
 	align-items: center;
+	color: var(--text-muted);
 }
 
-.mg-ribbon-btn-icon .svg-icon {
-	width: 14px;
-	height: 14px;
+.mds-ribbon-btn:hover:not(.is-disabled) .mds-ribbon-btn-icon,
+.mds-ribbon-btn.is-active .mds-ribbon-btn-icon,
+.mds-ribbon-btn.mod-cta .mds-ribbon-btn-icon {
+	color: inherit;
 }
 
-.mg-ribbon-sep {
+.mds-ribbon-btn-icon .svg-icon {
+	width: 15px;
+	height: 15px;
+}
+
+/* One segmented run of icons: alignment, emphasis, insert/delete. */
+.mds-ribbon-cluster {
+	display: inline-flex;
+	align-items: center;
+	gap: 1px;
+	padding: 1px;
+	border-radius: var(--radius-s);
+	background-color: var(--background-modifier-form-field);
+}
+
+.mds-ribbon-cluster .mds-ribbon-btn {
+	background-color: transparent;
+	border-radius: calc(var(--radius-s) - 1px);
+}
+
+.mds-ribbon-sep {
 	width: 1px;
 	align-self: stretch;
-	margin: 2px 4px;
+	margin: 2px 2px;
 	background-color: var(--background-modifier-border);
 }
 
-.mg-ribbon-number {
+.mds-ribbon-number {
 	display: inline-flex;
 	align-items: center;
-	gap: 4px;
+	gap: 5px;
 	font-size: var(--font-ui-smaller);
 	color: var(--text-muted);
 }
 
-.mg-ribbon-number-input {
-	width: 64px;
-	padding: 2px 4px;
+.mds-ribbon-number-input {
+	width: 60px;
+	height: 26px;
+	padding: 0 6px;
 	font-size: var(--font-ui-smaller);
 }
 
 /* ------------------------------------------------------------ formula bar */
 
-.mg-formulabar {
+.mds-formulabar {
 	display: flex;
 	align-items: center;
 	gap: 6px;
@@ -166,7 +245,7 @@
 	background-color: var(--background-primary);
 }
 
-.mg-formula-address {
+.mds-formula-address {
 	flex: 0 0 auto;
 	min-width: 68px;
 	padding: 2px 6px;
@@ -179,7 +258,7 @@
 	color: var(--text-muted);
 }
 
-.mg-formula-input {
+.mds-formula-input {
 	flex: 1 1 auto;
 	min-width: 0;
 	font-family: var(--font-monospace);
@@ -188,7 +267,7 @@
 
 /* ---------------------------------------------------------------- banner */
 
-.mg-banner {
+.mds-banner {
 	display: flex;
 	align-items: center;
 	gap: 8px;
@@ -199,47 +278,47 @@
 	font-size: var(--font-ui-small);
 }
 
-.mg-banner-icon {
+.mds-banner-icon {
 	display: inline-flex;
 	color: var(--text-error);
 }
 
-.mg-banner-text {
+.mds-banner-text {
 	flex: 1 1 auto;
 }
 
-.mg-banner-actions {
+.mds-banner-actions {
 	display: flex;
 	gap: 6px;
 }
 
 /* ------------------------------------------------------------------- grid */
 
-.mg-body {
+.mds-body {
 	flex: 1 1 auto;
 	min-height: 0;
 	display: flex;
 }
 
-.mg-host {
+.mds-host {
 	position: relative;
 	flex: 1 1 auto;
 	min-width: 0;
 	display: flex;
 	flex-direction: column;
 
-	--mg-col-default: 120px;
-	--mg-row-default: 24px;
-	--mg-head-h: 26px;
-	--mg-rowhead-w: 52px;
+	--mds-col-default: 120px;
+	--mds-row-default: 24px;
+	--mds-head-h: 26px;
+	--mds-rowhead-w: 52px;
 }
 
-.mg-host.is-resizing {
+.mds-host.is-resizing {
 	cursor: col-resize;
 	user-select: none;
 }
 
-.mg-scroll {
+.mds-scroll {
 	flex: 1 1 auto;
 	min-height: 0;
 	overflow: auto;
@@ -247,40 +326,40 @@
 	background-color: var(--background-primary);
 }
 
-.mg-canvas {
+.mds-canvas {
 	position: relative;
 	width: max-content;
 	min-width: 100%;
 	font-size: var(--font-ui-small);
 }
 
-.mg-row {
+.mds-row {
 	display: flex;
-	height: var(--mg-row-default);
+	height: var(--mds-row-default);
 	box-sizing: border-box;
 }
 
-.mg-row.is-filtered {
+.mds-row.is-filtered {
 	display: none;
 }
 
 /* Freeze via sticky positioning; the offsets are written by GridStyles (§8.5). */
-.mg-row.mg-head-row {
+.mds-row.mds-head-row {
 	position: sticky;
 	top: 0;
 	z-index: 4;
-	height: var(--mg-head-h);
+	height: var(--mds-head-h);
 }
 
-.mg-row.is-frozen-row {
+.mds-row.is-frozen-row {
 	position: sticky;
 	z-index: 3;
 	background-color: var(--background-primary);
 }
 
-.mg-corner,
-.mg-colhead,
-.mg-rowhead {
+.mds-corner,
+.mds-colhead,
+.mds-rowhead {
 	box-sizing: border-box;
 	display: flex;
 	align-items: center;
@@ -294,53 +373,53 @@
 	user-select: none;
 }
 
-.mg-corner,
-.mg-rowhead {
+.mds-corner,
+.mds-rowhead {
 	position: sticky;
 	left: 0;
 	z-index: 2;
-	width: var(--mg-rowhead-w);
-	min-width: var(--mg-rowhead-w);
+	width: var(--mds-rowhead-w);
+	min-width: var(--mds-rowhead-w);
 }
 
-.mg-corner {
+.mds-corner {
 	z-index: 5;
 }
 
-.mg-colhead {
+.mds-colhead {
 	cursor: pointer;
 }
 
-.mg-colhead:hover,
-.mg-rowhead:hover {
+.mds-colhead:hover,
+.mds-rowhead:hover {
 	background-color: var(--background-modifier-hover);
 }
 
-.mg-colhead.is-selected,
-.mg-rowhead.is-selected {
+.mds-colhead.is-selected,
+.mds-rowhead.is-selected {
 	background-color: var(--background-modifier-active-hover);
 	color: var(--text-normal);
 	font-weight: var(--font-semibold);
 }
 
-.mg-colhead.is-frozen-col {
+.mds-colhead.is-frozen-col {
 	position: sticky;
 	z-index: 3;
 }
 
-.mg-head-row.is-col-resize .mg-colhead {
+.mds-head-row.is-col-resize .mds-colhead {
 	cursor: col-resize;
 }
 
-.mg-rowhead.is-row-resize {
+.mds-rowhead.is-row-resize {
 	cursor: row-resize;
 }
 
-.mg-cell {
+.mds-cell {
 	box-sizing: border-box;
 	flex: 0 0 auto;
-	width: var(--mg-col-default);
-	min-width: var(--mg-col-default);
+	width: var(--mds-col-default);
+	min-width: var(--mds-col-default);
 	padding: 2px 6px;
 	border-right: 1px solid var(--background-modifier-border);
 	border-bottom: 1px solid var(--background-modifier-border);
@@ -351,77 +430,81 @@
 	color: var(--text-normal);
 }
 
-.mg-cell.is-frozen-col {
+.mds-cell.is-frozen-col {
 	position: sticky;
 	z-index: 1;
 	background-color: var(--background-primary);
 }
 
 /* §8.3: wrapping is purely visual — the cell stays one line of Markdown. */
-.mg-cell.is-wrap {
+.mds-cell.is-wrap {
 	white-space: normal;
 	overflow-wrap: anywhere;
 	text-overflow: clip;
 }
 
-.mg-cell.is-align-center {
+.mds-cell.is-align-left {
+	text-align: left;
+}
+
+.mds-cell.is-align-center {
 	text-align: center;
 }
 
-.mg-cell.is-align-right {
+.mds-cell.is-align-right {
 	text-align: right;
 }
 
 /* Row 1 is the GFM header row and cannot be deleted, so it must not look like data (§9). */
-.mg-row.is-header-row .mg-cell {
+.mds-row.is-header-row .mds-cell {
 	background-color: var(--background-secondary-alt);
 	font-weight: var(--font-semibold);
 }
 
-.mg-row.is-header-row .mg-rowhead {
+.mds-row.is-header-row .mds-rowhead {
 	color: var(--text-normal);
 	font-weight: var(--font-semibold);
 }
 
 /* Anything outside the used range is not written to the note; say so visually (§9). */
-.mg-cell.is-outside {
+.mds-cell.is-outside {
 	background-color: transparent;
 	color: var(--text-faint);
 }
 
-.mg-cell.is-selected {
+.mds-cell.is-selected {
 	background-color: var(--text-selection);
 }
 
-.mg-cell.is-active {
+.mds-cell.is-active {
 	box-shadow: inset 0 0 0 2px var(--interactive-accent);
 	background-color: var(--background-primary);
 }
 
-.mg-cell.is-fill-preview {
+.mds-cell.is-fill-preview {
 	box-shadow: inset 0 0 0 1px var(--interactive-accent);
 }
 
-.mg-cell.is-editing {
+.mds-cell.is-editing {
 	padding: 0;
 	overflow: visible;
 	box-shadow: inset 0 0 0 2px var(--interactive-accent);
 }
 
-.mg-cell.is-rendered {
+.mds-cell.is-rendered {
 	white-space: nowrap;
 }
 
-.mg-cell.is-rendered.is-wrap {
+.mds-cell.is-rendered.is-wrap {
 	white-space: normal;
 }
 
-.mg-cell.is-rendered p {
+.mds-cell.is-rendered p {
 	margin: 0;
 	display: inline;
 }
 
-.mg-editor {
+.mds-editor {
 	width: 100%;
 	height: 100%;
 	padding: 2px 6px;
@@ -434,15 +517,15 @@
 	color: var(--text-normal);
 }
 
-.mg-editor:focus {
+.mds-editor:focus {
 	box-shadow: none;
 	outline: none;
 }
 
-.mg-fill-handle {
+.mds-fill-handle {
 	position: absolute;
-	left: var(--mg-fill-x, 0);
-	top: var(--mg-fill-y, 0);
+	left: var(--mds-fill-x, 0);
+	top: var(--mds-fill-y, 0);
 	width: 8px;
 	height: 8px;
 	margin: -4px 0 0 -4px;
@@ -452,22 +535,22 @@
 	cursor: crosshair;
 }
 
-.mg-host.is-placing .mg-scroll {
+.mds-host.is-placing .mds-scroll {
 	cursor: cell;
 }
 
 /* Off-screen probe used to autofit a column to its widest cell (§8.1). */
-.mg-measure {
+.mds-measure {
 	position: absolute;
 	visibility: hidden;
 	pointer-events: none;
 	top: -9999px;
 	left: -9999px;
 	white-space: pre;
-	font: var(--mg-measure-font, inherit);
+	font: var(--mds-measure-font, inherit);
 }
 
-.mg-render-scratch {
+.mds-render-scratch {
 	position: absolute;
 	visibility: hidden;
 	pointer-events: none;
@@ -477,7 +560,7 @@
 
 /* ------------------------------------------------------------------- hint */
 
-.mg-hint {
+.mds-hint {
 	display: flex;
 	align-items: center;
 	gap: 8px;
@@ -487,13 +570,13 @@
 	font-size: var(--font-ui-smaller);
 }
 
-.mg-hint-hint {
+.mds-hint-hint {
 	color: var(--text-muted);
 }
 
 /* -------------------------------------------------------------- statusbar */
 
-.mg-statusbar {
+.mds-statusbar {
 	display: flex;
 	align-items: center;
 	gap: 12px;
@@ -505,48 +588,48 @@
 	color: var(--text-muted);
 }
 
-.mg-status-address {
+.mds-status-address {
 	font-family: var(--font-monospace);
 	min-width: 68px;
 }
 
-.mg-status-aggregate {
+.mds-status-aggregate {
 	font-variant-numeric: tabular-nums;
 }
 
-.mg-status-hint {
+.mds-status-hint {
 	color: var(--text-accent);
 }
 
-.mg-status-used {
+.mds-status-used {
 	margin-left: auto;
 }
 
-.mg-status-state {
+.mds-status-state {
 	display: inline-flex;
 	align-items: center;
 	gap: 4px;
 	cursor: pointer;
 }
 
-.mg-status-state.is-dirty {
+.mds-status-state.is-dirty {
 	color: var(--text-warning);
 }
 
-.mg-status-state-icon .svg-icon {
+.mds-status-state-icon .svg-icon {
 	width: 12px;
 	height: 12px;
 }
 
 /* ----------------------------------------------------------------- modals */
 
-.mg-modal-note {
+.mds-modal-note {
 	color: var(--text-muted);
 	font-size: var(--font-ui-small);
 }
 
-.mg-table-picker,
-.mg-restore-list {
+.mds-table-picker,
+.mds-restore-list {
 	display: flex;
 	flex-direction: column;
 	gap: 6px;
@@ -555,8 +638,8 @@
 	margin-bottom: 12px;
 }
 
-.mg-table-picker-item,
-.mg-restore-item {
+.mds-table-picker-item,
+.mds-restore-item {
 	display: block;
 	width: 100%;
 	padding: 8px 10px;
@@ -568,31 +651,169 @@
 	cursor: pointer;
 }
 
-.mg-table-picker-item:hover,
-.mg-restore-item:hover {
+.mds-table-picker-item:hover,
+.mds-restore-item:hover {
 	background-color: var(--background-modifier-hover);
 }
 
-.mg-table-picker-head {
+.mds-table-picker-head {
 	font-family: var(--font-monospace);
 	color: var(--text-normal);
 }
 
-.mg-table-picker-meta,
-.mg-restore-when {
+.mds-table-picker-meta,
+.mds-restore-when {
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
 }
 
-.mg-restore-preview {
-	margin: 4px 0 0;
-	max-height: 64px;
-	overflow: hidden;
+/* -------------------------------------------------- restore a version */
+
+.mds-restore-modal {
+	width: min(880px, 90vw);
+}
+
+.mds-restore-layout {
+	display: flex;
+	gap: 12px;
+	margin: 10px 0 12px;
+}
+
+.mds-restore-list {
+	flex: 0 0 220px;
+	max-height: 360px;
+}
+
+.mds-restore-item.is-selected {
+	background-color: var(--background-modifier-active-hover);
+	border-color: var(--interactive-accent);
+}
+
+.mds-restore-when {
+	color: var(--text-normal);
+	font-weight: var(--font-semibold);
+}
+
+.mds-restore-stamp,
+.mds-restore-shape {
+	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
+}
+
+.mds-restore-preview-pane {
+	flex: 1 1 auto;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.mds-restore-placeholder {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex: 1 1 auto;
+	min-height: 160px;
+	border: 1px dashed var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	color: var(--text-faint);
+	font-size: var(--font-ui-small);
+}
+
+.mds-restore-diff-head {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.mds-restore-diff-summary {
+	font-weight: var(--font-semibold);
+}
+
+.mds-restore-diff {
+	flex: 1 1 auto;
+	max-height: 340px;
+	overflow: auto;
+	padding: 4px 0;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	background-color: var(--background-primary-alt);
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+}
+
+.mds-diff-line {
+	display: flex;
+	gap: 6px;
+	padding: 0 6px;
 	white-space: pre;
 }
 
-.mg-calc-preview {
+.mds-diff-line.is-add {
+	background-color: var(--background-modifier-success);
+}
+
+.mds-diff-line.is-remove {
+	background-color: var(--background-modifier-error);
+}
+
+.mds-diff-gutter {
+	flex: 0 0 auto;
+	width: 10px;
+	color: var(--text-muted);
+}
+
+.mds-diff-text {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+/* ----------------------------------------------- button on a note's table */
+
+/*
+ * A hover affordance on tables in the note itself. It is positioned against a wrapper the post
+ * processor adds around the table, so nothing in the note's own markup has to change.
+ */
+.mds-table-launcher {
+	position: relative;
+}
+
+.mds-table-launcher-btn {
+	position: absolute;
+	top: 4px;
+	right: 4px;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 2px 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	background-color: var(--background-secondary);
+	box-shadow: var(--shadow-s);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	opacity: 0;
+	transition: opacity 100ms ease-in-out;
+	cursor: pointer;
+}
+
+.mds-table-launcher:hover .mds-table-launcher-btn,
+.mds-table-launcher-btn:focus-visible {
+	opacity: 1;
+}
+
+.mds-table-launcher-btn:hover {
+	color: var(--text-normal);
+	background-color: var(--background-modifier-hover);
+}
+
+.mds-table-launcher-btn .svg-icon {
+	width: 13px;
+	height: 13px;
+}
+
+.mds-calc-preview {
 	display: flex;
 	align-items: baseline;
 	gap: 8px;
@@ -600,32 +821,32 @@
 	font-family: var(--font-monospace);
 }
 
-.mg-calc-fn {
+.mds-calc-fn {
 	color: var(--text-muted);
 }
 
-.mg-calc-value {
+.mds-calc-value {
 	font-size: var(--font-ui-medium);
 	color: var(--text-normal);
 	font-variant-numeric: tabular-nums;
 }
 
-.mg-diff {
+.mds-diff {
 	display: flex;
 	gap: 12px;
 }
 
-.mg-diff-side {
+.mds-diff-side {
 	flex: 1 1 0;
 	min-width: 0;
 }
 
-.mg-diff-title {
+.mds-diff-title {
 	font-weight: var(--font-semibold);
 	margin-bottom: 4px;
 }
 
-.mg-diff-side pre {
+.mds-diff-side pre {
 	max-height: 320px;
 	overflow: auto;
 	font-size: var(--font-ui-smaller);

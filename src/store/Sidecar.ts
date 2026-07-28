@@ -1,6 +1,6 @@
 import type { Plugin } from "obsidian";
 import type { Anchor } from "../file/AnchorResolver";
-import { DEFAULT_SETTINGS, type MarkdownGridSettings } from "../settings";
+import { DEFAULT_SETTINGS, type MarkdownSpreadsheetsSettings } from "../settings";
 
 /**
  * Purely cosmetic per-table state (§8.4).
@@ -28,7 +28,7 @@ export interface BackupEntry {
 }
 
 export interface PluginData {
-	settings: MarkdownGridSettings;
+	settings: MarkdownSpreadsheetsSettings;
 	tables: Record<string, TableLayout>;
 	anchors: Record<string, Anchor>;
 	backups: Record<string, BackupEntry[]>;
@@ -38,7 +38,7 @@ export interface PluginData {
 
 export const MAX_BACKUPS = 10;
 
-export function defaultLayout(settings: MarkdownGridSettings): TableLayout {
+export function defaultLayout(settings: MarkdownSpreadsheetsSettings): TableLayout {
 	return {
 		colWidths: [],
 		rowHeights: {},
@@ -81,7 +81,7 @@ export class Sidecar {
 		this.data = merged;
 	}
 
-	get settings(): MarkdownGridSettings {
+	get settings(): MarkdownSpreadsheetsSettings {
 		return this.data.settings;
 	}
 
