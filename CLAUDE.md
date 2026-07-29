@@ -48,6 +48,12 @@ that are easy to trip over:
   height at 30 px with `white-space: nowrap` and centred text, so a list item built from a button
   spills its last line over the item below unless it sets `height: auto`, `min-height: 0`,
   `white-space: normal` and `text-align: left`. That is what broke the restore list.
+- **A scrolling list needs `flex: 0 0 auto` on its items**, and this is the half that only shows up
+  once the list is long. Both modal lists are flex columns with a `max-height`, so the items'
+  default `flex-shrink: 1` squeezed them *below their own content* as soon as they stopped fitting
+  — `overflow-y: auto` never scrolled, because shrinking removed the overflow first. Thirteen table
+  candidates collapsed to 19 px each and every line painted over the item below it. Verify a list
+  at the length that overflows it, not at three items.
 - **`ownerDocument` / `ownerDocument.defaultView` / `.win`, never the globals.** A popped-out
   window is a different document with its own class identities. Narrow event targets with
   `asElement` / `asNode` from `src/view/dom.ts`, not `instanceof HTMLElement`.

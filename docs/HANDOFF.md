@@ -1,6 +1,6 @@
 # Handoff
 
-State as of **28 July 2026**, on `main`, version **0.3.0**.
+State as of **29 July 2026**, on `main`, version **0.3.1**.
 
 This file goes stale. `CLAUDE.md` holds the durable rules; this one holds what is done, what is
 not, and what to look at first.
@@ -18,7 +18,7 @@ commit; there is no open pull request.
 | Lint | `eslint-plugin-obsidianmd` at 0 errors, 0 warnings |
 | Bundle | `main.js` 109 kB against the ~1 MB budget of §15.1 |
 | Runtime dependencies | none |
-| Release | [0.3.0](https://github.com/ondreu/markdown-spreadsheets/releases/tag/0.3.0), three assets, published. 0.1.0 was published under the old `markdown-grid` id |
+| Release | [0.3.1](https://github.com/ondreu/markdown-spreadsheets/releases/tag/0.3.1), three assets, published. 0.1.0 was published under the old `markdown-grid` id |
 
 `npm run check` was green at this commit, and the released assets' SHA-256 digests matched a local
 build byte for byte.
@@ -166,3 +166,23 @@ Two things, both from a screenshot of the restore dialog:
 
 Store pre-flight also produced two real changes: `authorUrl` points at the author rather than at
 the repository, and export paths built from the `exportFolder` setting go through `normalizePath`.
+
+## Round four: the same list, at length
+
+Round three fixed half of it. The screenshot that produced this round was the table picker with
+**thirteen** candidates, and every item was crushed to 19 px with both its lines painted over the
+item below — the exact symptom round three thought it had closed.
+
+The reset from round three (`height: auto`, `min-height: 0`, `white-space: normal`,
+`text-align: left`) is necessary but not sufficient. Both lists are flex columns with a
+`max-height`, so their items kept the default `flex-shrink: 1` and were squeezed *below their own
+content* the moment they stopped fitting. `overflow-y: auto` never scrolled, because shrinking had
+already removed the overflow. `flex: 0 0 auto` on `.mds-table-picker-item` and `.mds-restore-item`
+is the fix; the lists now scroll.
+
+The lesson worth keeping is in how round three missed it: it was verified at two window *widths*
+but only ever with a short list. A capped, scrolling list has to be checked at the length that
+overflows it. This one was reproduced in headless Chromium against the real `styles.css` with
+Obsidian's button defaults — 13 picker items and 10 restore items, asserting that no item's
+`scrollHeight` exceeds its box and that no item's ink crosses into the next — and re-checked at
+420 px, 640 px and 1000 px.

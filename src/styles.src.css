@@ -642,6 +642,13 @@
  * These are `<button>`s, and Obsidian's own button rule gives every button a fixed height, centred
  * text and `white-space: nowrap`. A multi-line list item has to undo all three or its last line
  * spills out of the box and over the item below it.
+ *
+ * `flex: 0 0 auto` is the other half of that, and the half that only shows up once the list is
+ * long: the item is itself a child of a flex column with a `max-height`, so the default
+ * `flex-shrink: 1` lets it be squeezed *below* its own content once the items no longer fit.
+ * `overflow-y: auto` on the list never gets a chance to scroll, because shrinking removes the
+ * overflow first. Thirteen candidates collapsed to 19px each and every line painted over the item
+ * below it.
  */
 .mds-table-picker-item,
 .mds-restore-item {
@@ -649,6 +656,7 @@
 	flex-direction: column;
 	align-items: flex-start;
 	gap: 2px;
+	flex: 0 0 auto;
 	width: 100%;
 	height: auto;
 	min-height: 0;

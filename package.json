@@ -1,6 +1,6 @@
 {
   "name": "markdown-spreadsheets",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Edit Markdown tables in a spreadsheet-style grid in a dedicated tab.",
   "license": "MIT",
   "private": true,
