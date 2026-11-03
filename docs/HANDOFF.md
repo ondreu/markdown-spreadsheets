@@ -1,6 +1,6 @@
 # Handoff
 
-State as of **3 November 2026**, on `main`, version **0.4.0**.
+State as of **3 November 2026**, on `main`, version **0.5.0**.
 
 This file goes stale. `CLAUDE.md` holds the durable rules; this one holds what is done, what is
 not, and what to look at first.
