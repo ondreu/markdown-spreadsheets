@@ -1,6 +1,7 @@
 import {
 	ItemView,
 	Notice,
+	Platform,
 	type HoverPopover,
 	Scope,
 	TFile,
@@ -11,7 +12,7 @@ import {
 import { colName } from "../model/address";
 import { density, filledCount, getRaw, recomputeUsedRange, setRaw, shrinkToData, type Align, type GridModel } from "../model/GridModel";
 import { formatCompact, formatNumber } from "../model/numbers";
-import type { StatusStat } from "../settings";
+import { resolveTouchLayout, type StatusStat } from "../settings";
 import { parseTable } from "../model/parse";
 import { serializeTable } from "../model/serialize";
 import { anchorFromRegion, anchorKey, newBlockId, resolveAnchor, type Anchor } from "../file/AnchorResolver";
@@ -61,6 +62,7 @@ import { Menu } from "obsidian";
 import { colIndex } from "../model/address";
 import { Ribbon, type RibbonAction, type RibbonItem, type RibbonTab } from "./Ribbon";
 import { StatusBar } from "./StatusBar";
+import { TouchBar, type TouchAction } from "./TouchBar";
 import {
 	CalculateModal,
 	ConfirmModal,
@@ -92,6 +94,9 @@ export class GridView extends ItemView {
 	private readonly ribbon: Ribbon;
 	private readonly statusBar = new StatusBar();
 	private readonly writer: Writer;
+	/** The touch layout (decision 24), fixed for the life of the tab. */
+	private readonly touch: boolean;
+	private readonly touchBar = new TouchBar();
 
 	private bodyEl!: HTMLElement;
 	private bannerEl!: HTMLElement;
@@ -122,10 +127,12 @@ export class GridView extends ItemView {
 	) {
 		super(leaf);
 		this.writer = new Writer(this.app.vault);
+		this.touch = resolveTouchLayout(plugin.sidecar.settings.mobileLayout, Platform.isMobile);
 		this.ribbon = new Ribbon({
 			onTabChange: () => this.refreshRibbon(),
 			collapsed: plugin.sidecar.settings.ribbonCollapsed,
 			iconsOnly: plugin.sidecar.settings.ribbonStyle === "icons",
+			touch: this.touch,
 			onCollapseChange: (collapsed) => {
 				plugin.sidecar.settings.ribbonCollapsed = collapsed;
 				plugin.sidecar.queueSave();
@@ -171,10 +178,12 @@ export class GridView extends ItemView {
 
 	override async onOpen(): Promise<void> {
 		this.contentEl.addClass("markdown-spreadsheet-view");
+		this.contentEl.toggleClass("mds-touch", this.touch);
 		this.ribbon.mount(this.contentEl);
 		this.buildFormulaBar();
 		this.bannerEl = this.contentEl.createDiv({ cls: "mds-banner mds-hidden" });
 		this.bodyEl = this.contentEl.createDiv({ cls: "mds-body" });
+		if (this.touch) this.touchBar.mount(this.contentEl);
 		this.statusBar.mount(
 			this.contentEl,
 			() => void this.save(true),
@@ -336,6 +345,7 @@ export class GridView extends ItemView {
 				component: this,
 				sourcePath: this.file?.path ?? "",
 				settings: this.plugin.sidecar.settings,
+				touch: this.touch,
 				callbacks: {
 					onDirty: () => this.markDirty(),
 					onLayoutChange: () => {
@@ -350,7 +360,13 @@ export class GridView extends ItemView {
 					onEditorInput: (value) => {
 						this.formulaTarget = null;
 						this.formulaInputEl.value = value;
+						this.refreshTouchBar();
 					},
+					onClipboard: (action) => {
+						if (action === "paste") void this.pasteFromClipboard("normal");
+						else this.copyToClipboard(action === "cut");
+					},
+					onRangeModeChange: () => this.refreshTouchBar(),
 					onFiles: (files, row, col) => void this.attachFiles(files, row, col),
 					onDropText: (text, row, col) => this.linkDroppedText(text, row, col),
 					onFiltersChange: () => {
@@ -925,6 +941,43 @@ export class GridView extends ItemView {
 
 	private refreshRibbon(): void {
 		this.ribbon.setTabs(this.buildTabs());
+		this.refreshTouchBar();
+	}
+
+	/** The touch bar: what a mouse and keyboard did without a toolbar, a thumb's reach away. */
+	private refreshTouchBar(): void {
+		if (!this.touch) return;
+		const host = this.host;
+		const editing = host?.isEditing() === true;
+		const actions: TouchAction[] = [
+			editing
+				? { id: "edit", label: "Done", icon: "done", active: true, onClick: () => host?.commitEdit(0, 0, true) }
+				: { id: "edit", label: "Edit", icon: "edit", disabled: !host, onClick: () => host?.beginEdit() },
+			{
+				id: "range",
+				label: "Range",
+				icon: "rangeSelect",
+				active: host?.isRangeMode() === true,
+				disabled: !host || editing,
+				onClick: () => host?.setRangeMode(!host.isRangeMode()),
+			},
+			{ id: "undo", label: "Undo", icon: "undo", disabled: !host?.undo.canUndo() || editing, onClick: () => host?.undoLast() },
+			{ id: "redo", label: "Redo", icon: "redo", disabled: !host?.undo.canRedo() || editing, onClick: () => host?.redoLast() },
+			{ id: "copy", label: "Copy", icon: "copy", disabled: !host || editing, onClick: () => this.copyToClipboard(false) },
+			{ id: "paste", label: "Paste", icon: "paste", disabled: !host || editing, onClick: () => void this.pasteFromClipboard("normal") },
+			{ id: "row", label: "Add row", icon: "rowBelow", disabled: !host || editing, onClick: () => host?.insertRowsAt("below") },
+			{
+				id: "more",
+				label: "More",
+				icon: "more",
+				disabled: !host || editing,
+				onClick: () => {
+					const box = this.contentEl.find(".mds-touchbar")?.getBoundingClientRect();
+					host?.openSelectionMenu({ x: box ? box.right : 0, y: box ? box.top : 0 });
+				},
+			},
+		];
+		this.touchBar.update(actions);
 	}
 
 	/** Runs a toolbar action by id — the command palette's route to everything on the ribbon. */

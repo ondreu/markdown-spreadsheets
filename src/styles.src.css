@@ -1455,3 +1455,192 @@
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
 }
+
+/* ------------------------------------------------------------ touch layout */
+
+/*
+ * Decision 24. The same view, sized for a finger: nothing below 36 px that is meant to be hit,
+ * no hover-only affordance, toolbars that scroll sideways instead of wrapping into a wall, and
+ * the action bar under the grid. `.mds-touch` is on the view, `.is-touch` on the grid host.
+ */
+.mds-touch .mds-ribbon-bar {
+	gap: 4px;
+	padding: 0 4px;
+}
+
+.mds-touch .mds-ribbon-tabs {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow-x: auto;
+	scrollbar-width: none;
+}
+
+.mds-touch .mds-ribbon-tab {
+	flex: 0 0 auto;
+	padding: 10px 12px 8px;
+}
+
+/* A phone fits five tabs only as icons; the open one keeps its name so you know where you are. */
+@media (max-width: 600px) {
+	.mds-touch .mds-ribbon-tab:not(.is-active) .mds-ribbon-tab-label {
+		display: none;
+	}
+}
+
+.mds-touch .mds-ribbon-collapse {
+	flex: 0 0 auto;
+	width: 36px;
+	height: 36px;
+}
+
+.mds-touch .mds-ribbon-panel {
+	padding: 4px;
+	scrollbar-width: none;
+}
+
+.mds-touch .mds-ribbon-group {
+	flex: 0 0 auto;
+	padding: 0 6px;
+}
+
+/* Every label still reads on the buttons; the group names cost a row a phone does not have. */
+.mds-touch .mds-ribbon-group-label {
+	display: none;
+}
+
+.mds-touch .mds-ribbon-items {
+	flex-wrap: nowrap;
+	min-height: 36px;
+}
+
+.mds-touch .mds-ribbon-btn {
+	height: 36px;
+	min-width: 36px;
+}
+
+.mds-touch .mds-ribbon-btn.is-icon-only {
+	width: 36px;
+}
+
+/* 16 px is the size under which iOS zooms the whole page into a field when it gets focus. */
+.mds-touch .mds-ribbon-number-input,
+.mds-touch .mds-formula-input {
+	height: 36px;
+	font-size: 16px;
+}
+
+.mds-touch .mds-formula-icon {
+	display: none;
+}
+
+.mds-touch .mds-table-switch {
+	max-width: 35%;
+}
+
+.mds-touch .mds-statusbar {
+	flex-wrap: wrap;
+	row-gap: 2px;
+}
+
+.mds-touchbar {
+	display: flex;
+	flex: 0 0 auto;
+	gap: 0;
+	padding: 4px 2px;
+	overflow-x: auto;
+	scrollbar-width: none;
+	border-top: 1px solid var(--background-modifier-border);
+	background-color: var(--background-secondary);
+}
+
+/* A column of icon and name: Obsidian's button rule would pin it at 30 px and clip the name. */
+.mds-touchbar-btn {
+	display: flex;
+	flex: 1 1 0;
+	min-width: 44px;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 2px;
+	height: auto;
+	min-height: 48px;
+	padding: 4px 2px;
+	border: none;
+	border-radius: var(--radius-s);
+	background-color: transparent;
+	box-shadow: none;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.1;
+	white-space: nowrap;
+	-webkit-tap-highlight-color: transparent;
+}
+
+.mds-touchbar-btn.is-active {
+	color: var(--text-accent);
+	background-color: var(--background-modifier-active-hover);
+}
+
+.mds-touchbar-btn.is-disabled {
+	opacity: 0.35;
+}
+
+.mds-touchbar-icon {
+	display: inline-flex;
+}
+
+.mds-touchbar-icon .svg-icon {
+	width: 20px;
+	height: 20px;
+}
+
+/*
+ * One finger scrolls, natively; two fingers are left to the grid, which zooms. The long press is
+ * the grid's context menu, so the system's own callout and text selection stay out of it.
+ */
+.mds-host.is-touch .mds-scroll {
+	touch-action: pan-x pan-y;
+	-webkit-tap-highlight-color: transparent;
+}
+
+.mds-host.is-touch .mds-canvas {
+	-webkit-user-select: none;
+	-webkit-touch-callout: none;
+}
+
+.mds-host.is-touch .mds-editor {
+	-webkit-user-select: text;
+	-webkit-touch-callout: default;
+	font-size: max(16px, calc(var(--font-ui-small) * var(--mds-zoom, 1)));
+}
+
+/* Dragging the fill handle cannot coexist with scrolling; Fill down and Fill right remain. */
+.mds-host.is-touch .mds-fill-handle {
+	display: none;
+}
+
+/* No hover to reveal the filter arrow: the active column always shows it, at a finger's size. */
+.mds-host.is-touch .mds-colhead.is-selected .mds-colhead-filter {
+	opacity: 1;
+}
+
+.mds-host.is-touch .mds-colhead-filter {
+	width: 22px;
+	height: 22px;
+	margin-top: -11px;
+	right: 1px;
+}
+
+/* Range mode: the selection's outline is dashed while taps extend it. */
+.mds-host.is-range-mode .mds-cell.is-active {
+	outline: 2px dashed var(--mds-accent);
+	outline-offset: -3px;
+}
+
+/* A screen without hover shows the edit buttons on a note's tables all the time. */
+@media (hover: none) {
+	.mds-lp-table-btn,
+	.mds-table-launcher-btn {
+		opacity: 1;
+	}
+}

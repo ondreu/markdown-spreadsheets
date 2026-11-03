@@ -98,7 +98,7 @@ submission is a pull request against someone else's repository.
 | `id` has no `obsidian` prefix, `name` contains neither "Obsidian" nor "plugin" | `markdown-spreadsheets` / "Markdown Spreadsheets" |
 | `description` is one sentence, under 250 characters, does not start with "This plugin" | 68 characters |
 | `authorUrl` points at the author, not at the plugin repository | `github.com/ondreu` |
-| `isDesktopOnly` justified | true — D7, a ribbon at 380 px is its own project |
+| `isDesktopOnly` justified | false since 0.5.0 — touch layout, decision 24; no Node or Electron API anywhere in `src/` |
 | `minAppVersion` is a real released version and matches the APIs used | 1.7.2, enforced by `no-unsupported-api` |
 | `versions.json` maps every released version to its `minAppVersion` | 0.1.0, 0.2.0, 0.3.0 |
 | No `innerHTML` / `outerHTML` / `insertAdjacentHTML` | none; Obsidian's DOM helpers throughout |

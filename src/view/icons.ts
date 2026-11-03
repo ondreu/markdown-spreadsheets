@@ -100,6 +100,10 @@ export const ICONS = {
 	switchTable: ["table-properties", "table", "list"],
 	pasteSpecial: ["clipboard-type", "clipboard-paste", "clipboard"],
 	date: ["calendar", "calendar-days"],
+	// The touch bar (decision 24).
+	rangeSelect: ["square-dashed-mouse-pointer", "box-select", "square-dashed", "maximize"],
+	more: ["ellipsis", "more-horizontal"],
+	done: ["check"],
 } as const satisfies Record<string, readonly string[]>;
 
 export type IconKey = keyof typeof ICONS;

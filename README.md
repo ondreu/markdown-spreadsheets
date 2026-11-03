@@ -10,15 +10,16 @@ express: no HTML, no merged cells, no colours. Close the plugin, open the note a
 table reads exactly as it did in the grid.
 
 **Contents** — [Getting started](#getting-started) · [What it does](#what-it-does) ·
-[Formulas](#formulas) · [Keys](#keys) · [Settings](#settings-worth-changing) ·
+[Formulas](#formulas) · [Phones and tablets](#phones-and-tablets) · [Keys](#keys) ·
+[Settings](#settings-worth-changing) ·
 [Limits](#what-it-deliberately-does-not-do) · [Things worth knowing](#things-worth-knowing) ·
 [Development](#development)
 
 ## Getting started
 
-1. Hover over a table in Live Preview and click the button in its top-right corner — or put the
-   cursor in a table and run **Open table as a spreadsheet** from the command palette, the
-   right-click menu or the sidebar icon.
+1. Hover over a table in Live Preview and click the button in its top-right corner (on a phone it
+   is always shown) — or put the cursor in a table and run **Open table as a spreadsheet** from the
+   command palette, the right-click menu or the sidebar icon.
 2. Edit. Type to replace a cell, F2 or a double-click to edit it, Enter to move on.
 3. That's it: in automatic save mode the note is updated a moment after you stop typing.
 
@@ -104,6 +105,33 @@ starting with `==` stays an Obsidian highlight, and `'=` writes a literal `=`.
 
 ![A totals cell selected: the formula bar shows =SUM(F2:F8), the cell shows the value with a small corner marker](docs/images/formula.png)
 
+## Phones and tablets
+
+<img align="right" width="300" alt="The grid on a phone: icon tabs, a formula bar, a range B3:C6 selected in range mode, and an action bar with Edit, Range, Undo, Redo, Copy, Paste, Add row and More" src="docs/images/mobile.png">
+
+In the Obsidian mobile app the grid switches to a **touch layout**:
+
+| Gesture | Action |
+| --- | --- |
+| Tap | Select a cell, a column letter or a row number |
+| Tap the selected cell again | Edit it — the keyboard's return key commits |
+| Long press | The context menu: edit, cut, copy, paste, insert, delete — and *Open link* on a link |
+| Swipe | Scroll |
+| Two fingers | Zoom |
+| **Range**, then tap | Extend the selection to the tapped cell, as Shift+click does |
+| Arrow in the selected column's letter | Sort and filter |
+
+The action bar under the grid holds what a mouse and keyboard did without a toolbar: edit, range
+mode, undo and redo, copy and paste, a new row, and the context menu of the selection. The toolbar
+above scrolls sideways and its controls are sized for a finger. Dragging the fill handle, resizing
+columns by their border and dragging rows to move them stay desktop gestures; *Fill down*, *Width*
+and *Move* on the toolbar do the same.
+
+`Touch layout` in the settings turns it on everywhere (a touchscreen laptop) or off on a tablet with
+a keyboard and trackpad.
+
+<br clear="right">
+
 ## Keys
 
 | Key | Action |
@@ -138,6 +166,7 @@ Obsidian's settings.
 | Table layout in the note | Aligned | Compact keeps Git diffs to the line you changed. |
 | Open the spreadsheet in | A new tab | A split puts the grid next to the note. |
 | Toolbar | Icons and labels | Icons only for a one-row toolbar. |
+| Touch layout | Automatic | Always on a touchscreen laptop; never on a tablet with a trackpad. |
 | Suggestions while typing | On | Off if you never want the pop-up. |
 | Status bar figures | Sum, average, count | Add minimum, maximum or filled cells. |
 | CSV delimiter, byte order mark | `;`, on | What Excel expects where the comma is the decimal mark. |
@@ -162,7 +191,8 @@ plugin's own data, not in your note.
 
 ## Things worth knowing
 
-- **Desktop only for now.** A mobile version is planned.
+- **The touch layout is new.** It was built and tested in a browser's touch emulation, not yet on
+  every phone; if a gesture misbehaves on yours, an issue with the device and app version helps.
 - **Aimed at tables up to roughly 500 rows.** There is no virtualization; the grid stops growing at
   2000 rows and 128 columns.
 - **Undo in the note is coarse.** After a write, Ctrl+Z in the note undoes the whole write as one step.

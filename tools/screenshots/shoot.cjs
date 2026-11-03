@@ -44,6 +44,26 @@ const shoot = (p, name) => p.locator("#view").screenshot({ path: `${out}/${name}
 	await p.evaluate(() => { window.host.goTo(2, 0); window.host.moveActive(2, 1, true); });
 	await p.waitForTimeout(150);
 	await shoot(p, "grid-dark");
+	await p.close();
+	// The touch layout on a phone-sized view: range mode extending a selection by taps.
+	const ctx = await b.newContext({ viewport: { width: 390, height: 760 }, deviceScaleFactor: 2, hasTouch: true, isMobile: true });
+	p = await ctx.newPage();
+	p.on("pageerror", (e) => console.log("ERR", String(e)));
+	await p.goto("file://" + process.cwd() + "/page.html?mobile=1");
+	await p.evaluate(() => { document.body.className = "theme-light is-mobile"; });
+	await p.waitForFunction(() => window.ready === true);
+	await p.waitForTimeout(400);
+	const tapCell = async (r, c) => {
+		const box = await p.locator(`.mds-cell[data-row="${r}"][data-col="${c}"]`).boundingBox();
+		await p.touchscreen.tap(box.x + 12, box.y + box.height / 2);
+		await p.waitForTimeout(150);
+	};
+	await tapCell(2, 1);
+	await p.locator(".mds-touchbar-btn", { hasText: "Range" }).tap();
+	await tapCell(5, 2);
+	await p.waitForTimeout(150);
+	await shoot(p, "mobile");
+	await ctx.close();
 	console.log("done");
 	await b.close();
 })();

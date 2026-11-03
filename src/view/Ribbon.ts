@@ -45,6 +45,8 @@ export interface RibbonOptions {
 	collapsed?: boolean;
 	/** Every button as an icon with its label in the tooltip — the compact toolbar. */
 	iconsOnly?: boolean;
+	/** The touch layout (decision 24). */
+	touch?: boolean;
 }
 
 interface ButtonRef {
@@ -169,6 +171,9 @@ export class Ribbon {
 				attr: { type: "button", role: "tab", "aria-selected": String(tab.id === this.activeTab) },
 			});
 			this.keepFocus(el);
+			// A narrow touch screen hides the label of every tab but the open one; the name must not
+			// go with it. Only there: Obsidian shows an `aria-label` as a hover tooltip on desktop.
+			if (this.opts.touch) el.setAttribute("aria-label", tab.label);
 			if (tab.icon) setIconSafe(el.createSpan({ cls: "mds-ribbon-tab-icon" }), tab.icon);
 			el.createSpan({ cls: "mds-ribbon-tab-label", text: tab.label });
 			el.toggleClass("is-active", tab.id === this.activeTab);

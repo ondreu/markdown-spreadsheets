@@ -1,6 +1,7 @@
 import {
 	MarkdownView,
 	Notice,
+	Platform,
 	Plugin,
 	TFile,
 	setTooltip,
@@ -445,7 +446,9 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 				return;
 			}
 		}
-		const leaf = this.app.workspace.getLeaf(this.sidecar.settings.openIn === "split" ? "split" : "tab");
+		// A phone has no room for a split; the setting applies where there is.
+		const split = this.sidecar.settings.openIn === "split" && !Platform.isPhone;
+		const leaf = this.app.workspace.getLeaf(split ? "split" : "tab");
 		const state: GridViewState = { path: file.path, anchor };
 		await leaf.setViewState({ type: VIEW_TYPE_GRID, active: true, state: state as unknown as Record<string, unknown> });
 		await this.app.workspace.revealLeaf(leaf);
