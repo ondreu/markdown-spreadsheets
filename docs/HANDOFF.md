@@ -1,6 +1,6 @@
 # Handoff
 
-State as of **29 July 2026**, on `main`, version **0.3.1**.
+State as of **3 November 2026**, on `main`, version **0.4.0**.
 
 This file goes stale. `CLAUDE.md` holds the durable rules; this one holds what is done, what is
 not, and what to look at first.
@@ -8,17 +8,17 @@ not, and what to look at first.
 ## Where things stand
 
 The plugin is complete against `docs/design` v0.4 — all ten steps of §16, not just the 1–6 the
-design scopes to one session. `main` and `claude/obsidian-plugin-design-13a7yl` point at the same
-commit; there is no open pull request.
+design scopes to one session, plus the feature list of round six. 0.4.0 is the first release with
+formulas, the header filter and the redesigned ribbon.
 
 | | |
 | --- | --- |
-| Source | ~7 000 lines across 30 files |
-| Tests | 190, in 8 files |
+| Source | ~13 500 lines across 42 files |
+| Tests | 341, in 12 files |
 | Lint | `eslint-plugin-obsidianmd` at 0 errors, 0 warnings |
-| Bundle | `main.js` 109 kB against the ~1 MB budget of §15.1 |
+| Bundle | `main.js` 228 kB against the ~1 MB budget of §15.1 |
 | Runtime dependencies | none |
-| Release | [0.3.1](https://github.com/ondreu/markdown-spreadsheets/releases/tag/0.3.1), three assets, published. 0.1.0 was published under the old `markdown-grid` id |
+| Release | [0.4.0](https://github.com/ondreu/markdown-spreadsheets/releases/tag/0.4.0), three assets, published. 0.1.0 was published under the old `markdown-grid` id |
 
 `npm run check` was green at this commit, and the released assets' SHA-256 digests matched a local
 build byte for byte.
