@@ -218,9 +218,12 @@ export class Ribbon {
 			});
 			if (item.tooltip) setTooltip(input, item.tooltip);
 			let committed = input.value;
+			// The description as it was when editing began: its `onCommit` targets the selection the
+			// number was typed for, even if a refresh replaced it before the field commits.
+			let editing: Extract<RibbonItem, { kind: "number" }> | null = null;
 			const commit = () => {
 				if (input.value === committed) return;
-				const current = this.numberItems.get(item.id) ?? item;
+				const current = editing ?? this.numberItems.get(item.id) ?? item;
 				const n = Number.parseInt(input.value, 10);
 				if (!Number.isFinite(n)) return;
 				committed = input.value;
@@ -231,7 +234,11 @@ export class Ribbon {
 				evt.stopPropagation();
 				if (evt.key === "Enter") commit();
 			});
-			input.addEventListener("focus", () => (committed = input.value));
+			input.addEventListener("focus", () => {
+				committed = input.value;
+				editing = this.numberItems.get(item.id) ?? item;
+			});
+			input.addEventListener("blur", () => (editing = null));
 			this.numbers.set(item.id, input);
 			return;
 		}

@@ -70,6 +70,11 @@ export interface GridHostCallbacks {
 	onCalcPlaced(): void;
 	/** The in-cell editor's text changed, so the formula bar can mirror it. */
 	onEditorInput?(value: string): void;
+	/**
+	 * A model change is about to happen. Pending input held outside the grid — the formula bar —
+	 * has to land first, in the cell it was typed for, before rows move under it.
+	 */
+	onBeforeMutate?(): void;
 }
 
 export interface GridHostContext {
@@ -860,6 +865,10 @@ export class GridHost {
 	commitEdit(dRow = 0, dCol = 0, refocus = true): void {
 		const editing = this.editing;
 		if (!editing) return;
+		// An editor that still has focus is about to be removed from the DOM; without moving focus
+		// to the grid it would fall to <body>, where none of the grid's keys reach. A commit caused
+		// by focus moving elsewhere (blur) leaves focus where the person put it.
+		const hadFocus = editing.input.ownerDocument.activeElement === editing.input;
 		this.editing = null;
 		this.releaseEditor();
 		const value = editing.input.value;
@@ -873,7 +882,7 @@ export class GridHost {
 			this.paintCell(el, editing.row, editing.col);
 			if (this.renderMode === "rendered") void this.renderCell(el, editing.row, editing.col);
 		}
-		if (refocus) this.focus();
+		if (refocus || hadFocus) this.focus();
 		if (dRow !== 0 || dCol !== 0) this.moveActive(dRow, dCol);
 		else this.paintSelection();
 		this.ctx.callbacks.onSelectionChange(this.selection);
@@ -882,8 +891,10 @@ export class GridHost {
 	cancelEdit(): void {
 		const editing = this.editing;
 		if (!editing) return;
+		const hadFocus = editing.input.ownerDocument.activeElement === editing.input;
 		this.editing = null;
 		this.releaseEditor();
+		if (hadFocus) this.focus();
 		const el = this.cellEl(editing.row, editing.col);
 		if (el) {
 			el.removeClass("is-editing");
@@ -919,6 +930,7 @@ export class GridHost {
 	 */
 	mutate(label: string, fn: () => void, repaint: "cell" | "all" = "all"): void {
 		if (this.editing) this.commitEdit(0, 0, false);
+		this.ctx.callbacks.onBeforeMutate?.();
 		this.undo.push(label, this.model, this.layout);
 		fn();
 		recomputeUsedRange(this.model);
@@ -931,6 +943,7 @@ export class GridHost {
 
 	undoLast(): boolean {
 		this.commitEdit(0, 0, false);
+		this.ctx.callbacks.onBeforeMutate?.();
 		const snapshot = this.undo.undo({ model: this.model, layout: this.layout });
 		if (!snapshot) return false;
 		this.replaceData(snapshot.model, snapshot.layout);
@@ -941,6 +954,7 @@ export class GridHost {
 
 	redoLast(): boolean {
 		this.commitEdit(0, 0, false);
+		this.ctx.callbacks.onBeforeMutate?.();
 		const snapshot = this.undo.redo({ model: this.model, layout: this.layout });
 		if (!snapshot) return false;
 		this.replaceData(snapshot.model, snapshot.layout);
@@ -1552,9 +1566,12 @@ export class GridHost {
 		}
 
 		if (hit.kind === "none") return;
-		// Focus is set by hand below; the default would only start a text selection.
+		// Focus is set by hand; the default would only start a text selection. It moves *before*
+		// the selection does, so a field that commits on blur — the formula bar, a ribbon width —
+		// commits against the selection it was typed for, not the one this click makes.
 		evt.preventDefault();
 		if (this.editing) this.commitEdit(0, 0, false);
+		this.focus();
 
 		switch (hit.kind) {
 			case "cell": {
@@ -1583,7 +1600,6 @@ export class GridHost {
 				this.selectAll();
 				break;
 		}
-		this.focus();
 	}
 
 	private onMouseMove(evt: MouseEvent): void {

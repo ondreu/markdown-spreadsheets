@@ -246,6 +246,15 @@ Behaviour:
   the next key wiped it; dismissing the table picker left an empty tab; a tooltip followed the
   pointer over every cell; Plain-text export kept `*`, `_` and `~~` inside a cell.
 
+An independent review of the view changes caught five interactions between "toolbar buttons keep
+focus in the grid" and fields that commit on blur, all fixed: pending formula-bar text is landed in
+its own cell before any mutation (`GridHostCallbacks.onBeforeMutate`) instead of after rows had
+moved under it; an external change while a cell or the formula bar is being typed in raises the
+conflict banner instead of reloading underneath; a commit while the editor still has focus hands
+focus to the grid rather than to `<body>`; a click in the grid moves focus before it moves the
+selection, and a ribbon number field commits against the selection it was typed for; layout
+changes refresh the ribbon, so the freeze toggles are never stale.
+
 Added: Excel's typing mode (arrows commit), Shift+click and drag on column and row headers,
 Freeze panes at the active cell, Find next, pasting a Markdown table, a single value filling a
 range, Ctrl+D, sort from the column header menu, and a range outline in place of per-cell tint.

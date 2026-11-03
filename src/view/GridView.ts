@@ -267,7 +267,12 @@ export class GridView extends ItemView {
 				settings: this.plugin.sidecar.settings,
 				callbacks: {
 					onDirty: () => this.markDirty(),
-					onLayoutChange: () => this.persistLayout(),
+					onLayoutChange: () => {
+						this.persistLayout();
+						// Freeze, wrap and sizes show their state in the ribbon.
+						this.refreshRibbon();
+					},
+					onBeforeMutate: () => this.commitFormula(),
 					onSelectionChange: (selection) => this.onSelectionChange(selection),
 					onNotice: (message) => new Notice(message),
 					onCalcPlaced: () => this.refreshRibbon(),
@@ -466,7 +471,9 @@ export class GridView extends ItemView {
 
 		if (hash === this.expectedHash) return;
 
-		if (this.dirty) {
+		// Text being typed — in a cell or in the formula bar — is an unsaved change too. Reloading
+		// under it would discard it, or land it in a row that has since moved.
+		if (this.dirty || this.host.isEditing() || this.formulaTarget !== null) {
 			// Two sets of edits to the same lines. Only the user can decide (§13.2).
 			this.showConflict(serializeTable(this.host.getModel()).replace(/\n+$/, ""), region.text);
 			return;
@@ -525,6 +532,9 @@ export class GridView extends ItemView {
 		this.expectedHash = regionHash(region.text);
 		this.anchor = anchorFromRegion(this.file.path, region);
 		this.layoutKey = anchorKey(this.anchor);
+		// Reloading is a decision to take the note's version; pending formula-bar text belonged to
+		// the old grid and must not be written into the new one at whatever cell it now points to.
+		this.formulaTarget = null;
 		this.host.replaceData(parseTable(region.text), this.plugin.sidecar.getLayout(this.layoutKey), keepSelection);
 		this.host.undo.clear();
 		this.dirty = false;
@@ -758,9 +768,11 @@ export class GridView extends ItemView {
 			id,
 			label,
 			icon,
-			// An open cell editor is committed first, so every action sees what was typed.
+			// Typed input is committed first — the cell editor and the formula bar keep focus through
+			// a ribbon click — so every action sees it, and it lands in the cell it was typed for.
 			onClick: () => {
 				this.host?.commitEdit(0, 0, false);
+				this.commitFormula();
 				onClick();
 			},
 			...(extra?.tooltip === undefined ? {} : { tooltip: extra.tooltip }),
