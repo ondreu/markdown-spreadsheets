@@ -6,5 +6,5 @@
   "description": "Edit Markdown tables in a spreadsheet-style grid in a dedicated tab.",
   "author": "ondreu",
   "authorUrl": "https://github.com/ondreu",
-  "isDesktopOnly": true
+  "isDesktopOnly": false
 }

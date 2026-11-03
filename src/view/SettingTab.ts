@@ -258,6 +258,23 @@ export class MarkdownSpreadsheetsSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName("Touch layout")
+			.setDesc(
+				"Tap to select and tap again to edit, a long press for the menu, two fingers to zoom, and an action bar under the grid. Automatic turns it on in the mobile app. Takes effect in newly opened grids.",
+			)
+			.addDropdown((d) =>
+				d
+					.addOption("auto", "Automatic")
+					.addOption("on", "Always")
+					.addOption("off", "Never")
+					.setValue(settings.mobileLayout)
+					.onChange((value) => {
+						settings.mobileLayout = value === "on" || value === "off" ? value : "auto";
+						commit();
+					}),
+			);
+
+		new Setting(containerEl)
 			.setName("Column names next to the letters")
 			.setDesc("Shows the Markdown header beside the column letter.")
 			.addToggle((t) =>

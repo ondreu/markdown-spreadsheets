@@ -31,7 +31,7 @@ const app: any = {
 		getMarkdownFiles: () => files,
 	},
 	metadataCache: { fileToLinktext: (f: any) => f.basename, getFileCache: () => ({ tags: [{ tag: "#office" }, { tag: "#move" }] }) },
-	workspace: { trigger: () => {}, getLeaf: () => ({}) },
+	workspace: { trigger: () => {}, getLeaf: () => ({}), openLinkText: async (t: string) => { (window as any).openedLink = t; } },
 };
 const store: { data: unknown } = { data: null };
 const plugin: any = { loadData: async () => store.data, saveData: async (d: unknown) => (store.data = d), setStatusBarText: () => {}, clearStatusBar: () => {} };

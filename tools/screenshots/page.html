@@ -1,4 +1,4 @@
-<!doctype html><html><head><meta charset="utf-8">
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 body { margin: 0; font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--text-normal); background: var(--background-primary);
  --font-ui-small: 13px; --font-ui-smaller: 12px; --font-ui-medium: 15px; --font-semibold: 600; --font-normal: 400; --font-medium: 500;
@@ -14,6 +14,8 @@ select.dropdown, input { font: inherit; color: var(--text-normal); background: v
 .svg-icon { width: 16px; height: 16px; stroke-width: 1.75; }
 #view { width: 1180px; height: 560px; display: flex; flex-direction: column; border: 1px solid var(--background-modifier-border); }
 .view-content { flex: 1 1 auto; min-height: 0; }
+body.is-mobile #view { width: 390px; height: 760px; border: none; }
+body.is-mobile { --font-ui-small: 15px; --font-ui-smaller: 12px; }
 .mds-formula-input { height: 26px; padding: 0 8px; }
 </style>
 <link rel="stylesheet" href="../../styles.css"></head><body class="theme-light"><div id="view"></div><script src="icons.js"></script><script src="bundle.js"></script></body></html>

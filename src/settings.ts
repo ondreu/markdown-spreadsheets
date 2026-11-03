@@ -10,6 +10,8 @@ export type SaveMode = "auto" | "manual";
 export type CsvDelimiter = "," | ";" | "\t";
 export type TableStyle = "aligned" | "compact";
 export type StatusStat = "sum" | "average" | "count" | "counta" | "min" | "max";
+/** The touch layout: on the mobile app by default, or forced either way (decision 24). */
+export type MobileLayout = "auto" | "on" | "off";
 
 export interface MarkdownSpreadsheetsSettings {
 	/** §13.2: autosave is the Excel-like default; manual suits a git-tracked vault. */
@@ -63,6 +65,8 @@ export interface MarkdownSpreadsheetsSettings {
 	maxBackups: number;
 	/** Fit the columns to their content the first time a table is opened. */
 	autofitOnFirstOpen: boolean;
+	/** Touch gestures, the action bar and finger-sized controls. */
+	mobileLayout: MobileLayout;
 }
 
 export const DEFAULT_SETTINGS: MarkdownSpreadsheetsSettings = {
@@ -97,4 +101,12 @@ export const DEFAULT_SETTINGS: MarkdownSpreadsheetsSettings = {
 	previewBeforeSave: false,
 	maxBackups: 10,
 	autofitOnFirstOpen: true,
+	mobileLayout: "auto",
 };
+
+/** Whether a view uses the touch layout, given the setting and whether this is the mobile app. */
+export function resolveTouchLayout(setting: MobileLayout, isMobileApp: boolean): boolean {
+	if (setting === "on") return true;
+	if (setting === "off") return false;
+	return isMobileApp;
+}

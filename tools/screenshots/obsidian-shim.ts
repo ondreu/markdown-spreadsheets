@@ -47,7 +47,11 @@ export class Menu {
 	}
 	addSeparator() { return this; }
 	showAtMouseEvent() { (window as any).lastMenu = this; }
+	showAtPosition(at: { x: number; y: number }) { (window as any).lastMenu = this; (window as any).lastMenuAt = at; }
 }
+// `?mobile=1` on the page stands in for the mobile app.
+const MOBILE = new URLSearchParams(location.search).get("mobile") === "1";
+export const Platform = { isMobile: MOBILE, isPhone: MOBILE, isDesktop: !MOBILE, isDesktopApp: !MOBILE, isMobileApp: MOBILE };
 export const MarkdownRenderer = {
 	async render(_app: unknown, md: string, el: HTMLElement) {
 		// Tiny renderer: emphasis, code, links — enough to see rendered mode work.

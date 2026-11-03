@@ -296,3 +296,41 @@ Everything new that computes — `src/feature/transform.ts` (split, merge, de-du
 sort, case, statistics, number formats, filter predicates), `series.ts` (fill series),
 `formula.ts`, `importTable.ts`, `exportExtra.ts` — has no Obsidian import and is unit-tested. The
 view layer only wires them to the ribbon, the commands and the dialogs in `src/view/toolModals.ts`.
+
+## 24. The plugin runs on mobile, with a touch layout
+
+**Design:** D7 — v1 is desktop-only (`isDesktopOnly: true`), because "a ribbon at 380 px is its
+own project".
+
+**Built:** at the author's request, that project. `isDesktopOnly` is `false`, and a grid opened in
+the mobile app — or anywhere with `Touch layout` set to *Always* — uses the touch layout. Nothing
+about the note, the write path or the anchor changes; this is the view only.
+
+- **Gestures are recognised, not reimplemented.** A one-finger drag stays the browser's native
+  scroll (`touch-action: pan-x pan-y`), and the browser announces it by cancelling the pointer. What
+  is left — tap, long press, pinch — is `GestureTracker` in `src/feature/gesture.ts`, a pure state
+  machine with its own tests. A gesture that ever had two fingers, or that the browser took over,
+  never ends in a tap.
+- **Tap selects; a tap on the selected cell edits.** The second tap is the double-click. It never
+  follows a link in that cell: a column of `[[links]]` — the common case in rendered mode — could
+  otherwise not be edited by touch at all. The long-press menu offers *Open link* instead.
+- **Range mode replaces Shift.** Dragging across cells would fight scrolling, so a toggle in the
+  action bar makes the next taps extend the selection. Starting an edit turns it off.
+- **The emulated mouse events are ignored.** After a tap the browser fires `mousedown`, `dblclick`
+  and, on Android, `contextmenu` for the same touch. `pointerdown` is `preventDefault`ed, which
+  suppresses most of them, and the mouse handlers additionally stand down for 800 ms after a touch.
+- **Desktop-only gestures stay desktop-only.** The fill handle is hidden, header borders do not
+  resize and selected headers do not drag-move; *Fill down*, *Width* and *Move* on the toolbar
+  do the same jobs. A touch version of each is possible later; none was worth a gesture that
+  collides with scrolling.
+- **The action bar** under the grid carries edit, range mode, undo, redo, copy, paste, add row and
+  the selection's context menu, each icon with its name under it — a touch screen shows no tooltips.
+- **The context menu gained Cut, Copy and Paste**, through the system clipboard, on desktop too: on
+  touch there is no other route to them, and Excel's menu has them first.
+- **Inputs are 16 px** in the touch layout. Below that, iOS zooms the whole page into a field when
+  it gets focus.
+- **A phone opens a tab, not a split**, whatever `Open the spreadsheet in` says.
+
+The Node built-ins rule (`no-nodejs-modules`) now applies, because the manifest says mobile. The
+plugin itself never imported one; the tests do, and run only in Node, so the rule is off for
+`tests/` in `eslint.config.mjs`.

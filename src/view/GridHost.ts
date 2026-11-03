@@ -28,6 +28,7 @@ import {
 	type Rect,
 } from "../feature/ops";
 import { UndoStack } from "../feature/undo";
+import { DEFAULT_GESTURE, GestureTracker } from "../feature/gesture";
 import { plainText } from "../feature/exportCsv";
 import { adjustFormulaRefs, editTextOf, isFormulaCell, rawFromEdit, recalculate, stripFormula } from "../feature/formula";
 import {
@@ -93,6 +94,10 @@ export interface GridHostCallbacks {
 	onFiltersChange?(): void;
 	/** A link in a rendered cell is hovered, for Obsidian's page preview. */
 	onHoverLink?(evt: MouseEvent, link: HTMLElement, linktext: string): void;
+	/** Cut, copy and paste from the context menu, through the system clipboard. */
+	onClipboard?(action: "copy" | "cut" | "paste"): void;
+	/** Range mode was switched on or off, so the touch bar can show it. */
+	onRangeModeChange?(on: boolean): void;
 }
 
 export interface GridHostContext {
@@ -102,6 +107,8 @@ export interface GridHostContext {
 	sourcePath: string;
 	settings: MarkdownSpreadsheetsSettings;
 	callbacks: GridHostCallbacks;
+	/** The touch layout (decision 24): taps, long presses and pinches instead of mouse drags. */
+	touch?: boolean;
 }
 
 type RenderMode = "raw" | "rendered";
@@ -117,6 +124,14 @@ interface PendingCalc {
  * Enter. F2 or a double-click is "edit": the arrows move the caret inside the text.
  */
 type EditMode = "enter" | "edit";
+
+/** What a pointer is over: a cell, a header, the corner, or nothing of the grid's. */
+interface Hit {
+	kind: "cell" | "colhead" | "rowhead" | "corner" | "none";
+	row: number;
+	col: number;
+	el: HTMLElement | null;
+}
 
 /** What a drag that started with a mouse press is extending. */
 type DragKind = "cells" | "cols" | "rows";
@@ -180,6 +195,17 @@ export class GridHost {
 	private headerDrag: { kind: "col" | "row"; from: number; to: number; moved: boolean } | null = null;
 	private filterPopover: FilterPopover | null = null;
 	private changedEls: HTMLElement[] = [];
+	private readonly gesture = new GestureTracker();
+	private longPressTimer: number | null = null;
+	/**
+	 * When a finger last touched the grid. The browser follows a tap with emulated mouse events —
+	 * `mousedown`, `dblclick`, and on Android a long press is also a `contextmenu` — which the
+	 * mouse handlers would act on a second time; they stand down for a moment after a touch.
+	 */
+	private lastTouchAt = 0;
+	/** Touch has no Shift: in range mode a tap extends the selection instead of moving it. */
+	private rangeMode = false;
+	private pinchZoom = 1;
 
 	constructor(
 		private readonly ctx: GridHostContext,
@@ -205,6 +231,7 @@ export class GridHost {
 			this.ctx.callbacks.onNotice("Constructable stylesheets are unavailable; row sizing falls back to per-row styles.");
 		}
 
+		this.hostEl.toggleClass("is-touch", this.ctx.touch === true);
 		this.hostEl.toggleClass("is-zebra", this.ctx.settings.zebraRows);
 		this.hostEl.toggleClass("is-crosshair", this.ctx.settings.highlightActiveLine);
 		this.applyZoomClass();
@@ -236,6 +263,7 @@ export class GridHost {
 	destroy(): void {
 		this.cancelEdit();
 		this.filterPopover?.close();
+		this.clearLongPress();
 		if (this.geometryTimer !== null) window.clearTimeout(this.geometryTimer);
 		if (this.scrollFrame !== null) this.scrollEl.ownerDocument.defaultView?.cancelAnimationFrame(this.scrollFrame);
 		this.observer?.disconnect();
@@ -972,6 +1000,7 @@ export class GridHost {
 	 */
 	beginEdit(initial?: string): void {
 		if (this.editing) return;
+		this.setRangeMode(false);
 		const { row, col } = this.selection.active;
 		const el = this.cellEl(row, col);
 		if (!el) return;
@@ -980,6 +1009,8 @@ export class GridHost {
 		el.removeAttribute("aria-label");
 		el.addClass("is-editing");
 		const input = el.createEl("textarea", { cls: "mds-editor", attr: { spellcheck: "false", rows: "1" } });
+		// The on-screen keyboard's return key commits the cell, so it says so.
+		if (this.ctx.touch) input.setAttribute("enterkeyhint", "done");
 		input.value = initial ?? editTextOf(original);
 		const suggest = this.ctx.settings.autocomplete
 			? new CellSuggest(this.hostEl, input, {
@@ -1887,6 +1918,12 @@ export class GridHost {
 		on(this.scrollEl, "wheel", (evt) => this.onWheel(evt), { passive: false });
 		on(this.scrollEl, "dragover", (evt) => this.onDragOver(evt));
 		on(this.scrollEl, "drop", (evt) => this.onDrop(evt));
+		if (this.ctx.touch) {
+			on(this.scrollEl, "pointerdown", (evt) => this.onPointerDown(evt));
+			on(this.scrollEl, "pointermove", (evt) => this.onPointerMove(evt));
+			on(this.scrollEl, "pointerup", (evt) => this.onPointerUp(evt));
+			on(this.scrollEl, "pointercancel", (evt) => this.onPointerCancel(evt));
+		}
 
 		// Clipboard events go to the element holding the text selection, or to `body` when there is
 		// none — and the grid deliberately has none. Listening on the grid itself therefore missed
@@ -1909,7 +1946,153 @@ export class GridHost {
 			const up = (evt: MouseEvent) => this.onMouseUp(evt);
 			win.addEventListener("mouseup", up);
 			this.cleanup.push(() => win.removeEventListener("mouseup", up));
+			if (this.ctx.touch) {
+				// The on-screen keyboard shrinks the window; keep the cell being typed into above it.
+				const resized = () => {
+					if (this.editing) this.scrollIntoView(this.editing.row, this.editing.col);
+				};
+				win.addEventListener("resize", resized);
+				this.cleanup.push(() => win.removeEventListener("resize", resized));
+			}
 		}
+	}
+
+	/* ----------------------------------------------------------------- touch */
+
+	private isTouchPointer(evt: PointerEvent): boolean {
+		return evt.pointerType === "touch" || evt.pointerType === "pen";
+	}
+
+	/** True right after a finger touched the grid: a mouse event now is the browser's emulation. */
+	private fromTouch(): boolean {
+		return this.ctx.touch === true && Date.now() - this.lastTouchAt < 800;
+	}
+
+	private clearLongPress(): void {
+		if (this.longPressTimer === null) return;
+		window.clearTimeout(this.longPressTimer);
+		this.longPressTimer = null;
+	}
+
+	private onPointerDown(evt: PointerEvent): void {
+		if (!this.isTouchPointer(evt)) return;
+		this.lastTouchAt = Date.now();
+		const target = asElement(evt.target);
+		// Inside the open editor the finger places the caret or selects text; that is the input's.
+		if (this.editing !== null && target !== null && target.hasClass("mds-editor")) return;
+		// No emulated mousedown: it would select a second time, and move focus before the tap decides.
+		evt.preventDefault();
+		this.gesture.down(evt.pointerId, evt.clientX, evt.clientY, Date.now());
+		if (this.gesture.isPinching()) {
+			this.clearLongPress();
+			this.pinchZoom = this.getZoom();
+			return;
+		}
+		this.clearLongPress();
+		this.longPressTimer = window.setTimeout(() => {
+			this.longPressTimer = null;
+			const at = this.gesture.longPress(Date.now());
+			if (at !== null) this.onLongPress(target, at);
+		}, DEFAULT_GESTURE.longPressMs + 20);
+	}
+
+	private onPointerMove(evt: PointerEvent): void {
+		if (!this.isTouchPointer(evt) || !this.gesture.isActive()) return;
+		const result = this.gesture.move(evt.pointerId, evt.clientX, evt.clientY);
+		if (result?.kind === "pinch") this.setZoom(this.pinchZoom * result.scale);
+	}
+
+	private onPointerUp(evt: PointerEvent): void {
+		if (!this.isTouchPointer(evt)) return;
+		this.lastTouchAt = Date.now();
+		const result = this.gesture.up(evt.pointerId, evt.clientX, evt.clientY);
+		if (!this.gesture.isActive()) this.clearLongPress();
+		if (result?.kind === "tap") this.onTap(evt);
+	}
+
+	private onPointerCancel(evt: PointerEvent): void {
+		if (!this.isTouchPointer(evt)) return;
+		this.lastTouchAt = Date.now();
+		this.gesture.cancel(evt.pointerId);
+		if (!this.gesture.isActive()) this.clearLongPress();
+	}
+
+	/**
+	 * A tap is a click without the drag: it selects. A tap on the cell that is already the whole
+	 * selection edits it — the second tap is the double-click. A link in the cell is not followed
+	 * on a tap, or a column of links could never be edited by touch; the long-press menu opens it.
+	 * In range mode a tap extends the selection instead.
+	 */
+	private onTap(evt: PointerEvent): void {
+		const target = asElement(evt.target);
+		const hit = this.hit(evt);
+		if (hit.kind === "none") return;
+		if (hit.kind === "colhead" && hit.el && target?.closest(".mds-colhead-filter")) {
+			if (this.editing) this.commitEdit(0, 0, false);
+			this.openFilterPopover(hit.col, hit.el);
+			return;
+		}
+		const wasEditing = this.editing !== null;
+		const { rect, active } = this.selection;
+		const alone = rect.r1 === rect.r2 && rect.c1 === rect.c2;
+		if (this.editing) this.commitEdit(0, 0, false);
+		// Focus first, as with a click: a field that commits on blur commits against its own cell.
+		this.focus();
+
+		switch (hit.kind) {
+			case "cell": {
+				if (this.pendingCalc) {
+					this.placeCalc(hit.row, hit.col);
+					return;
+				}
+				if (this.rangeMode) {
+					this.extendTo(hit.row, hit.col);
+					return;
+				}
+				const again = alone && active.row === hit.row && active.col === hit.col;
+				if (again && !wasEditing) {
+					this.beginEdit();
+					return;
+				}
+				this.setSelection({ r1: hit.row, c1: hit.col, r2: hit.row, c2: hit.col }, { row: hit.row, col: hit.col });
+				return;
+			}
+			case "colhead":
+				this.selectColumns(this.rangeMode ? active.col : hit.col, hit.col);
+				return;
+			case "rowhead":
+				this.selectRows(this.rangeMode ? active.row : hit.row, hit.row);
+				return;
+			case "corner":
+				this.selectAll();
+				return;
+		}
+	}
+
+	/** A long press is the right click. */
+	private onLongPress(target: HTMLElement | null, at: { x: number; y: number }): void {
+		if (target === null || !this.scrollEl.contains(target)) return;
+		const hit = this.hitTarget(target);
+		if (hit.kind === "none") return;
+		const link = hit.kind === "cell" ? target.closest("a") : null;
+		this.openContextMenu(hit, (menu) => menu.showAtPosition(at), link !== null && link.instanceOf(HTMLElement) ? link : null);
+	}
+
+	isRangeMode(): boolean {
+		return this.rangeMode;
+	}
+
+	setRangeMode(on: boolean): void {
+		if (this.rangeMode === on) return;
+		this.rangeMode = on;
+		this.hostEl.toggleClass("is-range-mode", on);
+		this.ctx.callbacks.onRangeModeChange?.(on);
+	}
+
+	/** The context menu of the selection, opened from a button rather than from a cell. */
+	openSelectionMenu(at: { x: number; y: number }): void {
+		const { row, col } = this.selection.active;
+		this.openContextMenu({ kind: "cell", row, col, el: this.cellEl(row, col) }, (menu) => menu.showAtPosition(at));
 	}
 
 	/** Ctrl/Cmd+wheel zooms the grid instead of scrolling it. */
@@ -2002,8 +2185,11 @@ export class GridHost {
 		this.pasteText(text);
 	}
 
-	private hit(evt: MouseEvent): { kind: "cell" | "colhead" | "rowhead" | "corner" | "none"; row: number; col: number; el: HTMLElement | null } {
-		const target = asElement(evt.target);
+	private hit(evt: MouseEvent): Hit {
+		return this.hitTarget(asElement(evt.target));
+	}
+
+	private hitTarget(target: HTMLElement | null): Hit {
 		if (target === null) return { kind: "none", row: -1, col: -1, el: null };
 		const el = target.closest(".mds-cell, .mds-colhead, .mds-rowhead, .mds-corner, .mds-fill-handle");
 		if (el === null || !el.instanceOf(HTMLElement)) return { kind: "none", row: -1, col: -1, el: null };
@@ -2017,7 +2203,7 @@ export class GridHost {
 	}
 
 	private onMouseDown(evt: MouseEvent): void {
-		if (evt.button !== 0) return;
+		if (evt.button !== 0 || this.fromTouch()) return;
 		const target = asElement(evt.target);
 		// A click inside the open editor belongs to the editor: it places the caret or starts a
 		// text selection. Committing here would make it impossible to click into a word.
@@ -2223,6 +2409,11 @@ export class GridHost {
 		evt.preventDefault();
 		if (!(evt.ctrlKey || evt.metaKey)) return;
 		evt.stopPropagation();
+		this.followLink(link);
+	}
+
+	/** Opens a link from a rendered cell in a new tab, never in this one. */
+	private followLink(link: HTMLElement): void {
 		if (link.hasClass("internal-link")) {
 			const href = link.getAttribute("data-href") ?? link.getAttribute("href");
 			if (href) void this.ctx.app.workspace.openLinkText(href, this.ctx.sourcePath, "tab");
@@ -2270,6 +2461,7 @@ export class GridHost {
 	}
 
 	private onDoubleClick(evt: MouseEvent): void {
+		if (this.fromTouch()) return;
 		const target = asElement(evt.target);
 		// Double-click inside the editor selects a word, which is the input's job, not ours.
 		if (this.editing !== null && target !== null && target.hasClass("mds-editor")) return;
@@ -2303,8 +2495,19 @@ export class GridHost {
 		const hit = this.hit(evt);
 		if (hit.kind === "none") return;
 		evt.preventDefault();
+		// Android reports a long press as a context menu too; the long-press timer already has it.
+		if (this.fromTouch()) return;
+		this.openContextMenu(hit, (menu) => menu.showAtMouseEvent(evt));
+	}
+
+	/** `link` is a link under the finger: touch has no Ctrl+click, so the menu offers to open it. */
+	private openContextMenu(hit: Hit, show: (menu: Menu) => void, link: HTMLElement | null = null): void {
 		if (this.editing) this.commitEdit(0, 0, false);
 		const menu = new Menu();
+		if (link !== null) {
+			menu.addItem((i) => i.setTitle("Open link").setIcon(iconName("link")).onClick(() => this.followLink(link)));
+			menu.addSeparator();
+		}
 
 		if (hit.kind === "colhead") {
 			if (!rectCols(this.selection.rect).includes(hit.col)) this.selectColumns(hit.col);
@@ -2342,7 +2545,14 @@ export class GridHost {
 				this.setSelection({ r1: hit.row, c1: hit.col, r2: hit.row, c2: hit.col }, { row: hit.row, col: hit.col });
 			}
 			const headerOnly = this.selection.rect.r1 === 0 && this.selection.rect.r2 === 0;
+			const callbacks = this.ctx.callbacks;
+			const clipboard = (action: "copy" | "cut" | "paste") => callbacks.onClipboard?.(action);
 			menu.addItem((i) => i.setTitle("Edit cell").setIcon(iconName("edit")).onClick(() => this.beginEdit()));
+			if (callbacks.onClipboard) {
+				menu.addItem((i) => i.setTitle("Cut").setIcon(iconName("cut")).onClick(() => clipboard("cut")));
+				menu.addItem((i) => i.setTitle("Copy").setIcon(iconName("copy")).onClick(() => clipboard("copy")));
+				menu.addItem((i) => i.setTitle("Paste").setIcon(iconName("paste")).onClick(() => clipboard("paste")));
+			}
 			menu.addItem((i) => i.setTitle("Clear contents").setIcon(iconName("clear")).onClick(() => this.clearSelectionContents()));
 			menu.addSeparator();
 			menu.addItem((i) =>
@@ -2365,7 +2575,7 @@ export class GridHost {
 			);
 			menu.addItem((i) => i.setTitle("Delete column").setIcon(iconName("remove")).onClick(() => this.deleteSelectedCols()));
 		}
-		menu.showAtMouseEvent(evt);
+		show(menu);
 	}
 
 	private rectContains(row: number, col: number): boolean {

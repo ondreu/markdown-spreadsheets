@@ -37,6 +37,9 @@ export default defineConfig([
 			// Tests build stub TFile/Vault objects. There is no real instance to narrow from, and
 			// the point of the stub is to exercise our code, not Obsidian's classes.
 			"obsidianmd/no-tfile-tfolder-cast": "off",
+			// Tests run in Node and never ship; the mobile app never loads them. The rule only
+			// fires once the manifest says the plugin runs on mobile (decision 24).
+			"obsidianmd/no-nodejs-modules": "off",
 		},
 	},
 ]);
