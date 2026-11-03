@@ -169,6 +169,27 @@ export class Writer {
 		return ok;
 	}
 
+	/**
+	 * Rewrites every table of the note through `format` in one atomic `process` — the "Reformat all
+	 * tables" command. Regions are replaced bottom-up so earlier line numbers stay valid, and a
+	 * table whose text would not change is left byte-for-byte alone. Returns how many changed.
+	 */
+	async reformatAll(file: TFile, format: (tableText: string) => string): Promise<number> {
+		let changed = 0;
+		await this.vault.process(file, (data) => {
+			let next = data;
+			const regions = scanTables(data).reverse();
+			for (const region of regions) {
+				const replacement = format(region.text).replace(/\r\n/g, "\n").replace(/\n+$/, "");
+				if (regionHash(replacement) === regionHash(region.text)) continue;
+				next = spliceLines(next, region.startLine, region.endLine - region.startLine + 1, replacement.split("\n"));
+				changed++;
+			}
+			return next;
+		});
+		return changed;
+	}
+
 	/** Reads the current text of the anchored region without touching the file. */
 	async readRegion(file: TFile, anchor: Anchor): Promise<WriteOutcome> {
 		const data = await this.vault.cachedRead(file);

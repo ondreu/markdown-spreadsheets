@@ -1,29 +1,148 @@
 # Markdown Spreadsheets
 
-Edit Markdown tables in a spreadsheet-style grid in a dedicated tab.
+Edit the Markdown tables in your Obsidian notes in a spreadsheet grid — and get back a table that is
+still plain, valid Markdown.
 
-The note is the source of truth. Nothing is written into it that GFM cannot express natively —
-no HTML, no merged cells, no cell colours, no live formulas. What comes back out is a strictly
-valid GitHub-Flavored Markdown table.
+![A Markdown table open in the grid: a toolbar with tabs, a formula bar, column letters with header names, a selected range and a status bar with its sum](docs/images/grid-light.png)
 
+The note stays the source of truth. Nothing goes into it that GitHub-Flavored Markdown cannot
+express: no HTML, no merged cells, no colours. Close the plugin, open the note anywhere else, and the
+table reads exactly as it did in the grid.
+
+**Contents** — [Getting started](#getting-started) · [What it does](#what-it-does) ·
+[Formulas](#formulas) · [Keys](#keys) · [Settings](#settings-worth-changing) ·
+[Limits](#what-it-deliberately-does-not-do) · [Things worth knowing](#things-worth-knowing) ·
+[Development](#development)
+
+## Getting started
+
+1. Hover over a table in Live Preview and click the button in its top-right corner — or put the
+   cursor in a table and run **Open table as a spreadsheet** from the command palette, the
+   right-click menu or the sidebar icon.
+2. Edit. Type to replace a cell, F2 or a double-click to edit it, Enter to move on.
+3. That's it: in automatic save mode the note is updated a moment after you stop typing.
+
+No table yet? **Insert a new table and open it as a spreadsheet** creates one at the cursor, and
+**Import a spreadsheet file as a new table** turns a CSV or Excel file into one.
 
 ## What it does
 
-- **Opens a table in its own tab** — from the button that appears on a table in Live Preview while
-  the pointer is over it, the ribbon icon in the left sidebar, the command palette, the editor
-  context menu, or the file menu. A toolbar of tabs, an infinite grid, keyboard navigation, resizable cells.
-- **Shows the cells the way the note does.** Markdown in a cell is rendered by default; links and
-  emphasis read as they do in the note, and editing a cell always shows the raw Markdown. `Raw` is
-  one button away when the source matters more.
-- **Writes back as valid GFM.** The pipes are realigned to the widest cell, alignment markers come
-  from the column alignment, and there is never any trailing whitespace.
-- **Finds the same table again** after you have edited the note above it, without marking up your
-  note. If two tables are genuinely indistinguishable, it asks instead of guessing.
-- **Never resolves a conflict on its own.** If the table changed in the note while the grid was
-  open, you get the choice, not a silent overwrite.
-- **One-off calculations.** The status bar shows Sum · Avg · Count of the selection; `Calculate`
-  inserts a literal result into a cell you pick.
-- **Exports** to CSV (RFC 4180, delimiter and BOM you choose) and Excel.
+### Edit like a spreadsheet
+
+- An infinite grid with column letters and row numbers, frozen header row, resizable columns and
+  rows, text wrapping, zoom (Ctrl+wheel) and a formula bar.
+- **Excel's keys**: arrows, Shift to extend, Ctrl+arrows to jump, Ctrl+Enter to fill a selection,
+  Ctrl+D to fill down, the fill handle for series (numbers, dates, weekdays, `Item 1 → Item 2`).
+- **Suggestions while typing**: notes after `[[`, tags after `#`, and the values already used in the
+  same column — Alt+↓ lists them all.
+- **Rows and columns**: insert, duplicate, delete, move with the buttons or by dragging the row number
+  or column letter, hide columns in the grid only.
+- **Cells show what the note shows** — links, emphasis, code and images are rendered; editing always
+  shows the Markdown. Ctrl+click follows a link, Ctrl+hover previews it.
+- A long cell opens in an editor that grows over its neighbours, so it can be read whole.
+
+![Typing [[ in a cell lists the vault's notes under the editor](docs/images/suggest.png)
+
+### Work with the data
+
+- **Sort and filter from the column header**: the arrow next to a column letter sorts, filters by
+  condition (contains, equals, greater than…) or by ticking values. Clicking the letter itself still
+  selects the whole column. Filters only hide rows in the grid — the note keeps all of them.
+- Sort by several columns, find and replace (with Find next, regex, whole-cell), go to a cell.
+- **Tools**: split a column at a separator, merge columns, remove duplicate rows, change case, trim
+  spaces, replace `&nbsp;`.
+- **Paste** from Excel, LibreOffice or Google Sheets, a Markdown table copied from a note, a single
+  value onto a whole range, transposed, or as plain text. Paste or drop an image and it is saved as
+  an attachment and linked; drop a note from the file explorer and it becomes a link.
+
+![The drop-down of a column header: sort, a condition and a checklist of the column's values](docs/images/filter.png)
+
+### Calculate
+
+- The status bar shows the sum, average and count of the selection — click a figure to copy it.
+- **Formulas** that stay readable without the plugin (see [below](#formulas)), a **totals row** in
+  one click, **compute a column** from an expression such as `[Qty] * [Unit price]`.
+- **Column statistics**, **format numbers** as currency, percent or fixed decimals, and one-off
+  results (`Calculate`) inserted as plain values.
+
+### Export, import, safety
+
+- Export to CSV, Excel (with real formulas) or JSON — the whole table or just the selection. Copy as
+  Markdown, as a formatted table for Word or email, as JSON or as text. Import CSV, TSV or Excel.
+- **Never overwrites silently.** If the table changed in the note while the grid was open, you get
+  the choice. The last versions are kept: the table as it was when opened, each save, and — in
+  manual save mode — changes you closed without saving. Restoring highlights what changed.
+- **Finds the same table again** after you edit the note above it, without marking up your note;
+  if two tables are genuinely indistinguishable it asks instead of guessing.
+- Optional **compact** table layout (`| a | b |`), so changing one cell changes one line in Git.
+
+![The same grid in a dark theme](docs/images/grid-dark.png)
+
+## Formulas
+
+Markdown has no formulas, so this plugin keeps them where Obsidian keeps comments: inside the cell,
+after the value.
+
+```markdown
+| Item    | Cost                          |
+| ------- | ----------------------------: |
+| Movers  | 1 200                         |
+| Desks   | 20 940                        |
+| **Total** | **22 140** %%=SUM(B2:B3)%%  |
+```
+
+In Obsidian you see `22 140`. In any other Markdown viewer you see `22 140` followed by the formula
+as text — the number is always there, and always right as of the last time the grid had the table
+open. Type `=SUM(B2:B3)` into a cell (or the formula bar) to create one. The grid recalculates on
+every change and when it opens a table, and moves references when rows and columns are inserted or
+deleted.
+
+References are spreadsheet style — `B2`, `B2:B9` — where row 1 is the Markdown header. Supported:
+`+ - * / ^`, parentheses, `SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT`, `COUNTA`, `MEDIAN`, `PRODUCT`,
+`ROUND`, `ABS`. Errors show as `#REF!`, `#DIV/0!`, `#CYCLE!`, `#VALUE!` or `#NAME?`. A cell
+starting with `==` stays an Obsidian highlight, and `'=` writes a literal `=`.
+
+![A totals cell selected: the formula bar shows =SUM(F2:F8), the cell shows the value with a small corner marker](docs/images/formula.png)
+
+## Keys
+
+| Key | Action |
+| --- | --- |
+| Arrows · Shift+arrows | Move · extend the selection |
+| Ctrl/Cmd+arrows | Jump to the edge of the data |
+| Home / End · Ctrl+Home / End | Row start / end · first / last used cell |
+| Tab / Shift+Tab · Enter / Shift+Enter | Next / previous cell · down / up |
+| Just type | Replace the cell — the arrows then commit and move on, as in Excel |
+| F2 or double-click | Edit the cell — the arrows move the caret (F2 again switches) |
+| Ctrl+Enter | Write what you typed into every selected cell |
+| Alt+↓ | Pick a value already used in the column |
+| Ctrl+; · Ctrl+Shift+; | Insert today's date · the time |
+| Ctrl+K | Turn the selection into a `[[link]]` |
+| Ctrl+B / I | Bold, italic — `**x**`, `__x__`, `*x*` and `_x_` are all recognised |
+| Ctrl+D | Fill down (a single row copies the row above) |
+| Ctrl+G | Go to a cell or column |
+| Ctrl+C / X / V | Copy, cut, paste |
+| Ctrl+Z / Y | Undo, redo — the grid keeps its own history |
+| Ctrl+S | Write back to the note |
+| Ctrl+= / - / 0 | Zoom in, out, reset |
+| Delete · Esc | Clear the selection · cancel an edit |
+
+Every toolbar action is also a command, so you can give any of them a hotkey of your own in
+Obsidian's settings.
+
+## Settings worth changing
+
+| Setting | Default | Why change it |
+| --- | --- | --- |
+| Save mode | Automatic | Manual if your vault is under Git or Sync and you'd rather save explicitly — with an optional preview of the change. |
+| Table layout in the note | Aligned | Compact keeps Git diffs to the line you changed. |
+| Open the spreadsheet in | A new tab | A split puts the grid next to the note. |
+| Toolbar | Icons and labels | Icons only for a one-row toolbar. |
+| Suggestions while typing | On | Off if you never want the pop-up. |
+| Status bar figures | Sum, average, count | Add minimum, maximum or filled cells. |
+| CSV delimiter, byte order mark | `;`, on | What Excel expects where the comma is the decimal mark. |
+| Number locale, decimal separator | System | How `1 234,56` is read and results are written. |
+| Show the button in reading view | Off | The Live Preview button is always there; this adds it to reading view. It never appears in a PDF. |
 
 ## What it deliberately does not do
 
@@ -32,91 +151,27 @@ Markdown tables cannot express these, so the plugin does not pretend otherwise:
 | Spreadsheet feature | Why not |
 | --- | --- |
 | Row 1 as data | GFM requires a header row. Row 1 is the header, always. |
-| Merged cells | No GFM equivalent. There is no button for it. |
-| Multi-line cell content | A GFM cell is one line. Text wrap in the grid is visual only. |
-| Per-cell alignment | GFM aligns per column. The alignment buttons apply to the whole column. |
-| Cell colours and fonts | No GFM equivalent. |
-| Number formats | A cell is text. Formatting a number rewrites the cell's content. |
-| Live formulas | No GFM equivalent. `Calculate` inserts a value, once, and it does not update. |
+| Merged cells | No GFM equivalent. |
+| Line breaks in a cell | A GFM cell is one line, and `<br>` would be HTML. Wrapping in the grid is visual only. |
+| Per-cell alignment | GFM aligns whole columns. The alignment buttons apply to the column. |
+| Cell colours and fonts | No GFM equivalent — and showing them only in the grid would make it disagree with the note. |
+| Live formulas everywhere | Formulas recalculate inside the grid; elsewhere the cell holds the last value. |
 
-Column widths, row heights, wrap flags and freeze settings are cosmetic and live in the plugin's
-own data, not in your note. Move the note to another vault and it stays perfectly readable — just
-without the remembered sizes.
-
-## Getting started
-
-1. Put the cursor in a Markdown table.
-2. Click the table's button in Live Preview, the spreadsheet icon in the left sidebar, or run
-   **Open table as a spreadsheet** from the command palette or the right-click menu.
-3. Edit. In automatic save mode the note is updated shortly after you stop typing.
-
-### Keys inside the grid
-
-| Key | Action |
-| --- | --- |
-| Arrows | Move |
-| Shift+arrows | Extend the selection |
-| Ctrl/Cmd+arrows | Jump to the edge of the data |
-| Home / End | First column / last used column of the row |
-| Ctrl/Cmd+Home / End | First cell / last used cell |
-| Tab / Shift+Tab | Next / previous cell |
-| Enter / Shift+Enter | Down / up |
-| Just type | Replace the cell; the arrows then commit and move on, as in Excel |
-| F2, or double-click | Edit the cell; the arrows move the caret (F2 again switches) |
-| Esc | Cancel the edit |
-| Delete | Clear the selected cells |
-| Ctrl/Cmd+C / X / V | Copy, cut, paste as tab-separated text |
-| Ctrl/Cmd+A | Select the used range |
-| Ctrl/Cmd+Z / Y | Undo, redo (the grid keeps its own history) |
-| Ctrl/Cmd+S | Write back to the note |
-| Ctrl/Cmd+B / I | Bold, italic — `**x**`/`__x__` and `*x*`/`_x_` are both recognised |
-| Ctrl/Cmd+D | Fill down (a single row copies the row above) |
-
-Copy and paste use tab-separated text, so a range moves between the grid and Excel, LibreOffice or
-Google Sheets in both directions. A Markdown table copied out of a note pastes as a table, and a
-single value pasted onto a range fills it.
-
-Click a column letter or row number to select it; Shift+click or drag across them for several.
-In rendered cells, Ctrl/Cmd+click follows a link in a new tab.
-
-### Resizing
-
-Drag the border in the column or row header. Double-click a border to fit the content. Select
-several columns or rows first to size them all alike. `Table ▸ Column width` takes an exact number.
+Column widths, row heights, wrapping, freezing, zoom and hidden columns are cosmetic and live in the
+plugin's own data, not in your note.
 
 ## Things worth knowing
 
-- **Undo in the note is coarse.** The grid has its own undo stack. Obsidian's undo in the note
-  knows nothing about it, so after a write, Ctrl+Z in the note undoes the whole write as one step.
-- **A sparse table gets a warning.** A value in `Z400` forces every cell above and to the left of
-  it to be written, because GFM tables are always rectangular. You will be told how many empty
-  cells that adds, and offered `Shrink to actual data`.
-- **The last ten versions are kept.** `Table ▸ Restore a version` lists them — the table as it was
-  when the grid opened, each save, and in manual save mode the changes of a tab closed without
-  saving. Picking one shows a line diff against what the grid holds now, and restoring only
-  replaces the grid — nothing reaches the note until the next save.
-- **A dotted date stays a date.** `07.07.2026` is not a number, so it exports to Excel as text
-  rather than losing its separators.
-- **`&nbsp;` in a cell comes from the note, not from here.** Tables pasted from a web page or from
-  Word often carry that HTML entity, and the plugin never adds or removes one. Rendered mode shows
-  it as the space it is; `Data ▸ Find and replace` clears it out if you would rather it were gone.
-- **Filtering is display-only.** Hidden rows are still written back.
-- **Desktop only** in this version.
-- **Aimed at tables up to roughly 500 rows.** There is no virtualization; the grid stops growing
-  at 2000 rows and 128 columns.
-
-## Settings worth changing
-
-- **Save mode** — automatic by default. Switch to manual if your vault is under Git or Obsidian
-  Sync and you would rather not have a revision per keystroke.
-- **Anchor strategy** — how hard to try before offering to add a permanent `^grid-xxxx` marker to
-  your note. Nothing is added without asking.
-- **CSV delimiter and byte order mark** — a semicolon and a BOM by default, which is what Excel
-  needs in locales that use the comma as a decimal mark.
-- **Number locale and decimal separator** — how `1 234,56` is read and how results are written.
-- **Cell display** — rendered by default. Raw is faster on a very wide table.
-- **Show a button on tables while editing** — on by default, in Live Preview. A second toggle adds
-  it to reading view too; it never appears in an exported PDF.
+- **Desktop only for now.** A mobile version is planned.
+- **Aimed at tables up to roughly 500 rows.** There is no virtualization; the grid stops growing at
+  2000 rows and 128 columns.
+- **Undo in the note is coarse.** After a write, Ctrl+Z in the note undoes the whole write as one step.
+- **A sparse table gets a warning.** A value in `Z400` forces every cell above and left of it to be
+  written; you are told how many empty cells that adds and offered `Shrink to actual data`.
+- **A dotted date stays a date.** `07.07.2026` is not a number, so it exports to Excel as text.
+- **`&nbsp;` comes from the note**, usually from a table pasted from the web or Word. `Data ▸ Tools ▸
+  Change text` replaces it with spaces.
+- **Tables inside callouts and block quotes** cannot be opened yet.
 
 ## No network, no telemetry
 
@@ -128,33 +183,29 @@ dependencies.
 ```bash
 npm install
 npm run dev     # watch build
-npm run check   # styles + typecheck + lint + tests + production build
+npm run check   # styles + typecheck + lint + tests + production build — what CI runs
 npm test
 ```
 
-`npm run check` is what CI runs. The Obsidian ESLint plugin is blocking at zero errors and zero
-warnings.
+The Obsidian ESLint plugin is blocking at zero errors and zero warnings. `styles.css` is generated
+from `src/styles.src.css` by `scripts/gen-styles.mjs` and committed; CI fails if it is stale.
 
 Releasing is `node scripts/bump-version.mjs <semver>`, then pushing a tag named exactly like the
-version — `0.2.0`, never `v0.2.0`. A workflow does the rest. See `RELEASING.md` for what Obsidian
-expects and how to recover from a bad release.
-
-`styles.css` is generated from `src/styles.src.css` by `scripts/gen-styles.mjs` and committed; CI
-fails if it is stale.
+version — `0.2.0`, never `v0.2.0`. A workflow does the rest; see `RELEASING.md`.
 
 - `docs/design` — the specification this implements.
 - `docs/DECISIONS.md` — where the implementation departs from it, and why.
 - `docs/HANDOFF.md` — current state, what has never run inside Obsidian, known gaps.
-- `RELEASING.md` — release and store-submission procedure.
 - `CLAUDE.md` — the invariants and Obsidian conventions this code is built on.
+
+The screenshots are rendered from the plugin's real view code in a headless browser, with mock data.
 
 ## Third-party attribution
 
-None. There are no runtime dependencies. The build-time tools (esbuild, TypeScript, ESLint,
-`eslint-plugin-obsidianmd`, Vitest) are all MIT-licensed and are not bundled into `main.js`.
-
-The design credits `@tgrosinger/md-advanced-tables` and `ganesshkumar/obsidian-table-editor` (both
-MIT) as prior art; see `docs/DECISIONS.md` for why neither ended up as a dependency.
+None at runtime. The build-time tools (esbuild, TypeScript, ESLint, `eslint-plugin-obsidianmd`,
+Vitest) are MIT-licensed and not bundled into `main.js`. The design credits
+`@tgrosinger/md-advanced-tables` and `ganesshkumar/obsidian-table-editor` (both MIT) as prior art;
+see `docs/DECISIONS.md` for why neither became a dependency.
 
 ## Licence
 

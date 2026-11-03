@@ -98,7 +98,16 @@ function delimiterCell(width: number, align: Align): string {
  * The one-space padding around every cell is load-bearing: it guarantees a cell ending in
  * a backslash can never swallow the closing pipe on re-read.
  */
-export function serializeTable(model: GridModel): string {
+export interface SerializeOptions {
+	/**
+	 * No alignment padding: `| a | b |`. Every cell keeps exactly one space either side, which is
+	 * what keeps a trailing backslash from escaping the pipe. Aligned tables rewrite every line when
+	 * one cell grows, which is a whole-table diff in Git; compact ones change only the edited row.
+	 */
+	compact?: boolean;
+}
+
+export function serializeTable(model: GridModel, options: SerializeOptions = {}): string {
 	const cols = Math.max(model.usedRange.cols, 1);
 	// A GFM table is header + alignment row at minimum.
 	const rows = Math.max(model.usedRange.rows, 1);
@@ -113,12 +122,18 @@ export function serializeTable(model: GridModel): string {
 	const widths: number[] = [];
 	for (let c = 0; c < cols; c++) {
 		let w = MIN_PAD_WIDTH;
-		for (let r = 0; r < rows; r++) w = Math.max(w, displayWidth(matrix[r][c]));
+		if (!options.compact) for (let r = 0; r < rows; r++) w = Math.max(w, displayWidth(matrix[r][c]));
 		widths.push(Math.min(w, MAX_PAD_WIDTH));
 	}
 
 	const out: string[] = [];
 	const alignFor = (c: number): Align => model.colAlign[c] ?? null;
+	if (options.compact) {
+		out.push("| " + matrix[0].join(" | ") + " |");
+		out.push("| " + widths.map((w, c) => delimiterCell(w, alignFor(c))).join(" | ") + " |");
+		for (let r = 1; r < rows; r++) out.push("| " + matrix[r].join(" | ") + " |");
+		return out.map((l) => l.replace(/[ \t]+$/, "")).join("\n") + "\n";
+	}
 
 	out.push("| " + matrix[0].map((cell, c) => pad(cell, widths[c], alignFor(c))).join(" | ") + " |");
 	out.push("| " + widths.map((w, c) => delimiterCell(w, alignFor(c))).join(" | ") + " |");

@@ -10,6 +10,8 @@ export default defineConfig([
 		"esbuild.config.mjs",
 		"eslint.config.mjs",
 		"vitest.config.mts",
+		// A dev-only harness that renders the README screenshots in a browser, not plugin code.
+		"tools/**",
 	]),
 	...obsidianmd.configs.recommended,
 	{

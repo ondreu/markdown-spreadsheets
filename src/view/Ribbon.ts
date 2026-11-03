@@ -43,6 +43,8 @@ export interface RibbonOptions {
 	/** Persisted by the caller, so a collapsed toolbar stays collapsed across sessions. */
 	onCollapseChange?(collapsed: boolean): void;
 	collapsed?: boolean;
+	/** Every button as an icon with its label in the tooltip — the compact toolbar. */
+	iconsOnly?: boolean;
 }
 
 interface ButtonRef {
@@ -86,6 +88,7 @@ export class Ribbon {
 
 	mount(parent: HTMLElement): void {
 		this.containerEl = parent.createDiv({ cls: "mds-ribbon" });
+		this.containerEl.toggleClass("is-icons-only", this.opts.iconsOnly === true);
 		this.barEl = this.containerEl.createDiv({ cls: "mds-ribbon-bar" });
 		this.tabStripEl = this.barEl.createDiv({ cls: "mds-ribbon-tabs", attr: { role: "tablist" } });
 
@@ -191,10 +194,11 @@ export class Ribbon {
 		const tab = this.tabs.find((t) => t.id === this.activeTab);
 		if (!tab) return;
 		for (const group of tab.groups) {
+			// Label under its actions, the way Office groups read: the eye lands on the buttons first.
 			const groupEl = this.panelEl.createDiv({ cls: "mds-ribbon-group" });
-			groupEl.createDiv({ cls: "mds-ribbon-group-label", text: group.label });
 			const itemsEl = groupEl.createDiv({ cls: "mds-ribbon-items" });
 			for (const item of group.items) this.renderItem(itemsEl, item);
+			groupEl.createDiv({ cls: "mds-ribbon-group-label", text: group.label });
 		}
 	}
 
@@ -242,7 +246,7 @@ export class Ribbon {
 			this.numbers.set(item.id, input);
 			return;
 		}
-		this.renderButton(parent, item.action, false);
+		this.renderButton(parent, item.action, this.opts.iconsOnly === true);
 	}
 
 	private renderButton(parent: HTMLElement, action: RibbonAction, iconOnly: boolean): void {
@@ -289,7 +293,7 @@ export class Ribbon {
 		if (!tab) return;
 		for (const group of tab.groups) {
 			for (const item of group.items) {
-				if (item.kind === "button") this.patchAction(item.action, false);
+				if (item.kind === "button") this.patchAction(item.action, this.opts.iconsOnly === true);
 				else if (item.kind === "cluster") for (const action of item.actions) this.patchAction(action, true);
 				else if (item.kind === "number") {
 					this.numberItems.set(item.id, item);

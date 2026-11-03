@@ -258,6 +258,24 @@ describe("Writer.addBlockId", () => {
 	});
 });
 
+describe("Writer.reformatAll", () => {
+	it("rewrites every table and leaves the text between them alone", async () => {
+		const text = "# A\r\n\r\n|a|b|\r\n|-|-|\r\n|1|2|\r\n\r\nMiddle.\r\n\r\n| x |\r\n| --- |\r\n| 1   |\r\n";
+		const vault = new FakeVault(text);
+		const writer = new Writer(vault as unknown as Vault);
+		const n = await writer.reformatAll(FILE, (t) => serializeTable(parseTable(t)));
+		expect(n).toBe(2);
+		expect(vault.text).toBe("# A\r\n\r\n| a   | b   |\r\n| --- | --- |\r\n| 1   | 2   |\r\n\r\nMiddle.\r\n\r\n| x   |\r\n| --- |\r\n| 1   |\r\n");
+	});
+
+	it("does not touch a note whose tables are already formatted", async () => {
+		const vault = new FakeVault(NOTE);
+		const writer = new Writer(vault as unknown as Vault);
+		await writer.reformatAll(FILE, (t) => t);
+		expect(vault.writes).toBe(0);
+	});
+});
+
 describe("regionHash", () => {
 	it("ignores trailing whitespace and line-ending differences", () => {
 		expect(regionHash("| A |\n| --- |\n")).toBe(regionHash("| A |   \r\n| --- |\r\n"));

@@ -281,3 +281,54 @@ describe("buildXlsx", () => {
 		expect(Array.from(again)).toEqual(Array.from(bytes));
 	});
 });
+
+describe("formula cells in exports", () => {
+	const model = parseTable(
+		"| Item | Qty |\n| --- | ---: |\n| a | 2 |\n| b | 3 |\n| **Total** | **5** %%=avg(B2:B3; 1)%% |\n| bad | 7 %%=1 +%% |\n| err | #DIV/0! %%=1/0%% |\n",
+	);
+	/** The archive is stored, not deflated, so its XML parts can be searched as text directly. */
+	const unzip = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
+
+	it("CSV writes the display value, with or without its Markdown", () => {
+		const raw = buildCsv(model, { delimiter: ";", bom: false, content: "raw", crlf: false }).split("\n");
+		expect(raw[3]).toBe("**Total**;**5**");
+		expect(raw[4]).toBe("bad;7");
+		const plain = buildCsv(model, { delimiter: ";", bom: false, content: "plain", crlf: false }).split("\n");
+		expect(plain[3]).toBe("Total;5");
+		expect(buildCsv(model, { delimiter: ";", bom: false, content: "raw", crlf: false })).not.toContain("%%");
+	});
+
+	it("XLSX writes the formula in Excel syntax with the cached value", () => {
+		const bytes = buildXlsx(
+			model,
+			{ sheetName: "T", content: "raw", detectNumbers: true, styleHeader: true, defaultColWidth: 120 },
+			AT,
+		);
+		const all = unzip(bytes);
+		expect(all).toContain('<c r="B4" s="2"><f>AVERAGE(B2:B3,1)</f><v>5</v></c>');
+		// A formula that does not parse goes out as its value only, never as a broken <f>.
+		expect(all).toContain('<c r="B5" s="2"><v>7</v></c>');
+		// An error display has no cached value; Excel computes it on load.
+		expect(all).toContain('<c r="B6" s="2"><f>1/0</f></c>');
+		expect(all).toContain('<calcPr fullCalcOnLoad="1"/>');
+		expect(all).not.toContain("%%");
+	});
+
+	it("XLSX writes the formula even when number detection is off", () => {
+		const bytes = buildXlsx(
+			model,
+			{ sheetName: "T", content: "plain", detectNumbers: false, styleHeader: true, defaultColWidth: 120 },
+			AT,
+		);
+		expect(unzip(bytes)).toContain("<f>AVERAGE(B2:B3,1)</f><v>5</v>");
+	});
+
+	it("leaves a formula-free workbook without calcPr", () => {
+		const bytes = buildXlsx(
+			parseTable("| A |\n| --- |\n| 1 |\n"),
+			{ sheetName: "T", content: "raw", detectNumbers: true, styleHeader: true, defaultColWidth: 120 },
+			AT,
+		);
+		expect(unzip(bytes)).not.toContain("calcPr");
+	});
+});

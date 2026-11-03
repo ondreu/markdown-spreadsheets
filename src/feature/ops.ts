@@ -2,6 +2,7 @@ import { addrKey, parseAddrKey } from "../model/address";
 import { getRaw, recomputeUsedRange, setRaw, type Align, type GridModel } from "../model/GridModel";
 import { parseNumber, type NumberParseOptions } from "../model/numbers";
 import type { TableLayout } from "../store/Sidecar";
+import { detectSeries, type SeriesFn } from "./series";
 
 export interface Rect {
 	r1: number;
@@ -153,6 +154,7 @@ export function insertCols(model: GridModel, layout: TableLayout, at: number, co
 		layout.colWidths = widths;
 	}
 	layout.wrapCols = layout.wrapCols.map((c) => (c >= at ? c + count : c));
+	if (layout.hiddenCols) layout.hiddenCols = layout.hiddenCols.map((c) => (c >= at ? c + count : c));
 	recomputeUsedRange(model);
 }
 
@@ -175,6 +177,12 @@ export function deleteCols(model: GridModel, layout: TableLayout, cols: number[]
 		.filter((c) => !doomed.has(c))
 		.map((c) => c - countBelow(doomed, c))
 		.sort((a, b) => a - b);
+	if (layout.hiddenCols) {
+		layout.hiddenCols = layout.hiddenCols
+			.filter((c) => !doomed.has(c))
+			.map((c) => c - countBelow(doomed, c))
+			.sort((a, b) => a - b);
+	}
 	if (layout.frozenCols > 0) {
 		layout.frozenCols = Math.max(0, layout.frozenCols - countBelow(doomed, layout.frozenCols));
 	}
@@ -190,6 +198,7 @@ export function moveCol(model: GridModel, layout: TableLayout, from: number, to:
 	const align = model.colAlign[from] ?? null;
 	const width = layout.colWidths[from];
 	const wrapped = layout.wrapCols.includes(from);
+	const hidden = layout.hiddenCols?.includes(from) ?? false;
 
 	deleteCols(model, layout, [from]);
 	const target = from < to ? to - 1 : to;
@@ -199,6 +208,8 @@ export function moveCol(model: GridModel, layout: TableLayout, from: number, to:
 	if (width !== undefined && layout.colWidths.length > 0) layout.colWidths[target] = width;
 	if (wrapped && !layout.wrapCols.includes(target)) layout.wrapCols.push(target);
 	layout.wrapCols.sort((a, b) => a - b);
+	if (hidden && layout.hiddenCols && !layout.hiddenCols.includes(target)) layout.hiddenCols.push(target);
+	layout.hiddenCols?.sort((a, b) => a - b);
 	recomputeUsedRange(model);
 }
 
@@ -407,8 +418,11 @@ export type FillDirection = "down" | "up" | "right" | "left";
 /**
  * Extends the source selection over the target area.
  *
- * A source of two or more numeric cells with a constant step continues the series, which is
- * what a spreadsheet user expects from the fill handle; anything else is copied verbatim.
+ * A source that `detectSeries` recognises continues as a series: two or more numbers, dates, day
+ * or month names or "text ending in a number" with a constant step, and a single date, name or
+ * text-with-number counting on by one step. A single plain number and anything else are repeated
+ * verbatim, which is what a spreadsheet user expects from the fill handle. Filling up or left
+ * runs the series backwards.
  */
 export function fillRange(
 	model: GridModel,
@@ -439,7 +453,8 @@ export function fillRange(
 
 interface Series {
 	values: string[];
-	numeric: { start: number; step: number } | null;
+	/** Value at a step index (0 = first source cell), or null to repeat `values`. */
+	at: SeriesFn | null;
 }
 
 function seriesFor(
@@ -455,17 +470,7 @@ function seriesFor(
 	for (let i = from; i <= to; i++) {
 		values.push(vertical ? getRaw(model, i, fixed) : getRaw(model, fixed, i));
 	}
-	const nums = values.map((v) => parseNumber(v, numberOpts));
-	if (values.length >= 2 && nums.every((n): n is number => n !== null)) {
-		const step = nums[1] - nums[0];
-		const constant = nums.every((n, i) => i === 0 || Math.abs(n - (nums[0] + step * i)) < 1e-9);
-		if (constant) return { values, numeric: { start: nums[0], step } };
-	}
-	if (values.length === 1 && nums[0] !== null) {
-		// A single numeric cell copies rather than counts, same as Excel without Ctrl.
-		return { values, numeric: null };
-	}
-	return { values, numeric: null };
+	return { values, at: detectSeries(values, numberOpts) };
 }
 
 function applySeries(
@@ -486,9 +491,9 @@ function applySeries(
 		const i = indices[n];
 		const offset = forward ? i - srcEnd : srcStart - i;
 		let value: string;
-		if (series.numeric) {
+		if (series.at) {
 			const stepsFromStart = forward ? len - 1 + offset : -offset;
-			value = trimFloat(series.numeric.start + series.numeric.step * stepsFromStart);
+			value = series.at(stepsFromStart);
 		} else {
 			const idx = forward ? (offset - 1) % len : (len - (offset % len)) % len;
 			value = series.values[((idx % len) + len) % len];
@@ -496,11 +501,6 @@ function applySeries(
 		if (vertical) setRaw(model, i, fixed, value);
 		else setRaw(model, fixed, i, value);
 	}
-}
-
-function trimFloat(n: number): string {
-	const rounded = Math.round(n * 1e9) / 1e9;
-	return String(rounded);
 }
 
 function range(from: number, to: number): number[] {

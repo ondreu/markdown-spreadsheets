@@ -1,5 +1,6 @@
 import { getRaw, type GridModel } from "../model/GridModel";
 import type { CsvDelimiter } from "../settings";
+import { stripFormula } from "./formula";
 
 export interface CsvOptions {
 	delimiter: CsvDelimiter;
@@ -84,7 +85,8 @@ export function buildCsv(model: GridModel, options: CsvOptions): string {
 	for (let r = 0; r < Math.max(rows, 1); r++) {
 		const fields: string[] = [];
 		for (let c = 0; c < Math.max(cols, 1); c++) {
-			const raw = getRaw(model, r, c);
+			// A formula cell exports its value; the formula is Obsidian-only text (`%%=…%%`).
+			const raw = stripFormula(getRaw(model, r, c));
 			fields.push(csvField(options.content === "plain" ? plainText(raw) : raw, options.delimiter));
 		}
 		lines.push(fields.join(options.delimiter));

@@ -6,3 +6,5 @@ main.js.map
 coverage/
 .vitest/
 .eslintcache
+tools/screenshots/bundle.js
+tools/screenshots/icons.js

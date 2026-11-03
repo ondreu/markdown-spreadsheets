@@ -1,0 +1,19 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>
+body { margin: 0; font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--text-normal); background: var(--background-primary);
+ --font-ui-small: 13px; --font-ui-smaller: 12px; --font-ui-medium: 15px; --font-semibold: 600; --font-normal: 400; --font-medium: 500;
+ --radius-s: 4px; --radius-m: 8px; --font-monospace: "JetBrains Mono", Menlo, monospace;
+ --shadow-s: 0 1px 2px rgba(0,0,0,.08); --shadow-l: 0 8px 24px rgba(0,0,0,.16); --size-2-1: 2px; --size-2-2: 4px; --size-2-3: 6px; --icon-s: 16px;
+ --text-on-accent: #fff; --interactive-accent: hsl(258, 88%, 66%); --interactive-accent-hover: hsl(258, 88%, 60%); --text-accent: hsl(258, 70%, 55%);
+ --background-modifier-active-hover: hsla(258, 88%, 66%, 0.15); --text-selection: hsla(258, 88%, 66%, 0.18); --background-modifier-border-focus: hsla(258,88%,66%,.5);
+ --color-yellow: #e0ac00; --background-modifier-error-hover: rgba(233,49,71,.1); --text-error: #e93147; --text-warning: #e08b00; --background-modifier-success: rgba(8,185,78,.12); }
+body.theme-light { --background-primary: #ffffff; --background-primary-alt: #fafafa; --background-secondary: #f6f6f6; --background-modifier-border: #e3e3e3; --background-modifier-border-hover: #c8c8c8; --background-modifier-hover: rgba(0,0,0,0.06); --background-modifier-form-field: #fff; --text-normal: #222; --text-muted: #5c5c5c; --text-faint: #a0a0a0; }
+body.theme-dark { --background-primary: #1e1e1e; --background-primary-alt: #242424; --background-secondary: #262626; --background-modifier-border: #363636; --background-modifier-border-hover: #4a4a4a; --background-modifier-hover: rgba(255,255,255,0.07); --background-modifier-form-field: #2a2a2a; --text-normal: #dadada; --text-muted: #a3a3a3; --text-faint: #6f6f6f; --text-accent: hsl(258, 88%, 76%); }
+button { height: 30px; font: inherit; color: inherit; }
+select.dropdown, input { font: inherit; color: var(--text-normal); background: var(--background-modifier-form-field); border: 1px solid var(--background-modifier-border); border-radius: 4px; }
+.svg-icon { width: 16px; height: 16px; stroke-width: 1.75; }
+#view { width: 1180px; height: 560px; display: flex; flex-direction: column; border: 1px solid var(--background-modifier-border); }
+.view-content { flex: 1 1 auto; min-height: 0; }
+.mds-formula-input { height: 26px; padding: 0 8px; }
+</style>
+<link rel="stylesheet" href="../../styles.css"></head><body class="theme-light"><div id="view"></div><script src="icons.js"></script><script src="bundle.js"></script></body></html>

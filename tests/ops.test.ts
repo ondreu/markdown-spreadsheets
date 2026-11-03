@@ -60,6 +60,19 @@ describe("insertRows", () => {
 	});
 });
 
+describe("hidden columns follow structural changes (§8.4)", () => {
+	it("shift on insert, drop and close up on delete, travel with a move", () => {
+		const model = parseTable(TABLE);
+		const l = layout({ hiddenCols: [1, 2] });
+		insertCols(model, l, 1, 1);
+		expect(l.hiddenCols).toEqual([2, 3]);
+		deleteCols(model, l, [2]);
+		expect(l.hiddenCols).toEqual([2]);
+		moveCol(model, l, 2, 0);
+		expect(l.hiddenCols).toEqual([0]);
+	});
+});
+
 describe("deleteRows", () => {
 	it("closes the gap", () => {
 		const model = parseTable(TABLE);

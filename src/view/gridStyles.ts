@@ -32,6 +32,8 @@ export interface GeometrySpec {
 	/** Total rows currently in the DOM, so freeze offsets stay in range. */
 	rowCount: number;
 	colCount: number;
+	/** Columns hidden in the grid take no room in the freeze offsets. */
+	hiddenCols?: number[];
 }
 
 export type GeometryMode = "stylesheet" | "inline";
@@ -159,7 +161,9 @@ export class GridStyles {
 
 	private colOffset(spec: GeometrySpec, col: number): number {
 		let sum = 0;
+		const hidden = spec.hiddenCols ?? [];
 		for (let c = 0; c < col; c++) {
+			if (hidden.includes(c)) continue;
 			const w = spec.colWidths[c];
 			sum += w !== undefined && w > 0 ? w : spec.colDefault;
 		}

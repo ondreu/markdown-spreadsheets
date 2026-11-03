@@ -3,6 +3,7 @@ import { getRaw, type Align, type GridModel } from "../model/GridModel";
 import { parseNumber, type NumberParseOptions } from "../model/numbers";
 import type { TableLayout } from "../store/Sidecar";
 import { plainText } from "./exportCsv";
+import { parseFormulaCell, toExcelFormula } from "./formula";
 import { buildZip, type ZipEntry } from "./zip";
 
 export interface XlsxOptions {
@@ -103,7 +104,21 @@ export function styleIndex(align: Align, bold: boolean, wrap: boolean): number {
 	return (wrap ? 6 : 0) + (bold ? 3 : 0) + alignmentIndex(align);
 }
 
-function sheetXml(model: GridModel, options: XlsxOptions): string {
+/**
+ * A formula cell becomes a real Excel formula with its computed value cached in `<v>`, so the
+ * workbook shows numbers even in a viewer that never recalculates. The formula is written whether
+ * or not number detection is on — its value is a number by construction. A display that is not a
+ * number (an error code) is written without `<v>`, and `fullCalcOnLoad` makes Excel compute it.
+ */
+function formulaCellXml(ref: string, style: number, expr: string, text: string, numberOpts?: NumberParseOptions): string | null {
+	const formula = toExcelFormula(expr);
+	if (formula === null) return null;
+	const num = parseNumber(text, numberOpts);
+	const cached = num === null ? "" : `<v>${num}</v>`;
+	return `<c r="${ref}" s="${style}"><f>${xmlEscape(formula)}</f>${cached}</c>`;
+}
+
+function sheetXml(model: GridModel, options: XlsxOptions): { xml: string; hasFormula: boolean } {
 	const rows = Math.max(model.usedRange.rows, 1);
 	const cols = Math.max(model.usedRange.cols, 1);
 	const layout = options.layout;
@@ -116,15 +131,27 @@ function sheetXml(model: GridModel, options: XlsxOptions): string {
 	}
 
 	const body: string[] = [];
+	let hasFormula = false;
 	for (let r = 0; r < rows; r++) {
 		const cells: string[] = [];
 		for (let c = 0; c < cols; c++) {
-			const raw = getRaw(model, r, c);
-			if (raw.trim() === "") continue;
+			const cellRaw = getRaw(model, r, c);
+			if (cellRaw.trim() === "") continue;
+			const formula = parseFormulaCell(cellRaw);
+			const raw = formula === null ? cellRaw : formula.display;
 			const text = options.content === "plain" ? plainText(raw) : raw;
 			const ref = `${colName(c)}${r + 1}`;
 			const bold = options.styleHeader && r === 0;
 			const style = styleIndex(model.colAlign[c] ?? null, bold, layout?.wrapCols.includes(c) ?? false);
+			if (formula !== null) {
+				const xml = formulaCellXml(ref, style, formula.expr, text, options.numberOpts);
+				if (xml !== null) {
+					cells.push(xml);
+					hasFormula = true;
+					continue;
+				}
+				if (text.trim() === "") continue;
+			}
 			const num = options.detectNumbers ? parseNumber(text, options.numberOpts) : null;
 			if (num !== null) {
 				cells.push(`<c r="${ref}" s="${style}"><v>${num}</v></c>`);
@@ -145,7 +172,8 @@ function sheetXml(model: GridModel, options: XlsxOptions): string {
 			: "";
 
 	const dimension = `A1:${colName(cols - 1)}${rows}`;
-	return `${XML_HEADER}<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="${dimension}"/><sheetViews><sheetView workbookViewId="0">${pane}</sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/><cols>${colDefs.join("")}</cols><sheetData>${body.join("")}</sheetData></worksheet>`;
+	const xml = `${XML_HEADER}<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="${dimension}"/><sheetViews><sheetView workbookViewId="0">${pane}</sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/><cols>${colDefs.join("")}</cols><sheetData>${body.join("")}</sheetData></worksheet>`;
+	return { xml, hasFormula };
 }
 
 /** Excel rejects sheet names containing these, and silently truncates past 31 characters. */
@@ -158,6 +186,9 @@ export function sanitizeSheetName(name: string): string {
 export function buildXlsx(model: GridModel, options: XlsxOptions, at: Date): Uint8Array {
 	const encoder = new TextEncoder();
 	const sheet = sanitizeSheetName(options.sheetName);
+	const sheetPart = sheetXml(model, options);
+	// Only with formulas, so a formula-free export stays byte-identical to what it always was.
+	const calcPr = sheetPart.hasFormula ? '<calcPr fullCalcOnLoad="1"/>' : "";
 
 	const files: Array<{ path: string; text: string }> = [
 		{
@@ -170,14 +201,14 @@ export function buildXlsx(model: GridModel, options: XlsxOptions, at: Date): Uin
 		},
 		{
 			path: "xl/workbook.xml",
-			text: `${XML_HEADER}<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${xmlEscape(sheet)}" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+			text: `${XML_HEADER}<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${xmlEscape(sheet)}" sheetId="1" r:id="rId1"/></sheets>${calcPr}</workbook>`,
 		},
 		{
 			path: "xl/_rels/workbook.xml.rels",
 			text: `${XML_HEADER}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
 		},
 		{ path: "xl/styles.xml", text: stylesXml() },
-		{ path: "xl/worksheets/sheet1.xml", text: sheetXml(model, options) },
+		{ path: "xl/worksheets/sheet1.xml", text: sheetPart.xml },
 	];
 
 	const entries: ZipEntry[] = files.map((f) => ({ path: f.path, data: encoder.encode(f.text) }));

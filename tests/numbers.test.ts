@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatNumber, isNumeric, parseNumber, stripInlineMarkdown } from "../src/model/numbers";
+import { formatNumber, isNumeric, parseNumber, stripInlineMarkdown, stripObsidianComments } from "../src/model/numbers";
 
 describe("stripInlineMarkdown", () => {
 	it("removes balanced wrappers", () => {
@@ -101,5 +101,22 @@ describe("formatNumber", () => {
 
 	it("falls back gracefully on a bad locale", () => {
 		expect(formatNumber(1.5, 1, "not a locale")).toBe("1.5");
+	});
+});
+
+describe("Obsidian comments", () => {
+	it("are stripped when closed, kept when not", () => {
+		expect(stripObsidianComments("1 %%a%% 2 %%b%%")).toBe("1  2 ");
+		expect(stripObsidianComments("50%%")).toBe("50%%");
+		expect(stripObsidianComments("plain")).toBe("plain");
+	});
+
+	it("do not stop a formula cell from counting as its value", () => {
+		expect(parseNumber("1 250 %%=SUM(B2:B3)%%")).toBe(1250);
+		expect(parseNumber("**1 234,5** %%=A1*2%%")).toBeCloseTo(1234.5);
+		expect(parseNumber("%%=A1%% 7")).toBe(7);
+		expect(parseNumber("%%=A1%%")).toBeNull();
+		expect(parseNumber("#DIV/0! %%=1/0%%")).toBeNull();
+		expect(isNumeric("12 %%note%%")).toBe(true);
 	});
 });

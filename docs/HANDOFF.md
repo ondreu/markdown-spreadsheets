@@ -268,3 +268,61 @@ range, Ctrl+D, sort from the column header menu, and a range outline in place of
 - **Which icon names this Obsidian build has.** The fallback lists make a blank icon unlikely, but
   the first name that resolves is the one shown.
 - Everything from the earlier "Still not verified" lists that this round did not touch.
+
+## Round six: the feature list
+
+The user went through a list of proposed features and asked for all of them. In one go:
+
+- **Editing**: suggestions under the cell editor (`[[` notes, `#` tags, values of the column,
+  Alt+↓ pick list), Ctrl+Enter fill, Ctrl+; date and time, Ctrl+K link, Ctrl+G go to, an editor
+  that grows over its neighbours for long cells, duplicate and drag-to-move rows and columns, paste
+  transposed and as plain text, fill series for dates, weekdays, months and `Item 1`, find in
+  selection via Find next, text tools (case, trim, `&nbsp;`), split and merge columns, remove
+  duplicates, multi-key sort.
+- **Header filter**: the arrow in a column letter opens sort, a condition and a value checklist;
+  the letter itself still selects the column.
+- **Obsidian**: page preview on Ctrl-hover, pasted and dropped files become attachments and links,
+  notes dropped from the file explorer become links, open in a split, switch between the tables of
+  a note from the formula bar, find any table in the vault, reformat every table of a note, insert
+  a new table, import CSV/TSV/XLSX as a new table or into the grid.
+- **Calculate**: formulas in the cell as an Obsidian comment (decision 21), a totals row, compute a
+  column from an expression, column statistics, format numbers, configurable status-bar figures
+  that copy on click.
+- **Look**: a redesigned ribbon (decision 22) with an icons-only option, active row and column
+  tint, striped rows, column names next to the letters, zoom, the used-range edge, hidden columns,
+  remembered scroll and selection, autofit on first open.
+- **Safety and export**: a diff preview before saving in manual mode, restored cells highlighted,
+  a configurable number of versions, a notice for rows with a different cell count, a status hint
+  for repeated column names; HTML and JSON copy, JSON export, selection-only export, compact table
+  layout for small Git diffs.
+
+The pure logic was written in parallel by two sub-agents into new modules with their own tests
+(`transform.ts`, `series.ts`, `exportExtra.ts`, `formula.ts`, `importTable.ts`); the view
+integration, commands, settings and styles were done in the main session. Tests went from 217 to
+340-odd.
+
+Two real bugs surfaced while rendering the README screenshots: a click on any icon inside the grid
+did nothing (the target is an `<svg>`, and `asElement` returned null for it), and a formula display
+written in one locale was rewritten on every open in another. Both are fixed; the second is pinned
+by a test.
+
+### Screenshots and the browser harness
+
+`tools/screenshots/` bundles the real `GridView` against `obsidian-shim.ts` and drives it in
+headless Chromium; `node tools/screenshots/run.mjs` regenerates `docs/images`. Icons need
+`npm install --no-save lucide-static@0.460.0`. If Playwright resolves a browser that is not
+installed, pass `CHROMIUM=/path/to/chrome` (see `shoot.cjs`). Use it to see a view change working
+before taking it into Obsidian — it found both bugs above.
+
+### Mobile
+
+Wanted later (the user said so explicitly). Still `isDesktopOnly: true` per D7; the ribbon, the
+popovers and the drag interactions are the parts that would need a touch design.
+
+### Still not verified in Obsidian
+
+- The Live Preview button, page preview (`hover-link` with `registerHoverLinkSource`), file drops
+  from Obsidian's own file explorer (the drag payload is not documented; the code accepts a path,
+  a link text or an `obsidian://open` URL) and pasted images through `getAvailablePathForAttachment`.
+- `MarkdownRenderer` hiding `%%…%%` inside a rendered cell, as it does in a note.
+- Everything in the earlier lists.

@@ -258,3 +258,41 @@ Obsidian's hover, selection and accent-tint variables are translucent. Used as t
 sticky header they let the scrolling cells show through — the column letters of the active column
 were always see-through, because that column is always selected. Every cell and header now has an
 opaque base, and those colours are laid over it as a gradient layer.
+
+## 21. Formulas live in the cell, as an Obsidian comment
+
+**Design:** D2 — no live formulas; `Calculate` inserts a literal value once.
+
+**Built, at the user's request:** a cell may carry a formula after its value,
+`**22 140** %%=SUM(B2:B3)%%`. The value is always a literal, so the note reads correctly in any
+Markdown viewer; `%%…%%` is Obsidian's comment syntax, so Obsidian shows only the value and other
+viewers show the formula as text after it. Nothing GFM cannot express is written: a comment is text.
+
+Chosen over a comment line under the table (addresses go stale when rows are moved by hand) and over
+the plugin's own data (formulas lost with the vault's plugin data). The grid recalculates inside
+every `mutate()` — same undo step — and once when a table is opened; a value that changed while the
+note was edited elsewhere becomes a normal, undoable edit. References are shifted on row and column
+insert/delete like Excel's; sorting and moving rows do not rewrite them.
+
+A display that already parses to the computed number is left as written. Formatting is locale
+dependent, and rewriting `1 200` as `1,200` on a machine with another locale would turn every open
+there into an edit — two devices would rewrite the note back and forth. `tests/formula.test.ts`
+pins it.
+
+The cell editor and the formula bar show a formula cell as `=EXPR`, not as its raw Markdown. This
+is the one exception to "editing shows the raw Markdown" (invariant 7), and it is not a WYSIWYG
+round trip: `rawFromEdit` rebuilds the stored form from the typed text and keeps the value's
+emphasis layers; an untouched edit returns the original string byte for byte.
+
+## 22. The ribbon's group labels sit under their actions
+
+Supersedes the "group name above its actions" part of decision 9: the toolbar was redesigned as
+underlined tabs over a panel of flat buttons, labels underneath, as Office does — the eye lands on
+the buttons first. A setting reduces every button to its icon.
+
+## 23. Tools, imports and suggestions are pure modules
+
+Everything new that computes — `src/feature/transform.ts` (split, merge, de-duplicate, multi-key
+sort, case, statistics, number formats, filter predicates), `series.ts` (fill series),
+`formula.ts`, `importTable.ts`, `exportExtra.ts` — has no Obsidian import and is unit-tested. The
+view layer only wires them to the ribbon, the commands and the dialogs in `src/view/toolModals.ts`.

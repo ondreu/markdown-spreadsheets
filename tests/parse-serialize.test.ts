@@ -178,6 +178,22 @@ describe("serializeTable", () => {
 	});
 });
 
+describe("serializeTable, compact", () => {
+	it("writes one space per side and no alignment padding", () => {
+		const out = serializeTable(parseTable("| Long header | x |\n| ---: | :-: |\n| 1 |  |\n"), { compact: true });
+		expect(out).toBe("| Long header | x |\n| --: | :-: |\n| 1 |  |\n");
+	});
+
+	it("is stable and reads back to the same cells as the aligned form", () => {
+		const input = "| a \\| b | `c|d` | x\\ |\n| --- | :--- | ---: |\n| 1 | 2 | 3 |\n";
+		const once = serializeTable(parseTable(input), { compact: true });
+		expect(serializeTable(parseTable(once), { compact: true })).toBe(once);
+		const aligned = parseTable(serializeTable(parseTable(input)));
+		const compact = parseTable(once);
+		for (const [key, cell] of aligned.cells) expect(compact.cells.get(key)?.raw).toBe(cell.raw);
+	});
+});
+
 describe("escapeCell", () => {
 	it("escapes every pipe, including inside code spans", () => {
 		expect(escapeCell("`a|b`")).toBe("`a\\|b`");
