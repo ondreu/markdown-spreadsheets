@@ -78,6 +78,11 @@ export function scanTables(text: string): TableRegion[] {
 		if (next === undefined || !isDelimiterRow(next)) continue;
 		// The header row itself must not be an alignment row.
 		if (isDelimiterRow(line)) continue;
+		// GFM only recognises a table when the alignment row has exactly as many cells as the
+		// header. `a | b` over `---` is a setext heading, and treating it as a table would let a
+		// save rewrite the heading into one.
+		const headerCells = splitCells(line);
+		if (splitCells(next).length !== headerCells.length) continue;
 
 		const startLine = i;
 		let endLine = i + 1;
@@ -88,30 +93,42 @@ export function scanTables(text: string): TableRegion[] {
 			endLine = j;
 		}
 
-		const headerCells = splitCells(line);
 		const region: TableRegion = {
 			startLine,
 			endLine,
 			index: out.length,
 			headerHash: fnv1a(headerSignature(line)),
 			headerCells,
-			colCount: Math.max(headerCells.length, splitCells(next).length),
+			colCount: headerCells.length,
 			rowCount: endLine - startLine, // header + body, alignment row excluded
 			text: lines.slice(startLine, endLine + 1).join("\n"),
 		};
 		if (lastHeading !== undefined) region.precedingHeading = lastHeading;
 
-		const after = lines[endLine + 1];
-		if (after !== undefined) {
-			const id = BLOCK_ID.exec(after.trim());
-			if (id) region.blockId = id[1];
-		}
+		const id = blockIdAfter(lines, endLine);
+		if (id !== undefined) region.blockId = id;
 
 		out.push(region);
 		i = endLine;
 	}
 
 	return out;
+}
+
+/**
+ * The block ID that belongs to the table ending on `endLine`, if any.
+ *
+ * Obsidian's documentation puts the ID of a structured block — a table among them — on its own
+ * line after one blank line, and that is how `Writer.addBlockId` writes it. An ID on the line
+ * directly below the table is what earlier versions wrote, so both are read.
+ */
+export function blockIdAfter(lines: string[], endLine: number): string | undefined {
+	const direct = lines[endLine + 1];
+	if (direct === undefined) return undefined;
+	const candidate = direct.trim() === "" ? lines[endLine + 2] : direct;
+	if (candidate === undefined) return undefined;
+	const id = BLOCK_ID.exec(candidate.trim());
+	return id ? id[1] : undefined;
 }
 
 /** Short preview used by the "pick the right table" dialog (§7, layer 2). */

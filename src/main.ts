@@ -3,7 +3,6 @@ import {
 	Notice,
 	Plugin,
 	TFile,
-	setIcon,
 	setTooltip,
 	type Editor,
 	type MarkdownFileInfo,
@@ -17,6 +16,15 @@ import { Sidecar } from "./store/Sidecar";
 import { VIEW_TYPE_GRID } from "./view/constants";
 import { GridView, type GridViewState } from "./view/GridView";
 import { TablePickerModal } from "./view/modals";
+import { GRID_COMMANDS } from "./view/gridCommands";
+import { ImportModal, InsertTableModal, TableIndexModal, type VaultTable } from "./view/toolModals";
+import { Writer } from "./file/Writer";
+import { parseTable } from "./model/parse";
+import { serializeTable } from "./model/serialize";
+import { setRaw, createModel, recomputeUsedRange, type Align } from "./model/GridModel";
+import { readTableFile } from "./feature/tableFile";
+import { iconName, setIconSafe } from "./view/icons";
+import { livePreviewTableButton } from "./view/livePreviewButton";
 
 export default class MarkdownSpreadsheetsPlugin extends Plugin {
 	sidecar!: Sidecar;
@@ -27,6 +35,8 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 		await this.sidecar.load();
 
 		this.registerView(VIEW_TYPE_GRID, (leaf) => new GridView(leaf, this));
+		// Ctrl-hover on a link in a rendered cell shows Obsidian's page preview, as in a note.
+		this.registerHoverLinkSource(VIEW_TYPE_GRID, { display: "Markdown Spreadsheets", defaultMod: true });
 		this.addSettingTab(new MarkdownSpreadsheetsSettingTab(this.app, this));
 
 		// Persistent selection aggregate, Excel style (§12).
@@ -34,7 +44,7 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 		this.statusBarEl.addClass("markdown-spreadsheets-status");
 
 		// The left sidebar route, next to the command palette and the two context menus (§11).
-		this.addRibbonIcon("table", "Open table as a spreadsheet", () => {
+		this.addRibbonIcon(iconName("launcher"), "Open table as a spreadsheet", () => {
 			const info = this.activeMarkdownInfo();
 			if (info) {
 				void this.openFromEditor(info.editor, info.file);
@@ -48,6 +58,18 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 			new Notice("Open a note with a table first.");
 		});
 
+		// Live Preview, where tables are edited: a button on Obsidian's own table widget.
+		this.registerEditorExtension(
+			livePreviewTableButton({
+				enabled: () => this.sidecar.settings.showTableButton,
+				open: (file, text, line) => {
+					const region = regionAtLine(text, line);
+					if (region) void this.openRegion(file, anchorFromRegion(file.path, region));
+					else void this.openFirstTable(file);
+				},
+			}),
+		);
+		// Reading view only on request: it is also the path PDF export and embeds render through.
 		this.registerMarkdownPostProcessor((el, ctx) => this.decorateTables(el, ctx));
 
 		// No default hotkeys: `no-default-hotkeys` (§15.2). In-view keys live in the view's Scope.
@@ -100,6 +122,65 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 			},
 		});
 
+		for (const [id, name] of GRID_COMMANDS) {
+			this.addCommand({
+				id: `grid-${id}`,
+				name,
+				checkCallback: (checking) => {
+					const view = this.app.workspace.getActiveViewOfType(GridView);
+					if (!view) return false;
+					if (!checking) view.runAction(id);
+					return true;
+				},
+			});
+		}
+
+		this.addCommand({
+			id: "insert-table",
+			name: "Insert a new table and open it as a spreadsheet",
+			editorCheckCallback: (checking, editor, ctx) => {
+				const file = ctx.file;
+				if (!file) return false;
+				if (!checking) new InsertTableModal(this.app, (cols, rows, headers) => void this.insertTable(editor, file, cols, rows, headers)).open();
+				return true;
+			},
+		});
+
+		this.addCommand({
+			id: "import-table",
+			name: "Import a spreadsheet file as a new table",
+			editorCheckCallback: (checking, editor, ctx) => {
+				const file = ctx.file;
+				if (!file) return false;
+				if (checking) return true;
+				const files = this.app.vault.getFiles().filter((f) => ["csv", "tsv", "xlsx"].includes(f.extension.toLowerCase()));
+				new ImportModal(this.app, {
+					files,
+					target: "It is inserted into the note at the cursor and opened as a spreadsheet.",
+					onVaultFile: (picked) => void this.importAsTable(editor, file, picked.name, () => this.app.vault.readBinary(picked)),
+					onDiskFile: (picked) => void this.importAsTable(editor, file, picked.name, () => picked.arrayBuffer()),
+				}).open();
+				return true;
+			},
+		});
+
+		this.addCommand({
+			id: "reformat-all-tables",
+			name: "Reformat every table in this note",
+			checkCallback: (checking) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file || file.extension !== "md") return false;
+				if (!checking) void this.reformatAll(file);
+				return true;
+			},
+		});
+
+		this.addCommand({
+			id: "find-table",
+			name: "Find a table in the vault",
+			callback: () => void this.openTableIndex(),
+		});
+
 		this.addCommand({
 			id: "restore-previous-version",
 			name: "Restore previous version",
@@ -122,7 +203,7 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 				menu.addItem((item) =>
 					item
 						.setTitle("Open table as a spreadsheet")
-						.setIcon("table")
+						.setIcon(iconName("launcher"))
 						.onClick(() => void this.openRegion(file, anchorFromRegion(file.path, region))),
 				);
 			}),
@@ -134,7 +215,7 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 				menu.addItem((item) =>
 					item
 						.setTitle("Open table as a spreadsheet")
-						.setIcon("table")
+						.setIcon(iconName("launcher"))
 						.onClick(() => void this.openFirstTable(file)),
 				);
 			}),
@@ -176,15 +257,19 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 	/* ------------------------------------------------------- in-note button */
 
 	/**
-	 * Puts a hover button on every table rendered in a note.
+	 * Puts a hover button on every table rendered in reading view.
 	 *
 	 * Only the rendered DOM is touched — the note's text is never modified, which is what keeps
 	 * this on the right side of "the note is only marked up on explicit opt-in" (§7). The source
 	 * line comes from `getSectionInfo`, so the button opens exactly the table it sits on rather
 	 * than guessing an index.
+	 *
+	 * Off by default. Post processors also run for PDF export, embeds and hover previews, and a
+	 * button in a reading surface — let alone in an exported PDF — was the opposite of what was
+	 * wanted; `styles.css` hides it from print as a second line of defence.
 	 */
 	private decorateTables(el: HTMLElement, ctx: MarkdownPostProcessorContext): void {
-		if (!this.sidecar.settings.showTableButton) return;
+		if (!this.sidecar.settings.showTableButtonInReading) return;
 		// Depending on the render path the element handed to a post processor is either the block
 		// wrapper or the table itself, and `findAll` only looks at descendants.
 		const tables = el.tagName === "TABLE" ? [el] : el.findAll("table");
@@ -196,7 +281,7 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 			table.replaceWith(wrapper);
 			wrapper.append(table);
 			const btn = wrapper.createEl("button", { cls: "mds-table-launcher-btn", attr: { type: "button" } });
-			setIcon(btn.createSpan(), "table");
+			setIconSafe(btn.createSpan(), "launcher");
 			btn.createSpan({ text: "Edit" });
 			setTooltip(btn, "Open this table as a spreadsheet");
 			btn.addEventListener("click", (evt) => {
@@ -273,7 +358,80 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 			this.app,
 			tables.map((region) => ({ region, score: 0 })),
 			(picked) => void this.openRegion(file, anchorFromRegion(file.path, picked.region)),
+			{ title: "Choose a table", message: `This note has ${tables.length} tables. Pick the one to open.` },
 		).open();
+	}
+
+	/* ------------------------------------------------------ new tables */
+
+	/**
+	 * Puts a table block on its own lines at the cursor — a blank line either side, so it never
+	 * runs into a paragraph — saves the note, and opens the grid on it.
+	 */
+	private async insertBlock(editor: Editor, file: TFile, block: string): Promise<void> {
+		const line = editor.getCursor().line;
+		const current = editor.getLine(line);
+		const at = current.trim() === "" ? line : line + 1;
+		const before = at > 0 && editor.getLine(at - 1).trim() !== "" ? "\n" : "";
+		const lines = block.replace(/\n+$/, "");
+		const after = at < editor.lineCount() && (editor.getLine(at) ?? "").trim() !== "" ? "\n" : "";
+		const pos = at < editor.lineCount() ? { line: at, ch: 0 } : { line: at - 1, ch: editor.getLine(at - 1).length };
+		const text = at < editor.lineCount() ? `${before}${lines}\n${after}` : `\n${before}${lines}\n`;
+		editor.replaceRange(text, pos);
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		// The grid reads the file, so the editor's buffer has to reach the disk first.
+		if (view) await view.save();
+		const region = regionAtLine(editor.getValue(), at + (before === "" ? 0 : 1) + (at < editor.lineCount() ? 0 : 0));
+		const target = region ?? scanTables(editor.getValue()).find((r) => r.startLine >= at) ?? null;
+		if (target) await this.openRegion(file, anchorFromRegion(file.path, target));
+	}
+
+	private async insertTable(editor: Editor, file: TFile, cols: number, rows: number, headers: string[]): Promise<void> {
+		const model = createModel();
+		model.colAlign = Array.from({ length: cols }, (): Align => null);
+		for (let c = 0; c < cols; c++) setRaw(model, 0, c, headers[c] ?? "");
+		recomputeUsedRange(model);
+		model.usedRange = { rows: rows + 1, cols };
+		await this.insertBlock(editor, file, serializeTable(model, { compact: this.sidecar.settings.tableStyle === "compact" }));
+	}
+
+	private async importAsTable(editor: Editor, file: TFile, name: string, read: () => Promise<ArrayBuffer>): Promise<void> {
+		try {
+			const values = await readTableFile(name, await read());
+			if (values.length === 0) {
+				new Notice("The file has no data.");
+				return;
+			}
+			const model = createModel();
+			values.forEach((row, r) => row.forEach((v, c) => setRaw(model, r, c, v.replace(/\r?\n/g, " "))));
+			model.colAlign = Array.from({ length: Math.max(...values.map((r) => r.length)) }, (): Align => null);
+			recomputeUsedRange(model);
+			await this.insertBlock(editor, file, serializeTable(model, { compact: this.sidecar.settings.tableStyle === "compact" }));
+		} catch (error) {
+			new Notice(`Could not import ${name} — ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	/** Every table of the note through the serializer, in one write. Asks nothing: it was asked for. */
+	private async reformatAll(file: TFile): Promise<void> {
+		const compact = this.sidecar.settings.tableStyle === "compact";
+		const n = await new Writer(this.app.vault).reformatAll(file, (text) => serializeTable(parseTable(text), { compact }));
+		new Notice(n === 0 ? "Every table is already formatted." : `Reformatted ${n} ${n === 1 ? "table" : "tables"}.`);
+	}
+
+	/** Reads only the notes the metadata cache says contain a table. */
+	private async openTableIndex(): Promise<void> {
+		const tables: VaultTable[] = [];
+		for (const file of this.app.vault.getMarkdownFiles()) {
+			const sections = this.app.metadataCache.getFileCache(file)?.sections ?? [];
+			if (!sections.some((section) => section.type === "table")) continue;
+			for (const region of scanTables(await this.app.vault.cachedRead(file))) tables.push({ file, region });
+		}
+		if (tables.length === 0) {
+			new Notice("No tables found in this vault.");
+			return;
+		}
+		new TableIndexModal(this.app, tables, (picked) => void this.openRegion(picked.file, anchorFromRegion(picked.file.path, picked.region))).open();
 	}
 
 	/** Reuses an already open tab for the same table instead of stacking duplicates. */
@@ -287,7 +445,7 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 				return;
 			}
 		}
-		const leaf = this.app.workspace.getLeaf("tab");
+		const leaf = this.app.workspace.getLeaf(this.sidecar.settings.openIn === "split" ? "split" : "tab");
 		const state: GridViewState = { path: file.path, anchor };
 		await leaf.setViewState({ type: VIEW_TYPE_GRID, active: true, state: state as unknown as Record<string, unknown> });
 		await this.app.workspace.revealLeaf(leaf);

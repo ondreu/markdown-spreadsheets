@@ -42,9 +42,26 @@ function isWide(cp: number): boolean {
  *
  * Only `|` is escaped — see `unescapePipes` for why the other backslash sequences are
  * left alone. Newlines cannot exist in a GFM cell (§3), so they collapse to spaces.
+ *
+ * A pipe that already follows an odd run of backslashes is already escaped. The parser never
+ * produces one (it unescapes `\|`), but a person typing Markdown into a cell writes `a \| b` on
+ * purpose. Escaping that again gave `a \\| b` — an escaped backslash and a bare pipe — so the
+ * next read split the cell in two and shifted the rest of the row one column to the right.
  */
 export function escapeCell(raw: string): string {
-	return raw.replace(/\r?\n/g, " ").split("|").join("\\|");
+	const flat = raw.replace(/\r?\n/g, " ");
+	let out = "";
+	let backslashes = 0;
+	for (const ch of flat) {
+		if (ch === "|") {
+			out += backslashes % 2 === 0 ? "\\|" : "|";
+			backslashes = 0;
+			continue;
+		}
+		backslashes = ch === "\\" ? backslashes + 1 : 0;
+		out += ch;
+	}
+	return out;
 }
 
 function pad(text: string, width: number, align: Align): string {
@@ -81,7 +98,16 @@ function delimiterCell(width: number, align: Align): string {
  * The one-space padding around every cell is load-bearing: it guarantees a cell ending in
  * a backslash can never swallow the closing pipe on re-read.
  */
-export function serializeTable(model: GridModel): string {
+export interface SerializeOptions {
+	/**
+	 * No alignment padding: `| a | b |`. Every cell keeps exactly one space either side, which is
+	 * what keeps a trailing backslash from escaping the pipe. Aligned tables rewrite every line when
+	 * one cell grows, which is a whole-table diff in Git; compact ones change only the edited row.
+	 */
+	compact?: boolean;
+}
+
+export function serializeTable(model: GridModel, options: SerializeOptions = {}): string {
 	const cols = Math.max(model.usedRange.cols, 1);
 	// A GFM table is header + alignment row at minimum.
 	const rows = Math.max(model.usedRange.rows, 1);
@@ -96,12 +122,18 @@ export function serializeTable(model: GridModel): string {
 	const widths: number[] = [];
 	for (let c = 0; c < cols; c++) {
 		let w = MIN_PAD_WIDTH;
-		for (let r = 0; r < rows; r++) w = Math.max(w, displayWidth(matrix[r][c]));
+		if (!options.compact) for (let r = 0; r < rows; r++) w = Math.max(w, displayWidth(matrix[r][c]));
 		widths.push(Math.min(w, MAX_PAD_WIDTH));
 	}
 
 	const out: string[] = [];
 	const alignFor = (c: number): Align => model.colAlign[c] ?? null;
+	if (options.compact) {
+		out.push("| " + matrix[0].join(" | ") + " |");
+		out.push("| " + widths.map((w, c) => delimiterCell(w, alignFor(c))).join(" | ") + " |");
+		for (let r = 1; r < rows; r++) out.push("| " + matrix[r].join(" | ") + " |");
+		return out.map((l) => l.replace(/[ \t]+$/, "")).join("\n") + "\n";
+	}
 
 	out.push("| " + matrix[0].map((cell, c) => pad(cell, widths[c], alignFor(c))).join(" | ") + " |");
 	out.push("| " + widths.map((w, c) => delimiterCell(w, alignFor(c))).join(" | ") + " |");

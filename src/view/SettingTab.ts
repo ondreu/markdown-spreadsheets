@@ -1,6 +1,6 @@
 import { PluginSettingTab, Setting, type App } from "obsidian";
 import type MarkdownSpreadsheetsPlugin from "../main";
-import type { AnchorStrategy, CsvDelimiter, MarkdownSpreadsheetsSettings } from "../settings";
+import type { AnchorStrategy, CsvDelimiter, MarkdownSpreadsheetsSettings, StatusStat } from "../settings";
 
 export class MarkdownSpreadsheetsSettingTab extends PluginSettingTab {
 	constructor(
@@ -58,6 +58,45 @@ export class MarkdownSpreadsheetsSettingTab extends PluginSettingTab {
 					settings.confirmSparseWrite = value;
 					commit();
 				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Table layout in the note")
+			.setDesc(
+				"Aligned pads every column so the pipes line up in the source. Compact writes one space per side, so changing a cell changes only its own line — much smaller diffs in Git.",
+			)
+			.addDropdown((d) =>
+				d
+					.addOption("aligned", "Aligned")
+					.addOption("compact", "Compact")
+					.setValue(settings.tableStyle)
+					.onChange((value) => {
+						settings.tableStyle = value === "compact" ? "compact" : "aligned";
+						commit();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName("Preview before saving")
+			.setDesc("In manual save mode, show what is about to change in the note before writing it.")
+			.addToggle((t) =>
+				t.setValue(settings.previewBeforeSave).onChange((value) => {
+					settings.previewBeforeSave = value;
+					commit();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Versions kept per table")
+			.setDesc("For restoring an earlier version. One is recorded when a table is opened and as it is saved.")
+			.addSlider((s) =>
+				s
+					.setLimits(3, 50, 1)
+					.setValue(settings.maxBackups)
+					.onChange((value) => {
+						settings.maxBackups = value;
+						commit();
+					}),
 			);
 
 		new Setting(containerEl).setName("Finding the table again").setHeading();
@@ -124,13 +163,23 @@ export class MarkdownSpreadsheetsSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Show a button on tables in the note")
+			.setName("Show a button on tables while editing")
 			.setDesc(
-				"Adds a small button to the top right of every table while the pointer is over it, which opens that table in the spreadsheet editor. The note itself is never changed.",
+				"While editing a note, adds a small button to the top right of every table while the pointer is over it, which opens that table in the spreadsheet editor. The note itself is never changed.",
 			)
 			.addToggle((t) =>
 				t.setValue(settings.showTableButton).onChange((value) => {
 					settings.showTableButton = value;
+					commit();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Show the button in reading view too")
+			.setDesc("Reopen the note for this to take effect. It never appears in an exported PDF.")
+			.addToggle((t) =>
+				t.setValue(settings.showTableButtonInReading).onChange((value) => {
+					settings.showTableButtonInReading = value;
 					commit();
 				}),
 			);
@@ -155,6 +204,134 @@ export class MarkdownSpreadsheetsSettingTab extends PluginSettingTab {
 					.onChange((value) => {
 						const n = Number.parseInt(value, 10);
 						if (Number.isFinite(n)) settings.padCols = Math.max(0, Math.min(64, n));
+						commit();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName("Open the spreadsheet in")
+			.addDropdown((d) =>
+				d
+					.addOption("tab", "A new tab")
+					.addOption("split", "A split next to the note")
+					.setValue(settings.openIn)
+					.onChange((value) => {
+						settings.openIn = value === "split" ? "split" : "tab";
+						commit();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName("Fit columns on first open")
+			.setDesc("Size every column to its content the first time a table is opened in the grid.")
+			.addToggle((t) =>
+				t.setValue(settings.autofitOnFirstOpen).onChange((value) => {
+					settings.autofitOnFirstOpen = value;
+					commit();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Suggestions while typing")
+			.setDesc("Links after [[, tags after #, and values already used in the same column.")
+			.addToggle((t) =>
+				t.setValue(settings.autocomplete).onChange((value) => {
+					settings.autocomplete = value;
+					commit();
+				}),
+			);
+
+		new Setting(containerEl).setName("Appearance").setHeading();
+
+		new Setting(containerEl)
+			.setName("Toolbar")
+			.setDesc("Icons only keeps the toolbar to one short row; every name stays in the tooltip.")
+			.addDropdown((d) =>
+				d
+					.addOption("labels", "Icons and labels")
+					.addOption("icons", "Icons only")
+					.setValue(settings.ribbonStyle)
+					.onChange((value) => {
+						settings.ribbonStyle = value === "icons" ? "icons" : "labels";
+						commit();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName("Column names next to the letters")
+			.setDesc("Shows the Markdown header beside the column letter.")
+			.addToggle((t) =>
+				t.setValue(settings.headerNamesInLetters).onChange((value) => {
+					settings.headerNamesInLetters = value;
+					commit();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Highlight the active row and column")
+			.addToggle((t) =>
+				t.setValue(settings.highlightActiveLine).onChange((value) => {
+					settings.highlightActiveLine = value;
+					commit();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Striped rows")
+			.addToggle((t) =>
+				t.setValue(settings.zebraRows).onChange((value) => {
+					settings.zebraRows = value;
+					commit();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Status bar figures")
+			.setDesc("Which figures of the selection to show. Click a figure in the grid to copy it.");
+		const stats: Array<[StatusStat, string]> = [
+			["sum", "Sum"],
+			["average", "Average"],
+			["count", "Count"],
+			["counta", "Filled cells"],
+			["min", "Minimum"],
+			["max", "Maximum"],
+		];
+		for (const [key, label] of stats) {
+			new Setting(containerEl).setName(label).addToggle((t) =>
+				t.setValue(settings.statusStats.includes(key)).onChange((value) => {
+					const set = new Set(settings.statusStats);
+					if (value) set.add(key);
+					else set.delete(key);
+					settings.statusStats = stats.map(([k]) => k).filter((k) => set.has(k));
+					commit();
+				}),
+			);
+		}
+
+		new Setting(containerEl).setName("Dates").setHeading();
+
+		new Setting(containerEl)
+			.setName("Date format")
+			.setDesc("Inserted with Ctrl+; — a Moment.js format.")
+			.addMomentFormat((m) =>
+				m
+					.setDefaultFormat("YYYY-MM-DD")
+					.setValue(settings.dateFormat)
+					.onChange((value) => {
+						settings.dateFormat = value.trim() === "" ? "YYYY-MM-DD" : value;
+						commit();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName("Time format")
+			.setDesc("Inserted with Ctrl+Shift+;.")
+			.addMomentFormat((m) =>
+				m
+					.setDefaultFormat("HH:mm")
+					.setValue(settings.timeFormat)
+					.onChange((value) => {
+						settings.timeFormat = value.trim() === "" ? "HH:mm" : value;
 						commit();
 					}),
 			);

@@ -19,12 +19,26 @@ export interface TableLayout {
 	decimals: number;
 	/** Per-table override of the global default row height. */
 	rowHeightDefault?: number;
+	/** Columns hidden in the grid only; they are still written to the note. */
+	hiddenCols?: number[];
+	/** Grid zoom, 1 = 100 %. */
+	zoom?: number;
+	/** Where the grid was left, restored on the next open. */
+	view?: { scrollTop: number; scrollLeft: number; row: number; col: number };
 }
+
+/**
+ * Why a version was recorded. `opened` is the table as it stood when the grid was opened, `saved`
+ * is a write back, `unsaved` is a grid closed in manual save mode with changes never written.
+ * Entries from before this field existed are read as `saved`.
+ */
+export type BackupSource = "opened" | "saved" | "unsaved";
 
 export interface BackupEntry {
 	/** Epoch millis. */
 	at: number;
 	text: string;
+	source?: BackupSource;
 }
 
 export interface PluginData {
@@ -46,6 +60,7 @@ export function defaultLayout(settings: MarkdownSpreadsheetsSettings): TableLayo
 		colWidths: [],
 		rowHeights: {},
 		wrapCols: [],
+		hiddenCols: [],
 		// Row 0 is the markdown header, so freezing it is the sane default (§9).
 		frozenRows: 1,
 		frozenCols: 0,
@@ -108,12 +123,17 @@ export class Sidecar {
 		}, delayMs);
 	}
 
+	hasLayout(key: string): boolean {
+		return this.data.tables[key] !== undefined;
+	}
+
 	getLayout(key: string): TableLayout {
 		const stored = this.data.tables[key];
 		const layout = Object.assign({}, defaultLayout(this.data.settings), stored ?? {});
 		// Stored objects predate later fields, and a corrupt array would break rendering.
 		if (!Array.isArray(layout.colWidths)) layout.colWidths = [];
 		if (!Array.isArray(layout.wrapCols)) layout.wrapCols = [];
+		if (!Array.isArray(layout.hiddenCols)) layout.hiddenCols = [];
 		if (typeof layout.rowHeights !== "object" || layout.rowHeights === null) layout.rowHeights = {};
 		return layout;
 	}
@@ -144,14 +164,26 @@ export class Sidecar {
 	 * {@link BACKUP_COALESCE_MS} of the newest entry replace it instead of adding one, which keeps
 	 * the ten slots spread over the session. The entry keeps its original timestamp: it is still
 	 * "the state as of when this burst of editing started".
+	 *
+	 * Only a write coalesces into a write. The version recorded when the table was opened is the
+	 * one a person most often wants back — "what it was before I started" — and coalescing used
+	 * to overwrite it with the first autosave, 800 ms after the first keystroke.
 	 */
-	pushBackup(key: string, text: string, at: number): void {
+	pushBackup(key: string, text: string, at: number, source: BackupSource = "saved"): void {
 		const list = this.data.backups[key] ?? [];
 		const newest = list.length > 0 ? list[list.length - 1] : null;
 		if (newest && newest.text === text) return;
-		if (newest && at - newest.at < BACKUP_COALESCE_MS && at >= newest.at) newest.text = text;
-		else list.push({ at, text });
-		while (list.length > MAX_BACKUPS) list.shift();
+		const newestSource = newest?.source ?? "saved";
+		const coalesce =
+			newest !== null &&
+			source === "saved" &&
+			newestSource === "saved" &&
+			at - newest.at < BACKUP_COALESCE_MS &&
+			at >= newest.at;
+		if (newest && coalesce) newest.text = text;
+		else list.push({ at, text, source });
+		const cap = Math.max(1, Math.min(100, Math.round(this.data.settings.maxBackups || MAX_BACKUPS)));
+		while (list.length > cap) list.shift();
 		this.data.backups[key] = list;
 		this.queueSave();
 	}

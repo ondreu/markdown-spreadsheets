@@ -12,7 +12,9 @@ These are the invariants the design is built on. Breaking one is a design change
 so raise it rather than quietly doing it.
 
 1. **The note is the source of truth.** Nothing goes into it that GFM cannot express natively: no
-   HTML, no merged cells, no colours, no per-cell alignment, no live formulas (D1, D2).
+   HTML, no merged cells, no colours, no per-cell alignment (D1). Formulas exist only as an
+   Obsidian comment after a literal value in the same cell, `22 140 %%=SUM(B2:B3)%%`, so the value
+   reads correctly without the plugin (decision 21, which amends D2).
 2. **All writes go through `Writer` and `vault.process`.** Never `read()` + `modify()` — that pair
    loses whatever another writer did in between. The anchor is re-resolved and the region hashed
    *inside* the callback, on the exact string about to be replaced (§13.1).
@@ -48,6 +50,12 @@ that are easy to trip over:
   height at 30 px with `white-space: nowrap` and centred text, so a list item built from a button
   spills its last line over the item below unless it sets `height: auto`, `min-height: 0`,
   `white-space: normal` and `text-align: left`. That is what broke the restore list.
+- **Translucent theme colours are never a background on something sticky.** `--text-selection`,
+  `--background-modifier-hover` and friends are see-through, so a header painted with them lets the
+  scrolling cells show through. Put an opaque `background-color` underneath and lay the tint over
+  it with `background-image: linear-gradient(tint, tint)` (decision 20).
+- **Icon names are lists.** Lucide renames icons between releases and an unknown name renders as
+  nothing. Add new icons to `src/view/icons.ts` with fallbacks and use `setIconSafe`/`iconName`.
 - **A scrolling list needs `flex: 0 0 auto` on its items**, and this is the half that only shows up
   once the list is long. Both modal lists are flex columns with a `max-height`, so the items'
   default `flex-shrink: 1` squeezed them *below their own content* as soon as they stopped fitting
@@ -99,15 +107,16 @@ either push a tag named exactly like the version (no `v` prefix) or run the Rele
 src/model/     parse, serialize, sparse cell map, addressing, locale numbers   (no Obsidian imports)
 src/file/      table scanning, anchor scoring, the write path                  (Writer needs Vault)
 src/store/     Sidecar: cosmetic per-table state through loadData/saveData
-src/feature/   row/column ops, undo, aggregation, clipboard TSV, CSV, XLSX + zip
-src/view/      GridView (orchestration), GridHost (the grid), Ribbon, StatusBar, modals, gridStyles,
-               SettingTab
+src/feature/   row/column ops, undo, aggregation, clipboard TSV, CSV, XLSX + zip, formulas,
+               data tools (transform), fill series, CSV/XLSX import
+src/view/      GridView (orchestration), GridHost (the grid), Ribbon, StatusBar, modals, toolModals,
+               CellSuggest, FilterPopover, livePreviewButton, icons, gridStyles, SettingTab
 ```
 
 `src/model/`, `src/feature/`, `src/store/`, `src/settings.ts` (types and defaults only; the tab
 lives in `src/view/SettingTab.ts`) and `src/file/scanTables.ts`/`AnchorResolver.ts` are free of
 Obsidian imports and directly unit-testable — keep them that way. Put new logic there rather than
-in the view when there is a choice; that is what makes the 190 tests possible without an Obsidian
+in the view when there is a choice; that is what makes the 200-plus tests possible without an Obsidian
 harness.
 
 ## Testing expectations
@@ -122,7 +131,9 @@ harness.
   conflict, drift, missing table, CRLF, repeated cycles. §16 says never to cut this.
 - Tests run in plain Node with no DOM. `GridHost` and `GridView` are therefore not unit-tested;
   that is the deliberate trade for having no Obsidian test harness, and it is why the logic they
-  call lives elsewhere.
+  call lives elsewhere. They *can* be driven in headless Chromium by bundling them against a small
+  shim of the Obsidian API (`docs/HANDOFF.md`, round six) — that is how the README screenshots are
+  made, and it is worth doing after any change to the view.
 
 ## Reviewing your own changes
 

@@ -30,6 +30,26 @@ export function stripInlineMarkdown(s: string): string {
 	return out;
 }
 
+/**
+ * Removes every closed `%%…%%` Obsidian comment.
+ *
+ * A formula cell is `1 250 %%=SUM(B2:B3)%%` (see `src/feature/formula.ts`), and Obsidian hides the
+ * comment, so the cell reads as 1 250 and has to count as that in sums and sorts. An unclosed `%%`
+ * is left alone: it is not a comment we can bound, and the cell stays non-numeric.
+ */
+export function stripObsidianComments(s: string): string {
+	if (!s.includes("%%")) return s;
+	let out = "";
+	let at = 0;
+	for (;;) {
+		const open = s.indexOf("%%", at);
+		const close = open === -1 ? -1 : s.indexOf("%%", open + 2);
+		if (close === -1) return out + s.slice(at);
+		out += s.slice(at, open);
+		at = close + 2;
+	}
+}
+
 export interface NumberParseOptions {
 	/** `'auto'` resolves a single separator as decimal and a repeated one as grouping. */
 	decimalSeparator?: "auto" | "," | ".";
@@ -45,7 +65,7 @@ export interface NumberParseOptions {
  *   reads as 1.234 which is what a Czech-locale user typed).
  */
 export function parseNumber(text: string, opts: NumberParseOptions = {}): number | null {
-	let s = stripInlineMarkdown(text);
+	let s = stripInlineMarkdown(stripObsidianComments(text));
 	if (s === "") return null;
 
 	let percent = false;

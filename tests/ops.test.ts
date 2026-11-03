@@ -3,6 +3,7 @@ import { getRaw, setRaw } from "../src/model/GridModel";
 import { parseTable } from "../src/model/parse";
 import { serializeTable } from "../src/model/serialize";
 import {
+	addInlineFormat,
 	applyInlineFormat,
 	clearRange,
 	compareCells,
@@ -10,11 +11,13 @@ import {
 	deleteRows,
 	fillRange,
 	findAll,
+	inlineFormatsOf,
 	insertCols,
 	insertRows,
 	moveCol,
 	moveRow,
 	readRange,
+	removeInlineFormat,
 	replaceAll,
 	setColAlign,
 	sortRows,
@@ -54,6 +57,19 @@ describe("insertRows", () => {
 		const l = layout();
 		insertRows(model, l, 0, 1);
 		expect(getRaw(model, 0, 0)).toBe("A");
+	});
+});
+
+describe("hidden columns follow structural changes (§8.4)", () => {
+	it("shift on insert, drop and close up on delete, travel with a move", () => {
+		const model = parseTable(TABLE);
+		const l = layout({ hiddenCols: [1, 2] });
+		insertCols(model, l, 1, 1);
+		expect(l.hiddenCols).toEqual([2, 3]);
+		deleteCols(model, l, [2]);
+		expect(l.hiddenCols).toEqual([2]);
+		moveCol(model, l, 2, 0);
+		expect(l.hiddenCols).toEqual([0]);
 	});
 });
 
@@ -192,6 +208,56 @@ describe("applyInlineFormat", () => {
 		const model = parseTable("| A |\n| --- |\n|  |\n");
 		applyInlineFormat(model, { r1: 1, c1: 0, r2: 1, c2: 0 }, "bold");
 		expect(getRaw(model, 1, 0)).toBe("");
+	});
+
+	it("recognises underscore italic, so the toggle removes it instead of nesting", () => {
+		const model = parseTable("| A |\n| --- |\n| _kurzíva_ |\n");
+		applyInlineFormat(model, { r1: 1, c1: 0, r2: 1, c2: 0 }, "italic");
+		expect(getRaw(model, 1, 0)).toBe("kurzíva");
+	});
+
+	it("does not turn bold into italic", () => {
+		const model = parseTable("| A |\n| --- |\n| **x** |\n");
+		applyInlineFormat(model, { r1: 1, c1: 0, r2: 1, c2: 0 }, "italic");
+		expect(getRaw(model, 1, 0)).toBe("***x***");
+		applyInlineFormat(model, { r1: 1, c1: 0, r2: 1, c2: 0 }, "italic");
+		expect(getRaw(model, 1, 0)).toBe("**x**");
+	});
+
+	it("removes only the layer asked for", () => {
+		expect(removeInlineFormat("***x***", "bold")).toBe("*x*");
+		expect(removeInlineFormat("_**x**_", "italic")).toBe("**x**");
+		expect(removeInlineFormat("__x__", "bold")).toBe("x");
+		expect(removeInlineFormat("~~**x**~~", "strikethrough")).toBe("**x**");
+		expect(removeInlineFormat("**`x`**", "code")).toBe("**x**");
+	});
+
+	it("does not mistake two spans for one", () => {
+		expect(inlineFormatsOf("*a* and *b*").size).toBe(0);
+		expect(inlineFormatsOf("**a** and **b**").size).toBe(0);
+		// Toggling must not delete characters from the middle of the cell.
+		expect(addInlineFormat("*a* and *b*", "italic")).toBe("_*a* and *b*_");
+	});
+
+	it("reads nested and intraword forms", () => {
+		expect([...inlineFormatsOf("***x***")].sort()).toEqual(["bold", "italic"]);
+		expect([...inlineFormatsOf("_snake_case_")]).toEqual(["italic"]);
+		expect([...inlineFormatsOf("*a **b** c*")]).toEqual(["italic"]);
+		expect([...inlineFormatsOf("`a*b*`")]).toEqual(["code"]);
+		expect([...inlineFormatsOf("``a`b``")]).toEqual(["code"]);
+		expect(inlineFormatsOf("snake_case").size).toBe(0);
+	});
+
+	it("puts code innermost and fences around backticks", () => {
+		expect(addInlineFormat("**x**", "code")).toBe("**`x`**");
+		expect(addInlineFormat("a`b", "code")).toBe("``a`b``");
+		expect(addInlineFormat("`x", "code")).toBe("`` `x ``");
+	});
+
+	it("round-trips every format on a plain cell", () => {
+		for (const format of ["bold", "italic", "code", "strikethrough"] as const) {
+			expect(removeInlineFormat(addInlineFormat("hello world", format), format)).toBe("hello world");
+		}
 	});
 });
 

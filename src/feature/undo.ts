@@ -78,9 +78,12 @@ export function cloneLayout(layout: TableLayout): TableLayout {
 		colWidths: layout.colWidths.slice(),
 		rowHeights: Object.assign({}, {}, layout.rowHeights),
 		wrapCols: layout.wrapCols.slice(),
+		hiddenCols: (layout.hiddenCols ?? []).slice(),
 		frozenRows: layout.frozenRows,
 		frozenCols: layout.frozenCols,
 		decimals: layout.decimals,
 		...(layout.rowHeightDefault === undefined ? {} : { rowHeightDefault: layout.rowHeightDefault }),
+		...(layout.zoom === undefined ? {} : { zoom: layout.zoom }),
+		...(layout.view === undefined ? {} : { view: { ...layout.view } }),
 	};
 }

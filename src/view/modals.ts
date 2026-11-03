@@ -4,11 +4,12 @@ import { describeDiff, diffLines, diffStats, relativeTime, tableShape } from "..
 import type { GridModel } from "../model/GridModel";
 import { previewOf } from "../file/scanTables";
 import type { ScoredRegion } from "../file/AnchorResolver";
-import type { BackupEntry } from "../store/Sidecar";
+import type { BackupEntry, BackupSource } from "../store/Sidecar";
 import { CALC_FUNCTIONS, applyFunction, type Aggregate, type CalcFunction } from "../feature/QuickCalc";
 import { formatResult } from "../feature/QuickCalc";
 import type { CsvOptions } from "../feature/exportCsv";
 import type { FindOptions } from "../feature/ops";
+import type { ColumnFilter } from "../feature/transform";
 
 /** Yes/no with an explicit destructive-action label. */
 export class ConfirmModal extends Modal {
@@ -67,19 +68,24 @@ export class ConfirmModal extends Modal {
  * wrong table and, worse, later writing to it.
  */
 export class TablePickerModal extends Modal {
+	private picked = false;
+
 	constructor(
 		app: App,
 		private readonly candidates: ScoredRegion[],
 		private readonly onPick: (candidate: ScoredRegion) => void,
+		private readonly opts: { title?: string; message?: string; onCancel?(): void } = {},
 	) {
 		super(app);
 	}
 
 	override onOpen(): void {
-		this.titleEl.setText("Choose the right table");
+		this.titleEl.setText(this.opts.title ?? "Choose the right table");
 		this.contentEl.createEl("p", {
 			cls: "mds-modal-note",
-			text: "Several tables in this note look alike, so the earlier one could not be identified with confidence.",
+			text:
+				this.opts.message ??
+				"Several tables in this note look alike, so the earlier one could not be identified with confidence.",
 		});
 		const list = this.contentEl.createDiv({ cls: "mds-table-picker" });
 		for (const candidate of this.candidates) {
@@ -94,6 +100,7 @@ export class TablePickerModal extends Modal {
 			].filter((p): p is string => p !== null);
 			item.createDiv({ cls: "mds-table-picker-meta", text: meta.join(" · ") });
 			item.addEventListener("click", () => {
+				this.picked = true;
 				this.close();
 				this.onPick(candidate);
 			});
@@ -102,6 +109,7 @@ export class TablePickerModal extends Modal {
 
 	override onClose(): void {
 		this.contentEl.empty();
+		if (!this.picked) this.opts.onCancel?.();
 	}
 }
 
@@ -246,11 +254,14 @@ export class CalculateModal extends Modal {
 export class FindReplaceModal extends Modal {
 	private options: FindOptions = { query: "", matchCase: false, wholeCell: false, regex: false };
 	private replacement = "";
+	private statusEl!: HTMLElement;
 
 	constructor(
 		app: App,
 		private readonly opts: {
 			onFind(options: FindOptions): number;
+			/** Selects the next match after the active cell; null when there is none. */
+			onFindNext(options: FindOptions): { index: number; count: number } | null;
 			onReplaceAll(options: FindOptions, replacement: string): number;
 		},
 	) {
@@ -259,15 +270,19 @@ export class FindReplaceModal extends Modal {
 
 	override onOpen(): void {
 		this.titleEl.setText("Find and replace");
-		const status = this.contentEl.createDiv({ cls: "mds-modal-note" });
+		this.statusEl = this.contentEl.createDiv({ cls: "mds-modal-note mds-find-status" });
 
-		new Setting(this.contentEl).setName("Find").addText((t) =>
+		new Setting(this.contentEl).setName("Find").addText((t) => {
 			t.setValue(this.options.query).onChange((value) => {
 				this.options.query = value;
-				const n = this.opts.onFind(this.options);
-				status.setText(value === "" ? "" : `${n} matching ${n === 1 ? "cell" : "cells"}`);
-			}),
-		);
+				this.recount();
+			});
+			t.inputEl.addEventListener("keydown", (evt) => {
+				if (evt.key !== "Enter" || evt.isComposing) return;
+				evt.preventDefault();
+				this.findNext();
+			});
+		});
 		new Setting(this.contentEl).setName("Replace with").addText((t) =>
 			t.onChange((value) => {
 				this.replacement = value;
@@ -276,6 +291,7 @@ export class FindReplaceModal extends Modal {
 		new Setting(this.contentEl).setName("Match case").addToggle((t) =>
 			t.onChange((value) => {
 				this.options.matchCase = value;
+				this.recount();
 			}),
 		);
 		new Setting(this.contentEl)
@@ -284,116 +300,80 @@ export class FindReplaceModal extends Modal {
 			.addToggle((t) =>
 				t.onChange((value) => {
 					this.options.wholeCell = value;
+					this.recount();
 				}),
 			);
 		new Setting(this.contentEl).setName("Regular expression").addToggle((t) =>
 			t.onChange((value) => {
 				this.options.regex = value;
+				this.recount();
 			}),
 		);
 
 		new Setting(this.contentEl)
+			.addButton((b) => b.setButtonText("Find next").onClick(() => this.findNext()))
 			.addButton((b) =>
 				b
 					.setButtonText("Replace all")
 					.setCta()
 					.onClick(() => {
 						const n = this.opts.onReplaceAll(this.options, this.replacement);
-						status.setText(`Replaced in ${n} ${n === 1 ? "cell" : "cells"}`);
+						this.statusEl.setText(`Replaced in ${n} ${n === 1 ? "cell" : "cells"}`);
 					}),
 			)
 			.addButton((b) => b.setButtonText("Close").onClick(() => this.close()));
 	}
 
+	/** Every option changes what matches, not only the query — the count has to follow all of them. */
+	private recount(): void {
+		if (this.options.query === "") {
+			this.statusEl.setText("");
+			return;
+		}
+		if (this.options.regex && !isValidRegex(this.options.query)) {
+			this.statusEl.setText("Not a valid regular expression");
+			return;
+		}
+		const n = this.opts.onFind(this.options);
+		this.statusEl.setText(`${n} matching ${n === 1 ? "cell" : "cells"}`);
+	}
+
+	private findNext(): void {
+		if (this.options.query === "") return;
+		const hit = this.opts.onFindNext(this.options);
+		this.statusEl.setText(hit === null ? "No matching cell" : `Match ${hit.index} of ${hit.count}`);
+	}
+
 	override onClose(): void {
 		this.contentEl.empty();
 	}
 }
 
-export class SortModal extends Modal {
-	private col: number;
-	private ascending = true;
-	private selectionOnly = false;
-
-	constructor(
-		app: App,
-		private readonly opts: {
-			model: GridModel;
-			defaultCol: number;
-			hasMultiRowSelection: boolean;
-			onSort(col: number, ascending: boolean, selectionOnly: boolean): void;
-		},
-	) {
-		super(app);
-		this.col = opts.defaultCol;
-	}
-
-	override onOpen(): void {
-		this.titleEl.setText("Sort");
-		const cols = Math.max(this.opts.model.usedRange.cols, 1);
-
-		new Setting(this.contentEl).setName("Sort by").addDropdown((d) => {
-			for (let c = 0; c < cols; c++) {
-				const header = this.opts.model.cells.get(`0:${c}`)?.raw ?? "";
-				d.addOption(String(c), header === "" ? colName(c) : `${colName(c)} — ${header}`);
-			}
-			d.setValue(String(this.col)).onChange((value) => {
-				this.col = Number.parseInt(value, 10);
-			});
-		});
-
-		new Setting(this.contentEl).setName("Order").addDropdown((d) =>
-			d
-				.addOption("asc", "Ascending")
-				.addOption("desc", "Descending")
-				.setValue("asc")
-				.onChange((value) => {
-					this.ascending = value === "asc";
-				}),
-		);
-
-		if (this.opts.hasMultiRowSelection) {
-			new Setting(this.contentEl)
-				.setName("Selected rows only")
-				.setDesc("Leave off to sort every data row. The header row never moves.")
-				.addToggle((t) =>
-					t.onChange((value) => {
-						this.selectionOnly = value;
-					}),
-				);
-		}
-
-		new Setting(this.contentEl)
-			.addButton((b) =>
-				b
-					.setButtonText("Sort")
-					.setCta()
-					.onClick(() => {
-						this.close();
-						this.opts.onSort(this.col, this.ascending, this.selectionOnly);
-					}),
-			)
-			.addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()));
-	}
-
-	override onClose(): void {
-		this.contentEl.empty();
+function isValidRegex(source: string): boolean {
+	try {
+		new RegExp(source);
+		return true;
+	} catch {
+		return false;
 	}
 }
 
 export class FilterModal extends Modal {
 	private readonly queries = new Map<number, string>();
+	private readonly others: ColumnFilter[];
 
 	constructor(
 		app: App,
 		private readonly opts: {
 			model: GridModel;
-			current: Array<{ col: number; query: string }>;
-			onApply(filters: Array<{ col: number; query: string }>): void;
+			current: ColumnFilter[];
+			onApply(filters: ColumnFilter[]): void;
 		},
 	) {
 		super(app);
-		for (const f of opts.current) this.queries.set(f.col, f.query);
+		// The dialog edits "contains" filters; others set from the column header are kept as they are.
+		for (const f of opts.current) if (f.kind === "contains") this.queries.set(f.col, f.query ?? "");
+		this.others = opts.current.filter((f) => f.kind !== "contains");
 	}
 
 	override onOpen(): void {
@@ -424,7 +404,8 @@ export class FilterModal extends Modal {
 						this.opts.onApply(
 							Array.from(this.queries.entries())
 								.filter(([, q]) => q.trim() !== "")
-								.map(([col, query]) => ({ col, query })),
+								.map(([col, query]): ColumnFilter => ({ col, kind: "contains", query }))
+								.concat(this.others.filter((f) => (this.queries.get(f.col) ?? "").trim() === "")),
 						);
 					}),
 			)
@@ -446,19 +427,22 @@ export interface ExportChoice {
 	fileName: string;
 	csv: CsvOptions;
 	xlsxDetectNumbers: boolean;
+	selectionOnly: boolean;
 }
 
 export class ExportModal extends Modal {
 	private fileName: string;
 	private csv: CsvOptions;
 	private detectNumbers = true;
+	private selectionOnly = false;
 
 	constructor(
 		app: App,
 		private readonly opts: {
-			format: "csv" | "xlsx";
+			format: "csv" | "xlsx" | "json";
 			defaultName: string;
 			csvDefaults: CsvOptions;
+			hasSelection?: boolean;
 			onExport(choice: ExportChoice): void;
 		},
 	) {
@@ -469,7 +453,8 @@ export class ExportModal extends Modal {
 
 	override onOpen(): void {
 		const isCsv = this.opts.format === "csv";
-		this.titleEl.setText(isCsv ? "Export to CSV" : "Export to Excel");
+		const isJson = this.opts.format === "json";
+		this.titleEl.setText(isCsv ? "Export to CSV" : isJson ? "Export to JSON" : "Export to Excel");
 
 		new Setting(this.contentEl).setName("File name").addText((t) =>
 			t.setValue(this.fileName).onChange((value) => {
@@ -512,7 +497,7 @@ export class ExportModal extends Modal {
 						this.csv.bom = value;
 					}),
 				);
-		} else {
+		} else if (!isJson) {
 			new Setting(this.contentEl)
 				.setName("Convert numbers")
 				.setDesc("Cells that look numeric become real numbers instead of text.")
@@ -521,6 +506,13 @@ export class ExportModal extends Modal {
 						this.detectNumbers = value;
 					}),
 				);
+		}
+
+		if (this.opts.hasSelection) {
+			new Setting(this.contentEl)
+				.setName("Only the selection")
+				.setDesc("Export the selected cells instead of the whole table.")
+				.addToggle((t) => t.onChange((value) => (this.selectionOnly = value)));
 		}
 
 		new Setting(this.contentEl)
@@ -534,6 +526,7 @@ export class ExportModal extends Modal {
 							fileName: this.fileName,
 							csv: this.csv,
 							xlsxDetectNumbers: this.detectNumbers,
+							selectionOnly: this.selectionOnly,
 						});
 					}),
 			)
@@ -544,6 +537,12 @@ export class ExportModal extends Modal {
 		this.contentEl.empty();
 	}
 }
+
+const SOURCE_LABEL: Record<BackupSource, string> = {
+	opened: "As opened",
+	saved: "Saved",
+	unsaved: "Never saved",
+};
 
 /**
  * `Restore previous version` (§13.2): the last ten serialized regions, newest first.
@@ -592,7 +591,7 @@ export class RestoreModal extends Modal {
 			const item = list.createEl("button", { cls: "mds-restore-item", attr: { type: "button" } });
 			item.createDiv({ cls: "mds-restore-when", text: relativeTime(entry.at, this.opts.now) });
 			const same = entry.text.trimEnd() === this.opts.current.trimEnd();
-			const meta = [new Date(entry.at).toLocaleString(), tableShape(entry.text)];
+			const meta = [SOURCE_LABEL[entry.source ?? "saved"], new Date(entry.at).toLocaleString(), tableShape(entry.text)];
 			if (same) meta.push("same as now");
 			item.createDiv({ cls: "mds-restore-meta", text: meta.join(" · ") });
 			this.itemEls.push(item);
@@ -662,23 +661,43 @@ export class RestoreModal extends Modal {
 export class DiffModal extends Modal {
 	constructor(
 		app: App,
-		private readonly opts: { mine: string; theirs: string },
+		private readonly opts: {
+			mine: string;
+			theirs: string;
+			title?: string;
+			legend?: string;
+			confirm?: { label: string; onConfirm(): void };
+		},
 	) {
 		super(app);
 	}
 
 	override onOpen(): void {
 		this.modalEl.addClass("mds-restore-modal");
-		this.titleEl.setText("Compare with the note");
+		this.titleEl.setText(this.opts.title ?? "Compare with the note");
 		const lines = diffLines(this.opts.mine, this.opts.theirs);
 		const head = this.contentEl.createDiv({ cls: "mds-restore-diff-head" });
 		head.createSpan({ cls: "mds-restore-diff-summary", text: describeDiff(diffStats(lines)) });
-		head.createSpan({ cls: "mds-modal-note", text: "− in this grid · + in the note" });
+		head.createSpan({ cls: "mds-modal-note", text: this.opts.legend ?? "− in this grid · + in the note" });
 		const body = this.contentEl.createDiv({ cls: "mds-restore-diff" });
 		for (const line of lines) {
 			const row = body.createDiv({ cls: `mds-diff-line is-${line.kind}` });
 			row.createSpan({ cls: "mds-diff-gutter", text: line.kind === "add" ? "+" : line.kind === "remove" ? "\u2212" : " " });
 			row.createSpan({ cls: "mds-diff-text", text: line.text });
+		}
+		const confirm = this.opts.confirm;
+		if (confirm) {
+			new Setting(this.contentEl)
+				.addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()))
+				.addButton((b) =>
+					b
+						.setButtonText(confirm.label)
+						.setCta()
+						.onClick(() => {
+							this.close();
+							confirm.onConfirm();
+						}),
+				);
 		}
 	}
 

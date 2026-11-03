@@ -20,6 +20,11 @@
 
 /* ------------------------------------------------------------------ ribbon */
 
+/*
+ * Two layers, like Office: a tab strip with an underline for the active tab, and a panel of
+ * groups — buttons on top, the group's name underneath. Buttons are flat until hovered, so the
+ * panel reads as a set of tools rather than a wall of boxes.
+ */
 .mds-ribbon {
 	flex: 0 0 auto;
 	border-bottom: 1px solid var(--background-modifier-border);
@@ -28,27 +33,30 @@
 
 .mds-ribbon-bar {
 	display: flex;
-	align-items: center;
+	align-items: flex-end;
 	gap: 8px;
-	padding: 6px 8px;
+	padding: 0 8px;
+	border-bottom: 1px solid var(--background-modifier-border);
 }
 
-/* Segmented control rather than folder tabs: it reads as one object and survives every theme. */
+.mds-ribbon.is-collapsed .mds-ribbon-bar {
+	border-bottom: none;
+}
+
 .mds-ribbon-tabs {
 	display: flex;
 	gap: 2px;
-	padding: 2px;
-	border-radius: var(--radius-m);
-	background-color: var(--background-modifier-form-field);
 }
 
 .mds-ribbon-tab {
 	display: inline-flex;
 	align-items: center;
-	gap: 5px;
-	padding: 4px 12px;
+	gap: 6px;
+	height: auto;
+	padding: 7px 12px 6px;
 	border: none;
-	border-radius: calc(var(--radius-m) - 2px);
+	border-bottom: 2px solid transparent;
+	border-radius: var(--radius-s) var(--radius-s) 0 0;
 	background: transparent;
 	box-shadow: none;
 	color: var(--text-muted);
@@ -64,22 +72,30 @@
 
 .mds-ribbon-tab.is-active {
 	color: var(--text-normal);
-	background-color: var(--background-primary);
-	box-shadow: var(--shadow-s);
+	border-bottom-color: var(--interactive-accent);
 	font-weight: var(--font-semibold);
 }
 
+.mds-ribbon-tab-icon {
+	display: inline-flex;
+}
+
 .mds-ribbon-tab-icon .svg-icon {
-	width: 14px;
-	height: 14px;
+	width: 15px;
+	height: 15px;
+}
+
+.mds-ribbon-tab.is-active .mds-ribbon-tab-icon {
+	color: var(--interactive-accent);
 }
 
 .mds-ribbon-collapse {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: 24px;
-	height: 24px;
+	align-self: center;
+	width: 26px;
+	height: 26px;
 	margin-left: auto;
 	padding: 0;
 	border: none;
@@ -96,60 +112,58 @@
 }
 
 .mds-ribbon-collapse .svg-icon {
-	width: 14px;
-	height: 14px;
+	width: 15px;
+	height: 15px;
 }
 
 .mds-ribbon-panel {
 	display: flex;
-	align-items: flex-start;
-	gap: 2px;
-	padding: 2px 8px 8px;
+	align-items: stretch;
+	padding: 6px 6px 4px;
 	overflow-x: auto;
+	background-color: var(--background-primary);
 }
 
 .mds-ribbon-group {
 	display: flex;
 	flex-direction: column;
+	justify-content: space-between;
 	gap: 4px;
 	padding: 0 10px;
 	border-right: 1px solid var(--background-modifier-border);
-}
-
-.mds-ribbon-group:first-child {
-	padding-left: 0;
 }
 
 .mds-ribbon-group:last-child {
 	border-right: none;
 }
 
-/* The group name above its actions, quiet enough to scan past when you know where things are. */
+/* The group name under its actions, quiet enough to scan past when you know where things are. */
 .mds-ribbon-group-label {
 	font-size: var(--font-ui-smaller);
 	line-height: 1.2;
 	color: var(--text-faint);
-	text-transform: uppercase;
-	letter-spacing: 0.06em;
+	text-align: center;
+	white-space: nowrap;
 }
 
 .mds-ribbon-items {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
-	gap: 6px;
-	min-height: 26px;
+	justify-content: center;
+	gap: 4px;
+	min-height: 30px;
 }
 
 .mds-ribbon-btn {
 	display: inline-flex;
 	align-items: center;
-	gap: 5px;
-	height: 26px;
-	padding: 0 8px;
-	border: none;
+	gap: 6px;
+	height: 30px;
+	padding: 0 9px;
+	border: 1px solid transparent;
 	border-radius: var(--radius-s);
-	background-color: var(--background-modifier-form-field);
+	background-color: transparent;
 	box-shadow: none;
 	color: var(--text-normal);
 	font-size: var(--font-ui-smaller);
@@ -158,26 +172,41 @@
 }
 
 .mds-ribbon-btn.is-icon-only {
-	width: 28px;
+	width: 30px;
 	padding: 0;
 	justify-content: center;
 }
 
 .mds-ribbon-btn:hover:not(.is-disabled) {
 	background-color: var(--background-modifier-hover);
-	color: var(--text-normal);
+	border-color: var(--background-modifier-border);
 }
 
 .mds-ribbon-btn.is-active {
 	background-color: var(--background-modifier-active-hover);
+	border-color: var(--interactive-accent);
 	color: var(--text-accent);
-	box-shadow: inset 0 0 0 1px var(--interactive-accent);
+}
+
+.mds-ribbon-btn.mod-cta {
+	background-color: var(--interactive-accent);
+	border-color: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+.mds-ribbon-btn.mod-cta:hover:not(.is-disabled) {
+	background-color: var(--interactive-accent-hover);
 }
 
 /* D5: an unsupported action is visibly dead, never a silent no-op. */
 .mds-ribbon-btn.is-disabled {
-	opacity: 0.4;
+	opacity: 0.35;
 	cursor: not-allowed;
+}
+
+.mds-ribbon-btn:focus-visible,
+.mds-ribbon-tab:focus-visible {
+	box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
 }
 
 .mds-ribbon-btn-icon {
@@ -193,23 +222,45 @@
 }
 
 .mds-ribbon-btn-icon .svg-icon {
-	width: 15px;
-	height: 15px;
+	width: 16px;
+	height: 16px;
 }
 
 /* One segmented run of icons: alignment, emphasis, insert/delete. */
 .mds-ribbon-cluster {
 	display: inline-flex;
 	align-items: center;
-	gap: 1px;
-	padding: 1px;
+	gap: 0;
+	border: 1px solid var(--background-modifier-border);
 	border-radius: var(--radius-s);
-	background-color: var(--background-modifier-form-field);
+	background-color: var(--background-primary);
 }
 
 .mds-ribbon-cluster .mds-ribbon-btn {
-	background-color: transparent;
-	border-radius: calc(var(--radius-s) - 1px);
+	border-radius: 0;
+	border-color: transparent;
+}
+
+.mds-ribbon-cluster .mds-ribbon-btn + .mds-ribbon-btn {
+	border-left-color: var(--background-modifier-border);
+}
+
+.mds-ribbon-cluster .mds-ribbon-btn:first-child {
+	border-radius: calc(var(--radius-s) - 1px) 0 0 calc(var(--radius-s) - 1px);
+}
+
+.mds-ribbon-cluster .mds-ribbon-btn:last-child {
+	border-radius: 0 calc(var(--radius-s) - 1px) calc(var(--radius-s) - 1px) 0;
+}
+
+.mds-ribbon-cluster .mds-ribbon-btn:hover:not(.is-disabled) {
+	border-color: transparent;
+	border-left-color: var(--background-modifier-border);
+}
+
+.mds-ribbon-cluster .mds-ribbon-btn.is-active {
+	border-color: transparent;
+	box-shadow: inset 0 -2px 0 0 var(--interactive-accent);
 }
 
 .mds-ribbon-sep {
@@ -228,8 +279,8 @@
 }
 
 .mds-ribbon-number-input {
-	width: 60px;
-	height: 26px;
+	width: 62px;
+	height: 28px;
 	padding: 0 6px;
 	font-size: var(--font-ui-smaller);
 }
@@ -257,6 +308,17 @@
 	font-size: var(--font-ui-smaller);
 	text-align: center;
 	color: var(--text-muted);
+}
+
+.mds-formula-icon {
+	display: inline-flex;
+	flex: 0 0 auto;
+	color: var(--text-faint);
+}
+
+.mds-formula-icon .svg-icon {
+	width: 14px;
+	height: 14px;
 }
 
 .mds-formula-input {
@@ -301,6 +363,13 @@
 	display: flex;
 }
 
+/*
+ * Every surface that stays put while the grid scrolls — column letters, row numbers, the frozen
+ * header row and frozen columns — needs an opaque background, or the cells scrolling underneath
+ * show through it. Obsidian's hover, selection and accent colours are translucent by design, so
+ * they are never used as a background colour here: they are laid over an opaque base as a
+ * gradient layer instead. Using them directly is what made the column letters see-through.
+ */
 .mds-host {
 	position: relative;
 	flex: 1 1 auto;
@@ -312,6 +381,20 @@
 	--mds-row-default: 24px;
 	--mds-head-h: 26px;
 	--mds-rowhead-w: 52px;
+
+	--mds-bg: var(--background-primary);
+	--mds-head-bg: var(--background-secondary);
+	--mds-header-row-bg: var(--background-primary-alt);
+	--mds-line: var(--background-modifier-border);
+	--mds-line-strong: var(--background-modifier-border-hover);
+	--mds-accent: var(--interactive-accent);
+	--mds-tint-select: var(--text-selection);
+	--mds-tint-hover: var(--background-modifier-hover);
+	--mds-tint-cross: color-mix(in srgb, var(--interactive-accent) 6%, transparent);
+	--mds-tint-changed: color-mix(in srgb, var(--color-yellow, #e0ac00) 22%, transparent);
+	--mds-bg-zebra: color-mix(in srgb, var(--background-primary) 94%, var(--text-normal));
+	--mds-used-edge: color-mix(in srgb, var(--interactive-accent) 45%, var(--background-modifier-border));
+	--mds-edge-none: 0 0 0 0 transparent;
 }
 
 .mds-host.is-resizing {
@@ -324,14 +407,16 @@
 	min-height: 0;
 	overflow: auto;
 	outline: none;
-	background-color: var(--background-primary);
+	background-color: var(--mds-bg);
 }
 
 .mds-canvas {
 	position: relative;
 	width: max-content;
 	min-width: 100%;
-	font-size: var(--font-ui-small);
+	font-size: calc(var(--font-ui-small) * var(--mds-zoom, 1));
+	/* A drag selects cells, not text; the browser's own highlight on top of ours was noise. */
+	user-select: none;
 }
 
 .mds-row {
@@ -344,18 +429,29 @@
 	display: none;
 }
 
+/* One measurement at the row's natural height, for autofit and wrapping. */
+.mds-row.is-measuring {
+	height: auto !important;
+}
+
 /* Freeze via sticky positioning; the offsets are written by GridStyles (§8.5). */
 .mds-row.mds-head-row {
 	position: sticky;
 	top: 0;
 	z-index: 4;
 	height: var(--mds-head-h);
+	background-color: var(--mds-head-bg);
 }
 
 .mds-row.is-frozen-row {
 	position: sticky;
 	z-index: 3;
-	background-color: var(--background-primary);
+	background-color: var(--mds-bg);
+}
+
+/* Where the frozen rows end, a line the scrolling content passes under. */
+.mds-row.is-frozen-row.is-frozen-edge {
+	box-shadow: 0 1px 0 0 var(--mds-line-strong);
 }
 
 .mds-corner,
@@ -366,11 +462,12 @@
 	align-items: center;
 	justify-content: center;
 	flex: 0 0 auto;
-	border-right: 1px solid var(--background-modifier-border);
-	border-bottom: 1px solid var(--background-modifier-border);
-	background-color: var(--background-secondary);
+	border-right: 1px solid var(--mds-line);
+	border-bottom: 1px solid var(--mds-line);
+	background-color: var(--mds-head-bg);
 	color: var(--text-muted);
-	font-size: var(--font-ui-smaller);
+	font-size: calc(var(--font-ui-smaller) * var(--mds-zoom, 1));
+	font-variant-numeric: tabular-nums;
 	user-select: none;
 }
 
@@ -385,27 +482,116 @@
 
 .mds-corner {
 	z-index: 5;
-}
-
-.mds-colhead {
 	cursor: pointer;
 }
 
-.mds-colhead:hover,
-.mds-rowhead:hover {
-	background-color: var(--background-modifier-hover);
+.mds-colhead {
+	position: relative;
+	gap: 2px;
+	padding: 0 18px 0 6px;
+	cursor: pointer;
 }
 
+.mds-colhead.is-frozen-col {
+	position: sticky;
+}
+
+.mds-colhead-label {
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+/* The drop-down arrow: on hover, and always while the column is filtered. */
+.mds-colhead-filter {
+	position: absolute;
+	top: 50%;
+	right: 3px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 15px;
+	height: 15px;
+	margin-top: -7.5px;
+	border-radius: var(--radius-s);
+	color: var(--text-faint);
+	opacity: 0;
+	cursor: pointer;
+}
+
+.mds-colhead-filter .svg-icon {
+	width: 12px;
+	height: 12px;
+}
+
+.mds-colhead:hover .mds-colhead-filter,
+.mds-colhead.is-filtered .mds-colhead-filter {
+	opacity: 1;
+}
+
+.mds-colhead-filter:hover {
+	background-color: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.mds-colhead.is-filtered .mds-colhead-filter {
+	color: var(--interactive-accent);
+}
+
+/* Hidden in the grid only: the column is still written to the note. */
+.mds-cell.is-hidden-col,
+.mds-colhead.is-hidden-col {
+	display: none;
+}
+
+.mds-colhead.has-hidden-after {
+	border-right: 3px double var(--mds-line-strong);
+}
+
+/* Moving a column or row by its header: where it will land. */
+.mds-host.is-moving .mds-scroll {
+	cursor: grabbing;
+}
+
+.mds-colhead.is-drop-target {
+	box-shadow: inset 3px 0 0 0 var(--mds-accent);
+}
+
+.mds-rowhead.is-drop-target {
+	box-shadow: inset 0 3px 0 0 var(--mds-accent);
+}
+
+.mds-corner:hover,
+.mds-colhead:hover,
+.mds-rowhead:hover {
+	background-image: linear-gradient(var(--mds-tint-hover), var(--mds-tint-hover));
+}
+
+/* Excel's cue: the letters and numbers of the selection light up, with an accent rule. */
 .mds-colhead.is-selected,
 .mds-rowhead.is-selected {
-	background-color: var(--background-modifier-active-hover);
+	background-image: linear-gradient(var(--mds-tint-select), var(--mds-tint-select));
 	color: var(--text-normal);
 	font-weight: var(--font-semibold);
+}
+
+.mds-colhead.is-selected {
+	box-shadow: inset 0 -2px 0 0 var(--mds-accent);
+}
+
+.mds-rowhead.is-selected {
+	box-shadow: inset -2px 0 0 0 var(--mds-accent);
 }
 
 .mds-colhead.is-frozen-col {
 	position: sticky;
 	z-index: 3;
+}
+
+.mds-colhead.is-frozen-edge,
+.mds-cell.is-frozen-edge {
+	border-right-color: var(--mds-line-strong);
 }
 
 .mds-head-row.is-col-resize .mds-colhead {
@@ -422,19 +608,24 @@
 	width: var(--mds-col-default);
 	min-width: var(--mds-col-default);
 	padding: 2px 6px;
-	border-right: 1px solid var(--background-modifier-border);
-	border-bottom: 1px solid var(--background-modifier-border);
+	border-right: 1px solid var(--mds-line);
+	border-bottom: 1px solid var(--mds-line);
+	background-color: var(--mds-bg);
 	overflow: hidden;
 	white-space: nowrap;
 	text-overflow: ellipsis;
 	line-height: 1.4;
 	color: var(--text-normal);
+
+	--mds-edge-t: var(--mds-edge-none);
+	--mds-edge-r: var(--mds-edge-none);
+	--mds-edge-b: var(--mds-edge-none);
+	--mds-edge-l: var(--mds-edge-none);
 }
 
 .mds-cell.is-frozen-col {
 	position: sticky;
 	z-index: 1;
-	background-color: var(--background-primary);
 }
 
 /* §8.3: wrapping is purely visual — the cell stays one line of Markdown. */
@@ -442,6 +633,10 @@
 	white-space: normal;
 	overflow-wrap: anywhere;
 	text-overflow: clip;
+}
+
+.mds-row.is-measuring > .mds-cell.is-wrap {
+	overflow: visible;
 }
 
 .mds-cell.is-align-left {
@@ -458,38 +653,114 @@
 
 /* Row 1 is the GFM header row and cannot be deleted, so it must not look like data (§9). */
 .mds-row.is-header-row .mds-cell {
-	background-color: var(--background-secondary-alt);
+	background-color: var(--mds-header-row-bg);
+	border-bottom-color: var(--mds-line-strong);
 	font-weight: var(--font-semibold);
 }
 
 .mds-row.is-header-row .mds-rowhead {
 	color: var(--text-normal);
 	font-weight: var(--font-semibold);
+	border-bottom-color: var(--mds-line-strong);
 }
 
 /* Anything outside the used range is not written to the note; say so visually (§9). */
 .mds-cell.is-outside {
-	background-color: transparent;
 	color: var(--text-faint);
 }
 
+.mds-row.is-header-row .mds-cell.is-outside {
+	background-color: var(--mds-bg);
+	border-bottom-color: var(--mds-line);
+	font-weight: var(--font-normal);
+}
+
+/*
+ * The selection: a tint over the range and a 2px outline around it. Only the cells on the edge
+ * carry a border, each the sides it owns, so the outline reads as one rectangle. The active cell
+ * keeps no tint, so it is obvious where typing goes.
+ */
 .mds-cell.is-selected {
-	background-color: var(--text-selection);
+	background-image: linear-gradient(var(--mds-tint-select), var(--mds-tint-select));
+}
+
+.mds-cell.is-sel-top {
+	--mds-edge-t: inset 0 2px 0 0 var(--mds-accent);
+}
+
+.mds-cell.is-sel-bottom {
+	--mds-edge-b: inset 0 -2px 0 0 var(--mds-accent);
+}
+
+.mds-cell.is-sel-left {
+	--mds-edge-l: inset 2px 0 0 0 var(--mds-accent);
+}
+
+.mds-cell.is-sel-right {
+	--mds-edge-r: inset -2px 0 0 0 var(--mds-accent);
+}
+
+.mds-cell.is-sel-top,
+.mds-cell.is-sel-bottom,
+.mds-cell.is-sel-left,
+.mds-cell.is-sel-right {
+	box-shadow: var(--mds-edge-t), var(--mds-edge-r), var(--mds-edge-b), var(--mds-edge-l);
 }
 
 .mds-cell.is-active {
-	box-shadow: inset 0 0 0 2px var(--interactive-accent);
-	background-color: var(--background-primary);
+	background-image: none;
+}
+
+/* The active cell's row and column, faintly — easier to follow across a wide table. */
+.mds-cell.is-cross {
+	background-image: linear-gradient(var(--mds-tint-cross), var(--mds-tint-cross));
+}
+
+.mds-host.is-zebra .mds-row:nth-child(odd):not(.is-outside) .mds-cell:not(.is-outside) {
+	background-color: var(--mds-bg-zebra);
+}
+
+/* Where the written table ends: everything right of and below this line is scratch space. */
+.mds-cell.is-used-right {
+	border-right-color: var(--mds-used-edge);
+}
+
+.mds-cell.is-used-bottom {
+	border-bottom-color: var(--mds-used-edge);
+}
+
+/* A formula cell: a small corner, like a spreadsheet's comment marker. */
+.mds-cell.is-formula {
+	background-image: linear-gradient(225deg, var(--mds-accent) 0 5px, transparent 5px);
+}
+
+.mds-cell.is-formula.is-selected {
+	background-image:
+		linear-gradient(225deg, var(--mds-accent) 0 5px, transparent 5px),
+		linear-gradient(var(--mds-tint-select), var(--mds-tint-select));
+}
+
+/* What a restore changed, until the next edit. */
+.mds-cell.is-changed {
+	background-image: linear-gradient(var(--mds-tint-changed), var(--mds-tint-changed));
+}
+
+/* Inside a larger range the active cell gets a thin ring of its own. */
+.mds-cell.is-selected.is-active {
+	outline: 1px solid var(--mds-accent);
+	outline-offset: -3px;
 }
 
 .mds-cell.is-fill-preview {
-	box-shadow: inset 0 0 0 1px var(--interactive-accent);
+	outline: 1px dashed var(--mds-accent);
+	outline-offset: -2px;
 }
 
 .mds-cell.is-editing {
 	padding: 0;
 	overflow: visible;
-	box-shadow: inset 0 0 0 2px var(--interactive-accent);
+	background-image: none;
+	box-shadow: inset 0 0 0 2px var(--mds-accent);
 }
 
 .mds-cell.is-rendered {
@@ -505,38 +776,92 @@
 	display: inline;
 }
 
+.mds-cell.is-rendered img {
+	max-height: 100%;
+	vertical-align: middle;
+}
+
+/* Links read as Obsidian's links even outside a rendered note. */
+.mds-cell a {
+	color: var(--link-color, var(--text-accent));
+	text-decoration: var(--link-decoration, none);
+	cursor: pointer;
+}
+
+.mds-cell a:hover {
+	color: var(--link-color-hover, var(--text-accent-hover, var(--text-accent)));
+	text-decoration: underline;
+}
+
+.mds-cell code {
+	padding: 0 3px;
+	border-radius: var(--radius-s);
+	background-color: var(--code-background, var(--background-primary-alt));
+	font-family: var(--font-monospace);
+	font-size: 0.92em;
+}
+
+/*
+ * The editor lies over the cell and grows with its text — wider first, then taller — so a long
+ * cell can be read whole while it is edited. It is still one line of Markdown.
+ */
+.mds-cell.is-editing {
+	z-index: 2;
+}
+
+.mds-cell.is-editing:not(.is-frozen-col) {
+	position: relative;
+}
+
 .mds-editor {
-	width: 100%;
-	height: 100%;
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: var(--mds-editor-w, 100%);
+	height: var(--mds-editor-h, 100%);
+	min-width: 100%;
+	min-height: 100%;
+	box-sizing: border-box;
+	margin: 0;
 	padding: 2px 6px;
 	border: none;
 	border-radius: 0;
-	background-color: var(--background-primary);
-	box-shadow: none;
+	background-color: var(--mds-bg);
+	box-shadow: 0 0 0 2px var(--mds-accent), var(--shadow-s);
 	font-family: var(--font-monospace);
-	font-size: var(--font-ui-small);
+	font-size: calc(var(--font-ui-small) * var(--mds-zoom, 1));
+	line-height: 1.4;
 	color: var(--text-normal);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	overflow: hidden;
+	resize: none;
+	user-select: text;
 }
 
-.mds-editor:focus {
+.mds-editor:focus,
+.mds-editor:focus-visible {
 	box-shadow: none;
 	outline: none;
 }
 
+/* Under the column letters and row numbers, over the cells and the frozen rows. */
 .mds-fill-handle {
 	position: absolute;
 	left: var(--mds-fill-x, 0);
 	top: var(--mds-fill-y, 0);
-	width: 8px;
-	height: 8px;
+	width: 7px;
+	height: 7px;
 	margin: -4px 0 0 -4px;
-	z-index: 6;
-	background-color: var(--interactive-accent);
-	border: 1px solid var(--background-primary);
+	z-index: 3;
+	background-color: var(--mds-accent);
+	border: 1px solid var(--mds-bg);
+	border-radius: 1px;
 	cursor: crosshair;
 }
 
-.mds-host.is-placing .mds-scroll {
+.mds-host.is-placing .mds-scroll,
+.mds-host.is-placing .mds-cell {
 	cursor: cell;
 }
 
@@ -799,8 +1124,53 @@
 /* ----------------------------------------------- button on a note's table */
 
 /*
- * A hover affordance on tables in the note itself. It is positioned against a wrapper the post
- * processor adds around the table, so nothing in the note's own markup has to change.
+ * Live Preview: a button on Obsidian's own table widget, placed and shown the way Obsidian shows
+ * its "edit block" button on other embeds — top right, on hover. The widget is already the
+ * positioning context for that button; the rule below only makes sure of it.
+ */
+.markdown-source-view.mod-cm6 .cm-embed-block.cm-table-widget {
+	position: relative;
+}
+
+.mds-lp-table-btn {
+	position: absolute;
+	top: var(--size-2-1, 2px);
+	right: var(--size-2-1, 2px);
+	z-index: 2;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: auto;
+	height: auto;
+	padding: var(--size-2-2, 4px) var(--size-2-3, 6px);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	background-color: var(--background-primary);
+	box-shadow: var(--shadow-s);
+	color: var(--text-muted);
+	opacity: 0;
+	transition: opacity 120ms ease-in-out;
+	cursor: pointer;
+}
+
+.cm-table-widget:hover > .mds-lp-table-btn,
+.mds-lp-table-btn:focus-visible {
+	opacity: 1;
+}
+
+.mds-lp-table-btn:hover {
+	color: var(--text-normal);
+	background-color: var(--background-modifier-hover);
+}
+
+.mds-lp-table-btn .svg-icon {
+	width: var(--icon-s, 16px);
+	height: var(--icon-s, 16px);
+}
+
+/*
+ * Reading view (opt-in). A hover affordance positioned against a wrapper the post processor adds
+ * around the table, so nothing in the note's own markup has to change.
  */
 .mds-table-launcher {
 	position: relative;
@@ -838,6 +1208,18 @@
 .mds-table-launcher-btn .svg-icon {
 	width: 13px;
 	height: 13px;
+}
+
+/* Never in a printout or an exported PDF, whatever the settings say. */
+@media print {
+	.mds-table-launcher-btn,
+	.mds-lp-table-btn {
+		display: none !important;
+	}
+}
+
+.print .mds-table-launcher-btn {
+	display: none !important;
 }
 
 .mds-calc-preview {
@@ -878,6 +1260,201 @@
 	overflow: auto;
 	font-size: var(--font-ui-smaller);
 	white-space: pre;
+}
+
+.mds-find-status {
+	min-height: 1.4em;
+}
+
+/* -------------------------------------------------- suggestions under the editor */
+
+.mds-suggest {
+	position: absolute;
+	left: var(--mds-suggest-x, 0);
+	top: var(--mds-suggest-y, 0);
+	z-index: 20;
+	min-width: 220px;
+	max-width: 420px;
+	max-height: 260px;
+	overflow-y: auto;
+	padding: 4px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	background-color: var(--background-primary);
+	box-shadow: var(--shadow-l);
+	font-size: var(--font-ui-small);
+}
+
+.mds-suggest-item {
+	display: flex;
+	flex: 0 0 auto;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 4px 8px;
+	border-radius: var(--radius-s);
+	cursor: pointer;
+}
+
+.mds-suggest-item.is-selected {
+	background-color: var(--background-modifier-hover);
+}
+
+.mds-suggest-label {
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+.mds-suggest-detail {
+	flex: 0 1 auto;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+}
+
+/* ------------------------------------------------- sort and filter drop-down */
+
+.mds-filter-popover {
+	position: absolute;
+	left: var(--mds-pop-x, 0);
+	top: var(--mds-pop-y, 0);
+	z-index: 20;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	width: 250px;
+	padding: 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	background-color: var(--background-primary);
+	box-shadow: var(--shadow-l);
+	font-size: var(--font-ui-small);
+}
+
+.mds-filter-title {
+	font-weight: var(--font-semibold);
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+.mds-filter-label {
+	margin-top: 4px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.mds-filter-row {
+	display: flex;
+	gap: 6px;
+}
+
+.mds-filter-row > * {
+	flex: 1 1 0;
+	min-width: 0;
+}
+
+.mds-filter-values {
+	display: flex;
+	flex-direction: column;
+	max-height: 180px;
+	overflow-y: auto;
+	padding: 4px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+}
+
+.mds-filter-value {
+	display: flex;
+	flex: 0 0 auto;
+	align-items: center;
+	gap: 6px;
+	padding: 2px 2px;
+	cursor: pointer;
+}
+
+.mds-filter-value span {
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+.mds-filter-value.is-all {
+	border-bottom: 1px solid var(--background-modifier-border);
+	margin-bottom: 2px;
+	font-weight: var(--font-semibold);
+}
+
+.mds-filter-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 6px;
+	margin-top: 4px;
+}
+
+/* ------------------------------------------------------- small extras */
+
+.mds-table-switch {
+	flex: 0 1 220px;
+	min-width: 0;
+	max-width: 220px;
+	height: 26px;
+	font-size: var(--font-ui-smaller);
+}
+
+.mds-status-aggregate {
+	display: inline-flex;
+	gap: 12px;
+}
+
+.mds-status-stat {
+	cursor: pointer;
+	border-radius: var(--radius-s);
+	padding: 0 3px;
+}
+
+.mds-status-stat:hover {
+	background-color: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.mds-status-stat-label {
+	color: var(--text-faint);
+}
+
+.mds-stats {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	gap: 4px 16px;
+}
+
+.mds-stats-row {
+	display: contents;
+}
+
+.mds-stats-label {
+	color: var(--text-muted);
+}
+
+.mds-stats-value {
+	font-variant-numeric: tabular-nums;
+	cursor: pointer;
+}
+
+.mds-stats-value:hover {
+	color: var(--text-accent);
+}
+
+.mds-index-title {
+	font-weight: var(--font-medium);
+}
+
+.mds-index-meta {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
 }
 
 /* ---- generated: per-column widths, 128 columns (see scripts/gen-styles.mjs) ---- */

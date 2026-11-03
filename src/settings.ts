@@ -8,6 +8,8 @@
 export type AnchorStrategy = "fingerprint" | "ask" | "blockId";
 export type SaveMode = "auto" | "manual";
 export type CsvDelimiter = "," | ";" | "\t";
+export type TableStyle = "aligned" | "compact";
+export type StatusStat = "sum" | "average" | "count" | "counta" | "min" | "max";
 
 export interface MarkdownSpreadsheetsSettings {
 	/** §13.2: autosave is the Excel-like default; manual suits a git-tracked vault. */
@@ -20,8 +22,10 @@ export interface MarkdownSpreadsheetsSettings {
 	defaultColWidth: number;
 	/** Rendered is the default: a cell full of link syntax is unreadable (D9). */
 	defaultRenderMode: "raw" | "rendered";
-	/** A hover button on tables in the note itself, next to the context-menu route (§11). */
+	/** A hover button on tables in Live Preview, next to the context-menu route (§11). */
 	showTableButton: boolean;
+	/** The same button in reading view. Off by default: reading view is also what PDF export renders. */
+	showTableButtonInReading: boolean;
 	/** The ribbon panel starts collapsed; the tab strip stays visible either way. */
 	ribbonCollapsed: boolean;
 	defaultDecimals: number;
@@ -36,6 +40,29 @@ export interface MarkdownSpreadsheetsSettings {
 	padRows: number;
 	padCols: number;
 	confirmSparseWrite: boolean;
+	/** How the table is written back: pipes aligned, or one space per side for small Git diffs. */
+	tableStyle: TableStyle;
+	/** Where a grid opens: a new tab, or a split next to the note. */
+	openIn: "tab" | "split";
+	/** Moment.js formats for Ctrl+; and Ctrl+Shift+;. */
+	dateFormat: string;
+	timeFormat: string;
+	/** Suggestions while typing in a cell: links, tags and values already in the column. */
+	autocomplete: boolean;
+	zebraRows: boolean;
+	/** Tints the row and column of the active cell. */
+	highlightActiveLine: boolean;
+	/** "B · Price" in the column header instead of only "B". */
+	headerNamesInLetters: boolean;
+	/** Ribbon buttons with labels, or icons only. */
+	ribbonStyle: "labels" | "icons";
+	statusStats: StatusStat[];
+	/** Manual save mode: show the diff of what is about to be written before writing it. */
+	previewBeforeSave: boolean;
+	/** Versions kept per table for `Restore a version`. */
+	maxBackups: number;
+	/** Fit the columns to their content the first time a table is opened. */
+	autofitOnFirstOpen: boolean;
 }
 
 export const DEFAULT_SETTINGS: MarkdownSpreadsheetsSettings = {
@@ -46,6 +73,7 @@ export const DEFAULT_SETTINGS: MarkdownSpreadsheetsSettings = {
 	defaultColWidth: 120,
 	defaultRenderMode: "rendered",
 	showTableButton: true,
+	showTableButtonInReading: false,
 	ribbonCollapsed: false,
 	defaultDecimals: 2,
 	numberLocale: "",
@@ -56,4 +84,17 @@ export const DEFAULT_SETTINGS: MarkdownSpreadsheetsSettings = {
 	padRows: 30,
 	padCols: 5,
 	confirmSparseWrite: true,
+	tableStyle: "aligned",
+	openIn: "tab",
+	dateFormat: "YYYY-MM-DD",
+	timeFormat: "HH:mm",
+	autocomplete: true,
+	zebraRows: false,
+	highlightActiveLine: true,
+	headerNamesInLetters: true,
+	ribbonStyle: "labels",
+	statusStats: ["sum", "average", "count"],
+	previewBeforeSave: false,
+	maxBackups: 10,
+	autofitOnFirstOpen: true,
 };
