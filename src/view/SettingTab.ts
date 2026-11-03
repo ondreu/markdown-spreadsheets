@@ -124,13 +124,23 @@ export class MarkdownSpreadsheetsSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Show a button on tables in the note")
+			.setName("Show a button on tables while editing")
 			.setDesc(
-				"Adds a small button to the top right of every table while the pointer is over it, which opens that table in the spreadsheet editor. The note itself is never changed.",
+				"While editing a note, adds a small button to the top right of every table while the pointer is over it, which opens that table in the spreadsheet editor. The note itself is never changed.",
 			)
 			.addToggle((t) =>
 				t.setValue(settings.showTableButton).onChange((value) => {
 					settings.showTableButton = value;
+					commit();
+				}),
+			);
+
+		new Setting(containerEl)
+			.setName("Show the button in reading view too")
+			.setDesc("Reopen the note for this to take effect. It never appears in an exported PDF.")
+			.addToggle((t) =>
+				t.setValue(settings.showTableButtonInReading).onChange((value) => {
+					settings.showTableButtonInReading = value;
 					commit();
 				}),
 			);

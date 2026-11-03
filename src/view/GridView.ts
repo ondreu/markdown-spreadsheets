@@ -4,10 +4,10 @@ import {
 	Scope,
 	TFile,
 	normalizePath,
-	setIcon,
 	type ViewStateResult,
 	type WorkspaceLeaf,
 } from "obsidian";
+import { colName } from "../model/address";
 import { density, filledCount, getRaw, shrinkToData, type Align, type GridModel } from "../model/GridModel";
 import { parseTable } from "../model/parse";
 import { serializeTable } from "../model/serialize";
@@ -18,11 +18,12 @@ import { defaultLayout, type TableLayout } from "../store/Sidecar";
 import { aggregate, applyFunction, formatResult, summaryLine, type CalcFunction } from "../feature/QuickCalc";
 import { csvBytes, type CsvOptions } from "../feature/exportCsv";
 import { DEFAULT_XLSX_OPTIONS, xlsxBuffer } from "../feature/exportXlsx";
-import { fillRange, findAll, normalizeRect, rectCols, rectRows, replaceAll, sortRows, type FindOptions } from "../feature/ops";
+import { fillRange, findAll, normalizeRect, rectCols, rectRows, replaceAll, type FindOptions } from "../feature/ops";
 import type MarkdownSpreadsheetsPlugin from "../main";
 import { asElement, asNode } from "./dom";
 import { MAX_COL_WIDTH, MAX_ROW_HEIGHT, MIN_COL_WIDTH, MIN_ROW_HEIGHT, VIEW_TYPE_GRID } from "./constants";
 import { GridHost, type Selection } from "./GridHost";
+import { setIconSafe, type IconKey } from "./icons";
 import { Ribbon, type RibbonAction, type RibbonItem, type RibbonTab } from "./Ribbon";
 import { StatusBar } from "./StatusBar";
 import {
@@ -73,6 +74,8 @@ export class GridView extends ItemView {
 	private writing = false;
 	private conflictShown = false;
 	private lastCalc: { fn: CalcFunction; text: string } | null = null;
+	/** The cell the formula bar is editing, set on the first keystroke there. */
+	private formulaTarget: { row: number; col: number } | null = null;
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -168,12 +171,21 @@ export class GridView extends ItemView {
 	}
 
 	override async onClose(): Promise<void> {
+		// Land an open edit first: committing marks the grid dirty and would re-arm the timer.
+		this.host?.commitEdit(0, 0, false);
+		this.commitFormula();
 		if (this.saveTimer !== null) {
 			window.clearTimeout(this.saveTimer);
 			this.saveTimer = null;
 		}
 		// Last chance to persist; the tab is going away either way.
 		if (this.dirty && this.plugin.sidecar.settings.saveMode === "auto") await this.save(true);
+		if (this.dirty && this.host && this.layoutKey !== "") {
+			// Manual mode, or a write that could not happen: closing cannot be cancelled, so the grid
+			// is kept as a version instead of vanishing. Nothing is written to the note.
+			this.plugin.sidecar.pushBackup(this.layoutKey, serializeTable(this.host.getModel()), Date.now(), "unsaved");
+			new Notice("The unsaved changes to this table were kept as a version you can restore.");
+		}
 		this.persistLayout();
 		this.host?.destroy();
 		this.host = null;
@@ -206,9 +218,17 @@ export class GridView extends ItemView {
 		}
 		if (resolution.kind === "ambiguous") {
 			const failures = this.plugin.sidecar.noteAnchorFailure(path);
-			new TablePickerModal(this.app, resolution.candidates, (picked) => {
-				void this.adoptRegion(picked.region, failures);
-			}).open();
+			new TablePickerModal(
+				this.app,
+				resolution.candidates,
+				(picked) => void this.adoptRegion(picked.region, failures),
+				{
+					// Dismissing the picker used to leave an empty tab behind with nothing to do in it.
+					onCancel: () => {
+						if (!this.host) this.leaf.detach();
+					},
+				},
+			).open();
 			return;
 		}
 		this.plugin.sidecar.clearAnchorFailures(path);
@@ -225,7 +245,7 @@ export class GridView extends ItemView {
 		const stored = this.plugin.sidecar.getLayout(this.layoutKey);
 		const layout: TableLayout = Object.assign({}, defaultLayout(this.plugin.sidecar.settings), stored);
 		this.plugin.sidecar.setAnchor(this.layoutKey, this.anchor);
-		this.plugin.sidecar.pushBackup(this.layoutKey, region.text, Date.now());
+		this.plugin.sidecar.pushBackup(this.layoutKey, region.text, Date.now(), "opened");
 
 		this.mountHost(model, layout);
 		this.dirty = false;
@@ -251,6 +271,10 @@ export class GridView extends ItemView {
 					onSelectionChange: (selection) => this.onSelectionChange(selection),
 					onNotice: (message) => new Notice(message),
 					onCalcPlaced: () => this.refreshRibbon(),
+					onEditorInput: (value) => {
+						this.formulaTarget = null;
+						this.formulaInputEl.value = value;
+					},
 				},
 			},
 			model,
@@ -523,7 +547,7 @@ export class GridView extends ItemView {
 		this.bannerEl.empty();
 		this.bannerEl.removeClass("mds-hidden");
 		const icon = this.bannerEl.createSpan({ cls: "mds-banner-icon" });
-		setIcon(icon, "alert-triangle");
+		setIconSafe(icon, "warning");
 		this.bannerEl.createSpan({ cls: "mds-banner-text", text: message });
 		const buttons = this.bannerEl.createDiv({ cls: "mds-banner-actions" });
 		for (const action of actions) {
@@ -545,30 +569,61 @@ export class GridView extends ItemView {
 	private buildFormulaBar(): void {
 		const bar = this.contentEl.createDiv({ cls: "mds-formulabar" });
 		this.formulaAddressEl = bar.createDiv({ cls: "mds-formula-address", text: "A1" });
+		setIconSafe(bar.createDiv({ cls: "mds-formula-icon", attr: { "aria-hidden": "true" } }), "formula");
 		this.formulaInputEl = bar.createEl("input", {
 			cls: "mds-formula-input",
 			attr: { type: "text", placeholder: "Cell contents as Markdown", spellcheck: "false" },
 		});
+		this.formulaInputEl.addEventListener("input", () => {
+			if (!this.host || this.formulaTarget !== null) return;
+			const { row, col } = this.host.getSelection().active;
+			this.formulaTarget = { row, col };
+		});
+		this.formulaInputEl.addEventListener("focus", () => this.host?.commitEdit(0, 0, false));
 		this.formulaInputEl.addEventListener("keydown", (evt) => {
 			evt.stopPropagation();
+			if (evt.isComposing) return;
 			if (evt.key === "Enter") {
-				this.host?.setActiveValue(this.formulaInputEl.value);
+				evt.preventDefault();
+				this.commitFormula();
 				this.host?.focus();
-				this.host?.moveActive(1, 0);
+				this.host?.moveActive(evt.shiftKey ? -1 : 1, 0);
+			} else if (evt.key === "Tab") {
+				evt.preventDefault();
+				this.commitFormula();
+				this.host?.focus();
+				this.host?.moveActive(0, evt.shiftKey ? -1 : 1);
 			} else if (evt.key === "Escape") {
+				evt.preventDefault();
+				this.formulaTarget = null;
 				this.syncFormulaBar();
 				this.host?.focus();
 			}
 		});
-		this.formulaInputEl.addEventListener("blur", () => {
-			this.host?.setActiveValue(this.formulaInputEl.value);
-		});
+		this.formulaInputEl.addEventListener("blur", () => this.commitFormula());
+	}
+
+	/**
+	 * Writes the formula bar into the cell it was opened on.
+	 *
+	 * It used to write into whichever cell was active at blur time. Clicking another cell moves the
+	 * selection before the blur, and the selection change had already overwritten the input with
+	 * the new cell's content — so the typed text was silently dropped.
+	 */
+	private commitFormula(): void {
+		const target = this.formulaTarget;
+		if (!target || !this.host) return;
+		this.formulaTarget = null;
+		this.host.setValueAt(target.row, target.col, this.formulaInputEl.value);
 	}
 
 	private syncFormulaBar(): void {
 		if (!this.host) return;
+		// A pending formula-bar edit belongs to the cell it started on; land it before showing the next.
+		if (this.formulaTarget !== null) this.commitFormula();
 		const { active } = this.host.getSelection();
 		this.formulaAddressEl.setText(this.host.activeLabel());
+		if (this.host.isEditing()) return;
 		this.formulaInputEl.value = getRaw(this.host.getModel(), active.row, active.col);
 	}
 
@@ -645,16 +700,34 @@ export class GridView extends ItemView {
 		bind([], "F2", () => this.host?.beginEdit());
 		bind([], "Delete", () => this.host?.clearSelectionContents());
 		bind([], "Backspace", () => this.host?.clearSelectionContents());
-		bind([], "Home", () => this.host?.jumpToEdge(0, -1));
-		bind([], "End", () => this.host?.jumpToEdge(0, 1));
-		bind(["Mod"], "Home", () => this.host?.setSelection({ r1: 0, c1: 0, r2: 0, c2: 0 }, { row: 0, col: 0 }));
+		bind([], "Home", () => this.host?.jumpToRowEdge(false));
+		bind([], "End", () => this.host?.jumpToRowEdge(true));
+		bind(["Shift"], "Home", () => this.host?.jumpToRowEdge(false, true));
+		bind(["Shift"], "End", () => this.host?.jumpToRowEdge(true, true));
+		bind(["Mod"], "Home", () => this.host?.goTo(0, 0));
+		bind(["Mod"], "End", () => {
+			const used = this.host?.getModel().usedRange;
+			if (used) this.host?.goTo(Math.max(0, used.rows - 1), Math.max(0, used.cols - 1));
+		});
 		bind(["Mod"], "a", () => this.host?.selectAll());
 		bind(["Mod"], "z", () => this.host?.undoLast());
 		bind(["Mod", "Shift"], "z", () => this.host?.redoLast());
 		bind(["Mod"], "y", () => this.host?.redoLast());
-		bind(["Mod"], "s", () => void this.save(true));
 		bind(["Mod"], "b", () => this.host?.format("bold"));
 		bind(["Mod"], "i", () => this.host?.format("italic"));
+		bind(["Mod"], "d", () => this.fill("down"));
+
+		// Save works from anywhere in the tab, including mid-edit: the edit is committed first.
+		scope.register(["Mod"], "s", (evt) => {
+			if (!this.host) return true;
+			const active = asElement(this.contentEl.ownerDocument.activeElement);
+			if (active !== null && !this.contentEl.contains(active)) return true;
+			evt.preventDefault();
+			this.host.commitEdit(0, 0, false);
+			this.commitFormula();
+			void this.save(true);
+			return false;
+		});
 
 		// Escape cancels the pending calculation target before anything else (§12).
 		scope.register([], "Escape", (evt) => {
@@ -678,14 +751,18 @@ export class GridView extends ItemView {
 		const action = (
 			id: string,
 			label: string,
-			icon: string,
+			icon: IconKey,
 			onClick: () => void,
 			extra?: { tooltip?: string; disabled?: boolean; active?: boolean; primary?: boolean },
 		): RibbonAction => ({
 			id,
 			label,
 			icon,
-			onClick,
+			// An open cell editor is committed first, so every action sees what was typed.
+			onClick: () => {
+				this.host?.commitEdit(0, 0, false);
+				onClick();
+			},
 			...(extra?.tooltip === undefined ? {} : { tooltip: extra.tooltip }),
 			...(extra?.disabled === undefined ? {} : { disabled: extra.disabled }),
 			...(extra?.active === undefined ? {} : { active: extra.active }),
@@ -694,7 +771,7 @@ export class GridView extends ItemView {
 		const button = (
 			id: string,
 			label: string,
-			icon: string,
+			icon: IconKey,
 			onClick: () => void,
 			extra?: { tooltip?: string; disabled?: boolean; active?: boolean; primary?: boolean },
 		): RibbonItem => ({ kind: "button", action: action(id, label, icon, onClick, extra) });
@@ -702,20 +779,29 @@ export class GridView extends ItemView {
 		const cluster = (id: string, actions: RibbonAction[]): RibbonItem => ({ kind: "cluster", id, actions });
 
 		const rect = host?.getSelection().rect ?? { r1: 0, c1: 0, r2: 0, c2: 0 };
+		const active = host?.getSelection().active ?? { row: 0, col: 0 };
 		const cols = host ? rectCols(rect) : [0];
 		const rows = host ? rectRows(rect) : [0];
 		const headerOnly = rect.r1 === 0 && rect.r2 === 0;
 		const singleRow = rect.r1 === rect.r2;
 		const singleCol = rect.c1 === rect.c2;
+		const usedRows = host?.getModel().usedRange.rows ?? 0;
+		const usedCols = host?.getModel().usedRange.cols ?? 0;
 		const wrapped = host ? cols.every((c) => host.getLayout().wrapCols.includes(c)) : false;
 		const rendered = host?.getRenderMode() === "rendered";
+		const formats = host?.activeFormats() ?? new Set<string>();
+		const frozenRows = host?.getLayout().frozenRows ?? 0;
+		const frozenCols = host?.getLayout().frozenCols ?? 0;
+		const filters = host?.getFilters().length ?? 0;
 		const alignOf = (align: Align) => (host ? cols.every((c) => (host.getModel().colAlign[c] ?? null) === align) : false);
+		const undoLabel = host?.undo.undoLabel() ?? null;
+		const redoLabel = host?.undo.redoLabel() ?? null;
 
 		const tabs: RibbonTab[] = [
 			{
 				id: "home",
 				label: "Home",
-				icon: "home",
+				icon: "tabHome",
 				groups: [
 					{
 						label: "Clipboard",
@@ -724,19 +810,19 @@ export class GridView extends ItemView {
 								action("copy", "Copy", "copy", () => this.copyToClipboard(false), {
 									tooltip: "the selection as tab-separated text (Ctrl+C)",
 								}),
-								action("cut", "Cut", "scissors", () => this.copyToClipboard(true), { tooltip: "Ctrl+X" }),
-								action("paste", "Paste", "clipboard-paste", () => void this.pasteFromClipboard(), {
-									tooltip: "tab-separated text (Ctrl+V)",
+								action("cut", "Cut", "cut", () => this.copyToClipboard(true), { tooltip: "Ctrl+X" }),
+								action("paste", "Paste", "paste", () => void this.pasteFromClipboard(), {
+									tooltip: "tab-separated text or a Markdown table (Ctrl+V)",
 								}),
 							]),
 							cluster("history", [
-								action("undo", "Undo", "undo-2", () => host?.undoLast(), {
+								action("undo", "Undo", "undo", () => host?.undoLast(), {
 									disabled: !host?.undo.canUndo(),
-									tooltip: host?.undo.undoLabel() ? `${host.undo.undoLabel()?.toLowerCase()} (Ctrl+Z)` : "nothing to undo",
+									tooltip: undoLabel !== null ? `${undoLabel.toLowerCase()} (Ctrl+Z)` : "nothing to undo",
 								}),
-								action("redo", "Redo", "redo-2", () => host?.redoLast(), {
+								action("redo", "Redo", "redo", () => host?.redoLast(), {
 									disabled: !host?.undo.canRedo(),
-									tooltip: host?.undo.redoLabel() ? `${host.undo.redoLabel()?.toLowerCase()} (Ctrl+Y)` : "nothing to redo",
+									tooltip: redoLabel !== null ? `${redoLabel.toLowerCase()} (Ctrl+Y)` : "nothing to redo",
 								}),
 							]),
 						],
@@ -745,22 +831,24 @@ export class GridView extends ItemView {
 						label: "Rows",
 						items: [
 							cluster("rows", [
-								action("row-above", "Insert row above", "between-vertical-start", () => host?.insertRowsAt("above"), {
-									disabled: headerOnly,
-									tooltip: headerOnly ? "row 1 is the table header, so nothing can go above it" : undefined,
+								action("row-above", "Insert row above", "rowAbove", () => host?.insertRowsAt("above"), {
+									disabled: rect.r1 === 0,
+									tooltip: rect.r1 === 0 ? "row 1 is the table header, so nothing can go above it" : undefined,
 								}),
-								action("row-below", "Insert row below", "between-vertical-end", () => host?.insertRowsAt("below")),
-								action("row-delete", "Delete row", "trash-2", () => host?.deleteSelectedRows(), {
+								action("row-below", "Insert row below", "rowBelow", () => host?.insertRowsAt("below")),
+								action("row-delete", "Delete row", "remove", () => host?.deleteSelectedRows(), {
 									disabled: headerOnly,
 									tooltip: headerOnly ? "Markdown tables require a header row" : undefined,
 								}),
 							]),
 							cluster("rows-move", [
-								action("row-up", "Move row up", "arrow-up", () => host?.moveSelectedRow(-1), {
+								action("row-up", "Move row up", "up", () => host?.moveSelectedRow(-1), {
 									disabled: !singleRow || rect.r1 <= 1,
+									tooltip: singleRow ? undefined : "select a single row",
 								}),
-								action("row-down", "Move row down", "arrow-down", () => host?.moveSelectedRow(1), {
-									disabled: !singleRow || rect.r1 === 0,
+								action("row-down", "Move row down", "down", () => host?.moveSelectedRow(1), {
+									disabled: !singleRow || rect.r1 === 0 || rect.r1 >= usedRows - 1,
+									tooltip: singleRow ? undefined : "select a single row",
 								}),
 							]),
 						],
@@ -769,16 +857,16 @@ export class GridView extends ItemView {
 						label: "Columns",
 						items: [
 							cluster("cols", [
-								action("col-left", "Insert column left", "between-horizontal-start", () => host?.insertColsAt("left")),
-								action("col-right", "Insert column right", "between-horizontal-end", () => host?.insertColsAt("right")),
-								action("col-delete", "Delete column", "trash-2", () => host?.deleteSelectedCols()),
+								action("col-left", "Insert column left", "colLeft", () => host?.insertColsAt("left")),
+								action("col-right", "Insert column right", "colRight", () => host?.insertColsAt("right")),
+								action("col-delete", "Delete column", "remove", () => host?.deleteSelectedCols()),
 							]),
 							cluster("cols-move", [
-								action("col-left-move", "Move column left", "arrow-left", () => host?.moveSelectedCol(-1), {
+								action("col-left-move", "Move column left", "left", () => host?.moveSelectedCol(-1), {
 									disabled: !singleCol || rect.c1 === 0,
 								}),
-								action("col-right-move", "Move column right", "arrow-right", () => host?.moveSelectedCol(1), {
-									disabled: !singleCol,
+								action("col-right-move", "Move column right", "right", () => host?.moveSelectedCol(1), {
+									disabled: !singleCol || rect.c1 >= usedCols - 1,
 								}),
 							]),
 						],
@@ -788,19 +876,19 @@ export class GridView extends ItemView {
 						items: [
 							cluster("align", [
 								// GFM stores alignment per column, never per cell (§3).
-								action("align-left", "Align left", "align-left", () => host?.setAlignment("left"), {
+								action("align-left", "Align left", "alignLeft", () => host?.setAlignment("left"), {
 									tooltip: "applies to the whole column — Markdown has no per-cell alignment",
 									active: alignOf("left"),
 								}),
-								action("align-center", "Align centre", "align-center", () => host?.setAlignment("center"), {
+								action("align-center", "Align centre", "alignCenter", () => host?.setAlignment("center"), {
 									tooltip: "applies to the whole column",
 									active: alignOf("center"),
 								}),
-								action("align-right", "Align right", "align-right", () => host?.setAlignment("right"), {
+								action("align-right", "Align right", "alignRight", () => host?.setAlignment("right"), {
 									tooltip: "applies to the whole column",
 									active: alignOf("right"),
 								}),
-								action("align-none", "Default alignment", "remove-formatting", () => host?.setAlignment(null), {
+								action("align-none", "Default alignment", "alignNone", () => host?.setAlignment(null), {
 									tooltip: "removes the alignment marker from the column",
 									active: alignOf(null),
 								}),
@@ -811,25 +899,36 @@ export class GridView extends ItemView {
 						label: "Format",
 						items: [
 							cluster("emphasis", [
-								action("bold", "Bold", "bold", () => host?.format("bold"), { tooltip: "wraps the cell in ** (Ctrl+B)" }),
-								action("italic", "Italic", "italic", () => host?.format("italic"), { tooltip: "wraps the cell in * (Ctrl+I)" }),
-								action("code", "Code", "code", () => host?.format("code"), { tooltip: "wraps the cell in backticks" }),
-								action("strike", "Strikethrough", "strikethrough", () => host?.format("strikethrough")),
+								action("bold", "Bold", "bold", () => host?.format("bold"), {
+									tooltip: "** or __ around the cell (Ctrl+B)",
+									active: formats.has("bold"),
+								}),
+								action("italic", "Italic", "italic", () => host?.format("italic"), {
+									tooltip: "* or _ around the cell (Ctrl+I)",
+									active: formats.has("italic"),
+								}),
+								action("code", "Code", "code", () => host?.format("code"), {
+									tooltip: "backticks around the cell",
+									active: formats.has("code"),
+								}),
+								action("strike", "Strikethrough", "strike", () => host?.format("strikethrough"), {
+									tooltip: "~~ around the cell",
+									active: formats.has("strikethrough"),
+								}),
 							]),
-							button("wrap", "Wrap", "wrap-text", () => host?.toggleWrap(cols), {
+							button("wrap", "Wrap", "wrap", () => host?.toggleWrap(cols), {
 								active: wrapped,
 								tooltip: "visual only — the cell stays a single line of Markdown",
 							}),
 							button(
 								"render",
 								rendered ? "Raw" : "Rendered",
-								rendered ? "file-code-2" : "eye",
+								rendered ? "raw" : "rendered",
 								() => {
 									host?.setRenderMode(rendered ? "raw" : "rendered");
 									this.refreshRibbon();
 								},
 								{
-									active: rendered,
 									tooltip: rendered
 										? "show the Markdown source of every cell instead"
 										: "format each visible cell the way the note does",
@@ -842,35 +941,39 @@ export class GridView extends ItemView {
 			{
 				id: "data",
 				label: "Data",
-				icon: "database",
+				icon: "tabData",
 				groups: [
 					{
 						label: "Sort",
 						items: [
 							cluster("sort", [
-								action("sort-asc", "Sort ascending", "arrow-down-a-z", () => this.sort(true)),
-								action("sort-desc", "Sort descending", "arrow-up-z-a", () => this.sort(false)),
+								action("sort-asc", "Sort ascending", "sortAsc", () => this.sort(true), {
+									tooltip: `by column ${colName(active.col)}; the header row stays in place`,
+								}),
+								action("sort-desc", "Sort descending", "sortDesc", () => this.sort(false), {
+									tooltip: `by column ${colName(active.col)}; the header row stays in place`,
+								}),
 							]),
-							button("sort-dialog", "Sort by…", "list-ordered", () => this.openSortDialog()),
+							button("sort-dialog", "Sort by…", "sortDialog", () => this.openSortDialog()),
 						],
 					},
 					{
 						label: "Filter",
 						items: [
 							button("filter", "Filter", "filter", () => this.openFilterDialog(), {
-								active: (host?.getFilters().length ?? 0) > 0,
+								active: filters > 0,
 								tooltip: "hides rows in the grid only — the note keeps every row",
 							}),
 							button(
 								"filter-clear",
 								"Clear",
-								"filter-x",
+								"filterClear",
 								() => {
 									host?.setFilters([]);
 									this.refreshStatus();
 									this.refreshRibbon();
 								},
-								{ disabled: (host?.getFilters().length ?? 0) === 0, tooltip: "show every row again" },
+								{ disabled: filters === 0, tooltip: filters === 0 ? "no filter is set" : "show every row again" },
 							),
 						],
 					},
@@ -879,13 +982,13 @@ export class GridView extends ItemView {
 						items: [
 							button("find", "Find and replace", "search", () => this.openFindReplace()),
 							cluster("fill", [
-								action("fill-down", "Fill down", "arrow-down-to-line", () => this.fill("down"), {
-									tooltip: "copies the first row of the selection into the rest",
+								action("fill-down", "Fill down", "fillDown", () => this.fill("down"), {
+									tooltip: "copies the first row of the selection into the rest, or the row above into a single row (Ctrl+D)",
 								}),
-								action("fill-right", "Fill right", "arrow-right-to-line", () => this.fill("right"), {
+								action("fill-right", "Fill right", "fillRight", () => this.fill("right"), {
 									tooltip: "copies the first column of the selection into the rest",
 								}),
-								action("clear", "Clear contents", "eraser", () => host?.clearSelectionContents(), {
+								action("clear", "Clear contents", "clear", () => host?.clearSelectionContents(), {
 									tooltip: "Delete",
 								}),
 							]),
@@ -894,10 +997,10 @@ export class GridView extends ItemView {
 					{
 						label: "Calculate",
 						items: [
-							button("calc", "Calculate", "sigma", () => this.openCalculate(), {
+							button("calc", "Calculate", "calculate", () => this.openCalculate(), {
 								tooltip: "inserts a one-off value — Markdown has no live formulas",
 							}),
-							button("calc-again", "Again", "rotate-ccw", () => this.recalculateLast(), {
+							button("calc-again", "Again", "again", () => this.recalculateLast(), {
 								disabled: this.lastCalc === null,
 								tooltip: this.lastCalc
 									? `recompute ${this.lastCalc.fn} over the current selection`
@@ -910,7 +1013,7 @@ export class GridView extends ItemView {
 			{
 				id: "table",
 				label: "Table",
-				icon: "table",
+				icon: "tabTable",
 				groups: [
 					{
 						label: "Size",
@@ -941,17 +1044,19 @@ export class GridView extends ItemView {
 						label: "Autofit",
 						items: [
 							cluster("autofit", [
-								action("autofit-col", "Autofit columns", "move-horizontal", () => host?.autofitColumns(cols), {
-									tooltip: "widen the selected columns to their widest cell",
+								action("autofit-col", "Autofit columns", "autofitCols", () => host?.autofitColumns(cols), {
+									tooltip: "fit the selected columns to their widest cell",
 								}),
-								action("autofit-row", "Autofit rows", "move-vertical", () => host?.autofitRows(rows)),
-								action("autofit-all", "Autofit all columns", "maximize-2", () => {
+								action("autofit-row", "Autofit rows", "autofitRows", () => host?.autofitRows(rows), {
+									tooltip: "fit the selected rows to their tallest cell",
+								}),
+								action("autofit-all", "Autofit all columns", "autofitAll", () => {
 									if (!host) return;
 									const all: number[] = [];
 									for (let c = 0; c < Math.max(host.getModel().usedRange.cols, 1); c++) all.push(c);
 									host.autofitColumns(all);
 								}),
-								action("reset-row", "Reset row height", "rotate-ccw", () => host?.resetRowHeights(rows)),
+								action("reset-row", "Reset row height", "reset", () => host?.resetRowHeights(rows)),
 							]),
 						],
 					},
@@ -959,14 +1064,28 @@ export class GridView extends ItemView {
 						label: "Freeze",
 						items: [
 							cluster("freeze", [
-								action("freeze-header", "Freeze header row", "pin", () => host?.setFreeze(1, host.getLayout().frozenCols), {
-									active: host?.getLayout().frozenRows === 1,
+								action("freeze-header", "Freeze header row", "freeze", () => host?.setFreeze(frozenRows === 1 ? 0 : 1, frozenCols), {
+									active: frozenRows === 1,
+									tooltip: "keep row 1 on screen while scrolling",
 								}),
-								action("freeze-col", "Freeze first column", "pin", () => host?.setFreeze(host.getLayout().frozenRows, 1), {
-									active: (host?.getLayout().frozenCols ?? 0) >= 1,
+								action("freeze-col", "Freeze first column", "freeze", () => host?.setFreeze(frozenRows, frozenCols === 1 ? 0 : 1), {
+									active: frozenCols === 1,
+									tooltip: "keep column A on screen while scrolling",
 								}),
-								action("freeze-none", "Unfreeze", "pin-off", () => host?.setFreeze(0, 0), {
-									disabled: (host?.getLayout().frozenRows ?? 0) === 0 && (host?.getLayout().frozenCols ?? 0) === 0,
+								action(
+									"freeze-panes",
+									"Freeze panes",
+									"freezePanes",
+									() => {
+										if (host && !host.freezeAtSelection()) new Notice("Select the cell below and to the right of what should stay on screen.");
+									},
+									{
+										active: frozenRows > 1 || frozenCols > 1,
+										tooltip: `keep everything above and left of ${host?.activeLabel() ?? "the active cell"} on screen`,
+									},
+								),
+								action("freeze-none", "Unfreeze", "unfreeze", () => host?.setFreeze(0, 0), {
+									disabled: frozenRows === 0 && frozenCols === 0,
 								}),
 							]),
 						],
@@ -974,20 +1093,20 @@ export class GridView extends ItemView {
 					{
 						label: "Table",
 						items: [
-							button("reformat", "Reformat", "align-justify", () => void this.reformat(), {
+							button("reformat", "Reformat", "reformat", () => void this.reformat(), {
 								tooltip: "rewrites the table in the note with the pipes realigned",
 							}),
 							button(
 								"shrink",
 								"Shrink to data",
-								"minimize-2",
+								"shrink",
 								() => {
 									if (!host) return;
 									host.mutate("Shrink to data", () => shrinkToData(host.getModel()));
 								},
 								{ tooltip: "drops the empty rows and columns around the data" },
 							),
-							button("restore", "Restore a version", "history", () => this.openRestore(), {
+							button("restore", "Restore a version", "restore", () => this.openRestore(), {
 								tooltip: "compare the grid with an earlier version of this table",
 							}),
 						],
@@ -997,20 +1116,24 @@ export class GridView extends ItemView {
 			{
 				id: "export",
 				label: "Export",
-				icon: "upload",
+				icon: "tabExport",
 				groups: [
 					{
 						label: "Files",
 						items: [
-							button("csv", "CSV", "file-spreadsheet", () => this.openExport("csv")),
-							button("xlsx", "Excel", "file-spreadsheet", () => this.openExport("xlsx")),
+							button("csv", "CSV", "csv", () => this.openExport("csv")),
+							button("xlsx", "Excel", "excel", () => this.openExport("xlsx")),
 						],
 					},
 					{
 						label: "Clipboard",
 						items: [
-							button("copy-md", "Copy as Markdown", "clipboard-copy", () => void this.copyAsMarkdown()),
-							button("copy-tsv", "Copy as text", "clipboard-list", () => this.copyToClipboard(false)),
+							button("copy-md", "Copy as Markdown", "copyMarkdown", () => void this.copyAsMarkdown(), {
+								tooltip: "the selection as a Markdown table",
+							}),
+							button("copy-tsv", "Copy as text", "copyText", () => this.copyToClipboard(false), {
+								tooltip: "the selection as tab-separated text",
+							}),
 						],
 					},
 					{
@@ -1021,10 +1144,10 @@ export class GridView extends ItemView {
 								primary: this.dirty,
 								tooltip: this.dirty ? "write the table back into the note (Ctrl+S)" : "the note already matches the grid",
 							}),
-							button("reload", "Reload", "refresh-cw", () => void this.confirmReload(), {
+							button("reload", "Reload", "reload", () => void this.confirmReload(), {
 								tooltip: "take the note's version of the table",
 							}),
-							button("open-note", "Open the note", "file-text", () => void this.openSourceNote()),
+							button("open-note", "Open the note", "note", () => void this.openSourceNote()),
 						],
 					},
 				],
@@ -1067,33 +1190,36 @@ export class GridView extends ItemView {
 	private fill(direction: "down" | "right"): void {
 		const host = this.host;
 		if (!host) return;
-		const rect = normalizeRect(host.getSelection().rect);
-		if (direction === "down" && rect.r2 <= rect.r1) {
-			new Notice("Select the source row together with the rows to fill.");
-			return;
+		let rect = normalizeRect(host.getSelection().rect);
+		// One row (or column) selected: fill it from the one before, as Ctrl+D does in Excel. The
+		// header row is never a source for data rows.
+		if (direction === "down" && rect.r2 === rect.r1) {
+			if (rect.r1 < 2) {
+				new Notice("Select the source row together with the rows to fill.");
+				return;
+			}
+			rect = { ...rect, r1: rect.r1 - 1 };
 		}
-		if (direction === "right" && rect.c2 <= rect.c1) {
-			new Notice("Select the source column together with the columns to fill.");
-			return;
+		if (direction === "right" && rect.c2 === rect.c1) {
+			if (rect.c1 < 1) {
+				new Notice("Select the source column together with the columns to fill.");
+				return;
+			}
+			rect = { ...rect, c1: rect.c1 - 1 };
 		}
-		const source = direction === "down" ? { ...rect, r2: rect.r1 } : { ...rect, c2: rect.c1 };
-		host.mutate("Fill", () => fillRange(host.getModel(), source, rect, direction, host.numberOpts()));
+		const target = rect;
+		const source = direction === "down" ? { ...target, r2: target.r1 } : { ...target, c2: target.c1 };
+		host.mutate("Fill", () => fillRange(host.getModel(), source, target, direction, host.numberOpts()));
 	}
 
 	private sort(ascending: boolean): void {
-		if (!this.host) return;
 		const host = this.host;
+		if (!host) return;
 		const rect = host.getSelection().rect;
-		const rows = rectRows(rect).filter((r) => r > 0);
-		host.mutate("Sort rows", () =>
-			sortRows(
-				host.getModel(),
-				host.getLayout(),
-				{ col: rect.c1, ascending, ...(rows.length > 1 ? { rows } : {}) },
-				host.numberOpts(),
-			),
-		);
-		this.persistLayout();
+		// A range of several data rows sorts just those rows; anything else sorts the whole table.
+		const rows = rectRows(rect).filter((r) => r > 0 && r < host.getModel().usedRange.rows);
+		const wholeColumn = rect.r1 === 0 && rows.length >= host.getModel().usedRange.rows - 1;
+		host.sortByColumn(host.getSelection().active.col, ascending, wholeColumn ? undefined : rows);
 	}
 
 	private openSortDialog(): void {
@@ -1102,19 +1228,11 @@ export class GridView extends ItemView {
 		const rect = host.getSelection().rect;
 		new SortModal(this.app, {
 			model: host.getModel(),
-			defaultCol: rect.c1,
+			defaultCol: host.getSelection().active.col,
 			hasMultiRowSelection: rect.r2 - rect.r1 > 0,
 			onSort: (col, ascending, selectionOnly) => {
 				const rows = rectRows(host.getSelection().rect).filter((r) => r > 0);
-				host.mutate("Sort rows", () =>
-					sortRows(
-						host.getModel(),
-						host.getLayout(),
-						{ col, ascending, ...(selectionOnly && rows.length > 1 ? { rows } : {}) },
-						host.numberOpts(),
-					),
-				);
-				this.persistLayout();
+				host.sortByColumn(col, ascending, selectionOnly ? rows : undefined);
 			},
 		}).open();
 	}
@@ -1138,6 +1256,16 @@ export class GridView extends ItemView {
 		const host = this.host;
 		new FindReplaceModal(this.app, {
 			onFind: (options: FindOptions) => findAll(host.getModel(), options).length,
+			onFindNext: (options: FindOptions) => {
+				const matches = findAll(host.getModel(), options);
+				if (matches.length === 0) return null;
+				// Row-major order from the active cell, wrapping at the end like every editor does.
+				const { row, col } = host.getSelection().active;
+				const index = matches.findIndex((m) => m.row > row || (m.row === row && m.col > col));
+				const next = index === -1 ? 0 : index;
+				host.goTo(matches[next].row, matches[next].col);
+				return { index: next + 1, count: matches.length };
+			},
 			onReplaceAll: (options, replacement) => {
 				let count = 0;
 				host.mutate("Replace", () => {

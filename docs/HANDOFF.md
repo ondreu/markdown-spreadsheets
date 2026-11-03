@@ -186,3 +186,76 @@ overflows it. This one was reproduced in headless Chromium against the real `sty
 Obsidian's button defaults — 13 picker items and 10 restore items, asserting that no item's
 `scrollHeight` exceeds its box and that no item's ink crosses into the next — and re-checked at
 420 px, 640 px and 1000 px.
+
+## Round five: a bug hunt across the whole plugin
+
+Six reports came back from use, and the rest of the code was read for the same kinds of fault.
+Everything below is on `claude/loving-euler-vo4rr9`. The view layer was, for the first time,
+exercised outside Obsidian: `GridHost` and `Ribbon` were bundled against a small shim of the
+Obsidian API and driven in headless Chromium — selection, editing, clipboard events, autofit, wrap,
+freeze panes, the fill handle, link clicks, ribbon patching — with screenshots of the sticky
+headers. That is real code in a real browser, not Obsidian; the list of what is still unverified
+is at the end.
+
+### Reported
+
+1. **`_kurzíva_` was not italic** to the format buttons. Emphasis is now read as layers
+   (`peelInline` in `src/feature/ops.ts`): `*`/`_` and `**`/`__` are equivalent, `***x***` is both,
+   and toggling removes exactly one layer. Before, Ctrl+I on `_x_` produced `*_x_*` and Ctrl+I on
+   `**x**` turned bold into italic. The ribbon shows which formats the active cell has.
+2. **The edit button showed in reading view and in PDF export.** It was a post processor, which is
+   exactly the reading/PDF pipeline. It is now off there by default (decision 18) and hidden from
+   print regardless.
+3. **The column letters showed through.** Obsidian's selection and hover colours are translucent,
+   and the active column's header is always selected. Opaque bases with the tints laid over them
+   (decision 20). The fill handle also painted over the headers; it now sits below them and hides
+   under the frozen panes.
+4. **"Some functions don't work as expected"** — see the list below.
+5. **The sort buttons had no icon.** Lucide renames; icons are now fallback lists (decision 19).
+6. **No button in Live Preview.** A CodeMirror view plugin adds it to Obsidian's table widget.
+
+### Found while reading
+
+Data:
+- An unmatched backtick merged the rest of a row into one cell on save (decision 12).
+- A typed `\|` was escaped again and split the cell on the next read (decision 13).
+- A setext heading `a | b` over `---` was taken for a table (decision 14).
+- A note with mixed line endings had all of them rewritten on save (decision 16).
+- The first autosave overwrote the "as opened" version, and manual mode lost unsaved edits on close
+  (decision 17).
+- Text typed into the formula bar was lost when you then clicked another cell: the selection change
+  overwrote the input before its blur committed. It now commits to the cell it was opened on.
+- A ribbon action while a cell editor was open would have repainted the cell under it; `mutate()`
+  now commits the editor first, as its own undo step.
+
+Behaviour:
+- Shift+arrows or a drag up/left of the starting cell lost the anchor after one step.
+- Committing an edit by clicking elsewhere pulled focus back into the grid, so the click — into the
+  note, the formula bar, a ribbon field — did not land.
+- Autofit rows grew a row by 6 px per click and never shrank it; autofit columns could not shrink.
+- Wrap did nothing visible, because rows kept their one-line height.
+- Ctrl+C/X/V only worked when the DOM happened to hold a text selection inside the grid; the
+  listeners are now on the document and check focus.
+- Every edit made all visible rendered cells flash their raw Markdown; rendered content is reused
+  synchronously from the cache. Every edit also leaked an `IntersectionObserver`.
+- A plain click on a link in a rendered cell could navigate the app window; it now selects the cell,
+  and Ctrl/Cmd+click opens the link in a new tab.
+- The ribbon rebuilt itself on every arrow key; it now patches state. Its buttons no longer take
+  focus from the grid, and disabled buttons keep their tooltip.
+- Home/End jumped between data blocks instead of to the row's ends; F2 selected the whole cell, so
+  the next key wiped it; dismissing the table picker left an empty tab; a tooltip followed the
+  pointer over every cell; Plain-text export kept `*`, `_` and `~~` inside a cell.
+
+Added: Excel's typing mode (arrows commit), Shift+click and drag on column and row headers,
+Freeze panes at the active cell, Find next, pasting a Markdown table, a single value filling a
+range, Ctrl+D, sort from the column header menu, and a range outline in place of per-cell tint.
+
+### Still not verified in Obsidian
+
+- **The Live Preview button** relies on Obsidian's widget classes `cm-embed-block cm-table-widget`
+  and on that widget not handling the button's events in the capture phase. If the button does not
+  appear, the selector in `src/view/livePreviewButton.ts` is the first thing to check; if clicking
+  it starts a cell edit instead, the widget is listening in capture.
+- **Which icon names this Obsidian build has.** The fallback lists make a blank icon unlikely, but
+  the first name that resolves is the one shown.
+- Everything from the earlier "Still not verified" lists that this round did not touch.

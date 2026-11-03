@@ -179,6 +179,11 @@
 	cursor: not-allowed;
 }
 
+.mds-ribbon-btn:focus-visible,
+.mds-ribbon-tab:focus-visible {
+	box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
+
 .mds-ribbon-btn-icon {
 	display: inline-flex;
 	align-items: center;
@@ -258,6 +263,17 @@
 	color: var(--text-muted);
 }
 
+.mds-formula-icon {
+	display: inline-flex;
+	flex: 0 0 auto;
+	color: var(--text-faint);
+}
+
+.mds-formula-icon .svg-icon {
+	width: 14px;
+	height: 14px;
+}
+
 .mds-formula-input {
 	flex: 1 1 auto;
 	min-width: 0;
@@ -300,6 +316,13 @@
 	display: flex;
 }
 
+/*
+ * Every surface that stays put while the grid scrolls — column letters, row numbers, the frozen
+ * header row and frozen columns — needs an opaque background, or the cells scrolling underneath
+ * show through it. Obsidian's hover, selection and accent colours are translucent by design, so
+ * they are never used as a background colour here: they are laid over an opaque base as a
+ * gradient layer instead. Using them directly is what made the column letters see-through.
+ */
 .mds-host {
 	position: relative;
 	flex: 1 1 auto;
@@ -311,6 +334,16 @@
 	--mds-row-default: 24px;
 	--mds-head-h: 26px;
 	--mds-rowhead-w: 52px;
+
+	--mds-bg: var(--background-primary);
+	--mds-head-bg: var(--background-secondary);
+	--mds-header-row-bg: var(--background-primary-alt);
+	--mds-line: var(--background-modifier-border);
+	--mds-line-strong: var(--background-modifier-border-hover);
+	--mds-accent: var(--interactive-accent);
+	--mds-tint-select: var(--text-selection);
+	--mds-tint-hover: var(--background-modifier-hover);
+	--mds-edge-none: 0 0 0 0 transparent;
 }
 
 .mds-host.is-resizing {
@@ -323,7 +356,7 @@
 	min-height: 0;
 	overflow: auto;
 	outline: none;
-	background-color: var(--background-primary);
+	background-color: var(--mds-bg);
 }
 
 .mds-canvas {
@@ -331,6 +364,8 @@
 	width: max-content;
 	min-width: 100%;
 	font-size: var(--font-ui-small);
+	/* A drag selects cells, not text; the browser's own highlight on top of ours was noise. */
+	user-select: none;
 }
 
 .mds-row {
@@ -343,18 +378,29 @@
 	display: none;
 }
 
+/* One measurement at the row's natural height, for autofit and wrapping. */
+.mds-row.is-measuring {
+	height: auto !important;
+}
+
 /* Freeze via sticky positioning; the offsets are written by GridStyles (§8.5). */
 .mds-row.mds-head-row {
 	position: sticky;
 	top: 0;
 	z-index: 4;
 	height: var(--mds-head-h);
+	background-color: var(--mds-head-bg);
 }
 
 .mds-row.is-frozen-row {
 	position: sticky;
 	z-index: 3;
-	background-color: var(--background-primary);
+	background-color: var(--mds-bg);
+}
+
+/* Where the frozen rows end, a line the scrolling content passes under. */
+.mds-row.is-frozen-row.is-frozen-edge {
+	box-shadow: 0 1px 0 0 var(--mds-line-strong);
 }
 
 .mds-corner,
@@ -365,11 +411,12 @@
 	align-items: center;
 	justify-content: center;
 	flex: 0 0 auto;
-	border-right: 1px solid var(--background-modifier-border);
-	border-bottom: 1px solid var(--background-modifier-border);
-	background-color: var(--background-secondary);
+	border-right: 1px solid var(--mds-line);
+	border-bottom: 1px solid var(--mds-line);
+	background-color: var(--mds-head-bg);
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
+	font-variant-numeric: tabular-nums;
 	user-select: none;
 }
 
@@ -384,27 +431,43 @@
 
 .mds-corner {
 	z-index: 5;
+	cursor: pointer;
 }
 
 .mds-colhead {
 	cursor: pointer;
 }
 
+.mds-corner:hover,
 .mds-colhead:hover,
 .mds-rowhead:hover {
-	background-color: var(--background-modifier-hover);
+	background-image: linear-gradient(var(--mds-tint-hover), var(--mds-tint-hover));
 }
 
+/* Excel's cue: the letters and numbers of the selection light up, with an accent rule. */
 .mds-colhead.is-selected,
 .mds-rowhead.is-selected {
-	background-color: var(--background-modifier-active-hover);
+	background-image: linear-gradient(var(--mds-tint-select), var(--mds-tint-select));
 	color: var(--text-normal);
 	font-weight: var(--font-semibold);
+}
+
+.mds-colhead.is-selected {
+	box-shadow: inset 0 -2px 0 0 var(--mds-accent);
+}
+
+.mds-rowhead.is-selected {
+	box-shadow: inset -2px 0 0 0 var(--mds-accent);
 }
 
 .mds-colhead.is-frozen-col {
 	position: sticky;
 	z-index: 3;
+}
+
+.mds-colhead.is-frozen-edge,
+.mds-cell.is-frozen-edge {
+	border-right-color: var(--mds-line-strong);
 }
 
 .mds-head-row.is-col-resize .mds-colhead {
@@ -421,19 +484,24 @@
 	width: var(--mds-col-default);
 	min-width: var(--mds-col-default);
 	padding: 2px 6px;
-	border-right: 1px solid var(--background-modifier-border);
-	border-bottom: 1px solid var(--background-modifier-border);
+	border-right: 1px solid var(--mds-line);
+	border-bottom: 1px solid var(--mds-line);
+	background-color: var(--mds-bg);
 	overflow: hidden;
 	white-space: nowrap;
 	text-overflow: ellipsis;
 	line-height: 1.4;
 	color: var(--text-normal);
+
+	--mds-edge-t: var(--mds-edge-none);
+	--mds-edge-r: var(--mds-edge-none);
+	--mds-edge-b: var(--mds-edge-none);
+	--mds-edge-l: var(--mds-edge-none);
 }
 
 .mds-cell.is-frozen-col {
 	position: sticky;
 	z-index: 1;
-	background-color: var(--background-primary);
 }
 
 /* §8.3: wrapping is purely visual — the cell stays one line of Markdown. */
@@ -441,6 +509,10 @@
 	white-space: normal;
 	overflow-wrap: anywhere;
 	text-overflow: clip;
+}
+
+.mds-row.is-measuring > .mds-cell.is-wrap {
+	overflow: visible;
 }
 
 .mds-cell.is-align-left {
@@ -457,38 +529,80 @@
 
 /* Row 1 is the GFM header row and cannot be deleted, so it must not look like data (§9). */
 .mds-row.is-header-row .mds-cell {
-	background-color: var(--background-secondary-alt);
+	background-color: var(--mds-header-row-bg);
+	border-bottom-color: var(--mds-line-strong);
 	font-weight: var(--font-semibold);
 }
 
 .mds-row.is-header-row .mds-rowhead {
 	color: var(--text-normal);
 	font-weight: var(--font-semibold);
+	border-bottom-color: var(--mds-line-strong);
 }
 
 /* Anything outside the used range is not written to the note; say so visually (§9). */
 .mds-cell.is-outside {
-	background-color: transparent;
 	color: var(--text-faint);
 }
 
+.mds-row.is-header-row .mds-cell.is-outside {
+	background-color: var(--mds-bg);
+	border-bottom-color: var(--mds-line);
+	font-weight: var(--font-normal);
+}
+
+/*
+ * The selection: a tint over the range and a 2px outline around it. Only the cells on the edge
+ * carry a border, each the sides it owns, so the outline reads as one rectangle. The active cell
+ * keeps no tint, so it is obvious where typing goes.
+ */
 .mds-cell.is-selected {
-	background-color: var(--text-selection);
+	background-image: linear-gradient(var(--mds-tint-select), var(--mds-tint-select));
+}
+
+.mds-cell.is-sel-top {
+	--mds-edge-t: inset 0 2px 0 0 var(--mds-accent);
+}
+
+.mds-cell.is-sel-bottom {
+	--mds-edge-b: inset 0 -2px 0 0 var(--mds-accent);
+}
+
+.mds-cell.is-sel-left {
+	--mds-edge-l: inset 2px 0 0 0 var(--mds-accent);
+}
+
+.mds-cell.is-sel-right {
+	--mds-edge-r: inset -2px 0 0 0 var(--mds-accent);
+}
+
+.mds-cell.is-sel-top,
+.mds-cell.is-sel-bottom,
+.mds-cell.is-sel-left,
+.mds-cell.is-sel-right {
+	box-shadow: var(--mds-edge-t), var(--mds-edge-r), var(--mds-edge-b), var(--mds-edge-l);
 }
 
 .mds-cell.is-active {
-	box-shadow: inset 0 0 0 2px var(--interactive-accent);
-	background-color: var(--background-primary);
+	background-image: none;
+}
+
+/* Inside a larger range the active cell gets a thin ring of its own. */
+.mds-cell.is-selected.is-active {
+	outline: 1px solid var(--mds-accent);
+	outline-offset: -3px;
 }
 
 .mds-cell.is-fill-preview {
-	box-shadow: inset 0 0 0 1px var(--interactive-accent);
+	outline: 1px dashed var(--mds-accent);
+	outline-offset: -2px;
 }
 
 .mds-cell.is-editing {
 	padding: 0;
 	overflow: visible;
-	box-shadow: inset 0 0 0 2px var(--interactive-accent);
+	background-image: none;
+	box-shadow: inset 0 0 0 2px var(--mds-accent);
 }
 
 .mds-cell.is-rendered {
@@ -504,38 +618,52 @@
 	display: inline;
 }
 
+.mds-cell.is-rendered img {
+	max-height: 100%;
+	vertical-align: middle;
+}
+
+.mds-cell a {
+	cursor: pointer;
+}
+
 .mds-editor {
 	width: 100%;
 	height: 100%;
 	padding: 2px 6px;
 	border: none;
 	border-radius: 0;
-	background-color: var(--background-primary);
+	background-color: var(--mds-bg);
 	box-shadow: none;
 	font-family: var(--font-monospace);
 	font-size: var(--font-ui-small);
 	color: var(--text-normal);
+	user-select: text;
 }
 
-.mds-editor:focus {
+.mds-editor:focus,
+.mds-editor:focus-visible {
 	box-shadow: none;
 	outline: none;
 }
 
+/* Under the column letters and row numbers, over the cells and the frozen rows. */
 .mds-fill-handle {
 	position: absolute;
 	left: var(--mds-fill-x, 0);
 	top: var(--mds-fill-y, 0);
-	width: 8px;
-	height: 8px;
+	width: 7px;
+	height: 7px;
 	margin: -4px 0 0 -4px;
-	z-index: 6;
-	background-color: var(--interactive-accent);
-	border: 1px solid var(--background-primary);
+	z-index: 3;
+	background-color: var(--mds-accent);
+	border: 1px solid var(--mds-bg);
+	border-radius: 1px;
 	cursor: crosshair;
 }
 
-.mds-host.is-placing .mds-scroll {
+.mds-host.is-placing .mds-scroll,
+.mds-host.is-placing .mds-cell {
 	cursor: cell;
 }
 
@@ -798,8 +926,53 @@
 /* ----------------------------------------------- button on a note's table */
 
 /*
- * A hover affordance on tables in the note itself. It is positioned against a wrapper the post
- * processor adds around the table, so nothing in the note's own markup has to change.
+ * Live Preview: a button on Obsidian's own table widget, placed and shown the way Obsidian shows
+ * its "edit block" button on other embeds — top right, on hover. The widget is already the
+ * positioning context for that button; the rule below only makes sure of it.
+ */
+.markdown-source-view.mod-cm6 .cm-embed-block.cm-table-widget {
+	position: relative;
+}
+
+.mds-lp-table-btn {
+	position: absolute;
+	top: var(--size-2-1, 2px);
+	right: var(--size-2-1, 2px);
+	z-index: 2;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: auto;
+	height: auto;
+	padding: var(--size-2-2, 4px) var(--size-2-3, 6px);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	background-color: var(--background-primary);
+	box-shadow: var(--shadow-s);
+	color: var(--text-muted);
+	opacity: 0;
+	transition: opacity 120ms ease-in-out;
+	cursor: pointer;
+}
+
+.cm-table-widget:hover > .mds-lp-table-btn,
+.mds-lp-table-btn:focus-visible {
+	opacity: 1;
+}
+
+.mds-lp-table-btn:hover {
+	color: var(--text-normal);
+	background-color: var(--background-modifier-hover);
+}
+
+.mds-lp-table-btn .svg-icon {
+	width: var(--icon-s, 16px);
+	height: var(--icon-s, 16px);
+}
+
+/*
+ * Reading view (opt-in). A hover affordance positioned against a wrapper the post processor adds
+ * around the table, so nothing in the note's own markup has to change.
  */
 .mds-table-launcher {
 	position: relative;
@@ -837,6 +1010,18 @@
 .mds-table-launcher-btn .svg-icon {
 	width: 13px;
 	height: 13px;
+}
+
+/* Never in a printout or an exported PDF, whatever the settings say. */
+@media print {
+	.mds-table-launcher-btn,
+	.mds-lp-table-btn {
+		display: none !important;
+	}
+}
+
+.print .mds-table-launcher-btn {
+	display: none !important;
 }
 
 .mds-calc-preview {
@@ -877,4 +1062,8 @@
 	overflow: auto;
 	font-size: var(--font-ui-smaller);
 	white-space: pre;
+}
+
+.mds-find-status {
+	min-height: 1.4em;
 }

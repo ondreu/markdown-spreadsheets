@@ -206,16 +206,183 @@ export function moveCol(model: GridModel, layout: TableLayout, from: number, to:
 
 export type InlineFormat = "bold" | "italic" | "code" | "strikethrough";
 
-const WRAPPERS: Record<InlineFormat, string> = {
-	bold: "**",
-	italic: "*",
-	code: "`",
-	strikethrough: "~~",
+/** The delimiters each format is written with. The first one is the default for adding it. */
+const FORMAT_TOKENS: Record<InlineFormat, readonly string[]> = {
+	bold: ["**", "__"],
+	italic: ["*", "_"],
+	code: ["`"],
+	strikethrough: ["~~"],
 };
+
+/** Longest first, so `**` is never read as two italics. Code is handled on its own. */
+const PEEL_ORDER = ["~~", "**", "__", "*", "_"] as const;
+
+export interface InlineLayers {
+	/** Outermost first. A code layer is recorded as a single backtick whatever its fence. */
+	layers: string[];
+	inner: string;
+}
+
+/**
+ * Peels the emphasis wrapped around a whole cell, outermost first.
+ *
+ * `_kurzíva_` is italic exactly as much as `*kurzíva*` is, and `***both***` is bold and italic.
+ * The first version only knew `*` and `**` and matched them with `startsWith`, so Ctrl+I on
+ * `_x_` produced `*_x_*`, and Ctrl+I on `**x**` stripped one asterisk from each side and turned
+ * bold into italic.
+ *
+ * A wrapper only counts when it encloses the whole cell as one span: `*a* and *b*` starts and
+ * ends with an asterisk but is two spans, so it is not peeled. Erring that way means a toggle
+ * adds a wrapper where it could have removed one, which is visible and undoable, rather than
+ * deleting characters from the middle of the cell.
+ */
+export function peelInline(raw: string): InlineLayers {
+	const layers: string[] = [];
+	let s = raw.trim();
+	for (;;) {
+		const code = peelCode(s);
+		if (code !== null) {
+			// Nothing inside a code span is markup.
+			layers.push("`");
+			s = code;
+			break;
+		}
+		let peeled = false;
+		for (const token of PEEL_ORDER) {
+			if (s.length <= token.length * 2 || !s.startsWith(token) || !s.endsWith(token)) continue;
+			const inner = s.slice(token.length, s.length - token.length);
+			if (inner.trim() !== inner || !innerAllows(inner, token)) continue;
+			layers.push(token);
+			s = inner;
+			peeled = true;
+			break;
+		}
+		if (!peeled) break;
+	}
+	return { layers, inner: s };
+}
+
+/** The formats a cell carries as a whole, for the ribbon's pressed state. */
+export function inlineFormatsOf(raw: string): Set<InlineFormat> {
+	const out = new Set<InlineFormat>();
+	for (const token of peelInline(raw).layers) {
+		for (const format of Object.keys(FORMAT_TOKENS) as InlineFormat[]) {
+			if (FORMAT_TOKENS[format].includes(token)) out.add(format);
+		}
+	}
+	return out;
+}
+
+/** The content of a code span covering the whole string, or null. */
+function peelCode(s: string): string | null {
+	let run = 0;
+	while (s[run] === "`") run++;
+	if (run === 0 || s.length <= run * 2) return null;
+	const fence = "`".repeat(run);
+	if (!s.endsWith(fence) || s[s.length - run - 1] === "`") return null;
+	let inner = s.slice(run, s.length - run);
+	if (backtickRuns(inner).includes(run)) return null;
+	// CommonMark strips one space on each side when both are there and the content is not blank.
+	if (inner.length > 2 && inner.startsWith(" ") && inner.endsWith(" ") && inner.trim() !== "") inner = inner.slice(1, -1);
+	return inner === "" ? null : inner;
+}
+
+function backtickRuns(s: string): number[] {
+	const runs: number[] = [];
+	let i = 0;
+	while (i < s.length) {
+		if (s[i] !== "`") {
+			i++;
+			continue;
+		}
+		let run = 1;
+		while (s[i + run] === "`") run++;
+		runs.push(run);
+		i += run;
+	}
+	return runs;
+}
+
+/**
+ * True when `inner` contains no delimiter run that would close `token` early.
+ *
+ * For `*`: no odd run of asterisks (`**` inside is bold, fine; a lone `*` would pair with the
+ * opener). For `**`: no run of two or more. Underscores between two letters are intraword and
+ * never delimit, so `_snake_case_` stays one span.
+ */
+function innerAllows(inner: string, token: string): boolean {
+	const ch = token[0];
+	if (ch === "~") return !inner.includes("~~");
+	let i = 0;
+	while (i < inner.length) {
+		if (inner[i] !== ch) {
+			i++;
+			continue;
+		}
+		let run = 1;
+		while (inner[i + run] === ch) run++;
+		const intraword = ch === "_" && isWordChar(inner[i - 1]) && isWordChar(inner[i + run]);
+		if (!intraword) {
+			if (token.length === 1 && run % 2 === 1) return false;
+			if (token.length === 2 && run >= 2) return false;
+		}
+		i += run;
+	}
+	return true;
+}
+
+function isWordChar(ch: string | undefined): boolean {
+	return ch !== undefined && /[\p{L}\p{N}]/u.test(ch);
+}
+
+function wrapCode(s: string): string {
+	const longest = backtickRuns(s).reduce((max, n) => Math.max(max, n), 0);
+	const fence = "`".repeat(longest + 1);
+	const pad = s.startsWith("`") || s.endsWith("`") ? " " : "";
+	return `${fence}${pad}${s}${pad}${fence}`;
+}
+
+function rebuild(layers: string[], inner: string): string {
+	let s = inner;
+	for (let i = layers.length - 1; i >= 0; i--) {
+		const token = layers[i];
+		s = token === "`" ? wrapCode(s) : `${token}${s}${token}`;
+	}
+	return s;
+}
+
+function hasFormat(peeled: InlineLayers, format: InlineFormat): boolean {
+	return peeled.layers.some((t) => FORMAT_TOKENS[format].includes(t));
+}
+
+/** Adds `format` around a cell, choosing the delimiter that reads back as that format. */
+export function addInlineFormat(raw: string, format: InlineFormat): string {
+	const peeled = peelInline(raw);
+	if (hasFormat(peeled, format)) return raw;
+	if (format === "code") {
+		// Code goes innermost: emphasis outside a code span still renders, inside it does not.
+		return rebuild([...peeled.layers, "`"], peeled.inner);
+	}
+	const base = raw.trim();
+	for (const token of FORMAT_TOKENS[format]) {
+		const candidate = `${token}${base}${token}`;
+		if (hasFormat(peelInline(candidate), format)) return candidate;
+	}
+	return `${FORMAT_TOKENS[format][0]}${base}${FORMAT_TOKENS[format][0]}`;
+}
+
+/** Removes the outermost layer of `format`, keeping every other layer as it was. */
+export function removeInlineFormat(raw: string, format: InlineFormat): string {
+	const peeled = peelInline(raw);
+	const index = peeled.layers.findIndex((t) => FORMAT_TOKENS[format].includes(t));
+	if (index === -1) return raw;
+	const layers = peeled.layers.slice();
+	layers.splice(index, 1);
+	return rebuild(layers, peeled.inner);
+}
 
 /** Toggles an inline wrapper across a range, mirroring how Excel's bold button behaves. */
 export function applyInlineFormat(model: GridModel, rect: Rect, format: InlineFormat): void {
-	const w = WRAPPERS[format];
 	const r = normalizeRect(rect);
 	const cells: Array<{ row: number; col: number; raw: string }> = [];
 	for (let row = r.r1; row <= r.r2; row++) {
@@ -225,16 +392,12 @@ export function applyInlineFormat(model: GridModel, rect: Rect, format: InlineFo
 		}
 	}
 	if (cells.length === 0) return;
-	const allWrapped = cells.every((c) => isWrapped(c.raw, w));
+	const allHave = cells.every((c) => hasFormat(peelInline(c.raw), format));
 	for (const cell of cells) {
-		const next = allWrapped ? cell.raw.slice(w.length, cell.raw.length - w.length) : `${w}${cell.raw}${w}`;
+		const next = allHave ? removeInlineFormat(cell.raw, format) : addInlineFormat(cell.raw, format);
 		setRaw(model, cell.row, cell.col, next);
 	}
 	recomputeUsedRange(model);
-}
-
-function isWrapped(raw: string, w: string): boolean {
-	return raw.length > w.length * 2 && raw.startsWith(w) && raw.endsWith(w);
 }
 
 /* ---------------------------------------------------------------------- fill */

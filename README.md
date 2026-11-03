@@ -9,9 +9,9 @@ valid GitHub-Flavored Markdown table.
 
 ## What it does
 
-- **Opens a table in its own tab** — from the ribbon icon in the left sidebar, the button that
-  appears on a table while the pointer is over it, the command palette, the editor context menu,
-  or the file menu. A toolbar of tabs, an infinite grid, keyboard navigation, resizable cells.
+- **Opens a table in its own tab** — from the button that appears on a table in Live Preview while
+  the pointer is over it, the ribbon icon in the left sidebar, the command palette, the editor
+  context menu, or the file menu. A toolbar of tabs, an infinite grid, keyboard navigation, resizable cells.
 - **Shows the cells the way the note does.** Markdown in a cell is rendered by default; links and
   emphasis read as they do in the note, and editing a cell always shows the raw Markdown. `Raw` is
   one button away when the source matters more.
@@ -46,7 +46,7 @@ without the remembered sizes.
 ## Getting started
 
 1. Put the cursor in a Markdown table.
-2. Click the table's **Edit** button, the spreadsheet icon in the left sidebar, or run
+2. Click the table's button in Live Preview, the spreadsheet icon in the left sidebar, or run
    **Open table as a spreadsheet** from the command palette or the right-click menu.
 3. Edit. In automatic save mode the note is updated shortly after you stop typing.
 
@@ -57,19 +57,27 @@ without the remembered sizes.
 | Arrows | Move |
 | Shift+arrows | Extend the selection |
 | Ctrl/Cmd+arrows | Jump to the edge of the data |
+| Home / End | First column / last used column of the row |
+| Ctrl/Cmd+Home / End | First cell / last used cell |
 | Tab / Shift+Tab | Next / previous cell |
 | Enter / Shift+Enter | Down / up |
-| F2, or just type | Edit the cell |
+| Just type | Replace the cell; the arrows then commit and move on, as in Excel |
+| F2, or double-click | Edit the cell; the arrows move the caret (F2 again switches) |
 | Esc | Cancel the edit |
 | Delete | Clear the selected cells |
 | Ctrl/Cmd+C / X / V | Copy, cut, paste as tab-separated text |
 | Ctrl/Cmd+A | Select the used range |
 | Ctrl/Cmd+Z / Y | Undo, redo (the grid keeps its own history) |
 | Ctrl/Cmd+S | Write back to the note |
-| Ctrl/Cmd+B / I | Bold, italic |
+| Ctrl/Cmd+B / I | Bold, italic — `**x**`/`__x__` and `*x*`/`_x_` are both recognised |
+| Ctrl/Cmd+D | Fill down (a single row copies the row above) |
 
 Copy and paste use tab-separated text, so a range moves between the grid and Excel, LibreOffice or
-Google Sheets in both directions.
+Google Sheets in both directions. A Markdown table copied out of a note pastes as a table, and a
+single value pasted onto a range fills it.
+
+Click a column letter or row number to select it; Shift+click or drag across them for several.
+In rendered cells, Ctrl/Cmd+click follows a link in a new tab.
 
 ### Resizing
 
@@ -83,9 +91,10 @@ several columns or rows first to size them all alike. `Table ▸ Column width` t
 - **A sparse table gets a warning.** A value in `Z400` forces every cell above and to the left of
   it to be written, because GFM tables are always rectangular. You will be told how many empty
   cells that adds, and offered `Shrink to actual data`.
-- **The last ten versions are kept.** `Table ▸ Restore a version` lists them; picking one shows a
-  line diff against what the grid holds now, and restoring only replaces the grid — nothing
-  reaches the note until the next save.
+- **The last ten versions are kept.** `Table ▸ Restore a version` lists them — the table as it was
+  when the grid opened, each save, and in manual save mode the changes of a tab closed without
+  saving. Picking one shows a line diff against what the grid holds now, and restoring only
+  replaces the grid — nothing reaches the note until the next save.
 - **A dotted date stays a date.** `07.07.2026` is not a number, so it exports to Excel as text
   rather than losing its separators.
 - **`&nbsp;` in a cell comes from the note, not from here.** Tables pasted from a web page or from
@@ -106,8 +115,8 @@ several columns or rows first to size them all alike. `Table ▸ Column width` t
   needs in locales that use the comma as a decimal mark.
 - **Number locale and decimal separator** — how `1 234,56` is read and how results are written.
 - **Cell display** — rendered by default. Raw is faster on a very wide table.
-- **Show a button on tables in the note** — on by default; turn it off if you would rather reach
-  the editor from the sidebar or the context menu only.
+- **Show a button on tables while editing** — on by default, in Live Preview. A second toggle adds
+  it to reading view too; it never appears in an exported PDF.
 
 ## No network, no telemetry
 

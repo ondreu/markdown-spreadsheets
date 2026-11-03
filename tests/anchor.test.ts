@@ -69,6 +69,17 @@ describe("scanTables", () => {
 		expect(scanTables(text)[0].blockId).toBe("grid-a7f3");
 	});
 
+	it("picks up a block ID written after a blank line, as Obsidian documents it", () => {
+		const text = "| A |\n| --- |\n| 1 |\n\n^grid-b2c4\n";
+		expect(scanTables(text)[0].blockId).toBe("grid-b2c4");
+	});
+
+	it("does not take a setext heading with a pipe for a table", () => {
+		// GFM needs as many alignment cells as header cells; `a | b` over `---` is an h2.
+		expect(scanTables("a | b\n---\n\ntext\n")).toHaveLength(0);
+		expect(scanTables("| a | b |\n| --- |\n| 1 | 2 |\n")).toHaveLength(0);
+	});
+
 	it("stops a table at a blank line", () => {
 		const text = "| A |\n| --- |\n| 1 |\n\n| B |\n| --- |\n| 2 |\n";
 		expect(scanTables(text)).toHaveLength(2);

@@ -1,3 +1,5 @@
+import { isDelimiterRow, parseTable, splitCells } from "../model/parse";
+
 /**
  * TSV is the lingua franca of the system clipboard: Excel, LibreOffice and Google Sheets all
  * read and write it, so a range copied out of the grid pastes into a spreadsheet and back (§9).
@@ -84,4 +86,28 @@ export function fromTsv(text: string): string[][] {
 /** A single-cell paste of multi-line text should not silently become one long line. */
 export function looksLikeGrid(text: string): boolean {
 	return text.includes("\t") || text.includes("\n");
+}
+
+/**
+ * A Markdown table on the clipboard, as a rectangle of raw cells — or null when the text is not
+ * one.
+ *
+ * Copying a table out of a note and pasting it into the grid is the obvious thing to try, and the
+ * TSV path put every line, pipes and all, into one cell. The test is the same one the scanner
+ * uses: a header row, then an alignment row with as many cells.
+ */
+export function fromMarkdownTable(text: string): string[][] | null {
+	const lines = text.replace(/\r\n?/g, "\n").split("\n").filter((l) => l.trim() !== "");
+	if (lines.length < 2 || !lines[0].includes("|") || !isDelimiterRow(lines[1])) return null;
+	if (splitCells(lines[1]).length !== splitCells(lines[0]).length) return null;
+	const model = parseTable(lines.join("\n"));
+	const { rows, cols } = model.usedRange;
+	if (rows === 0 || cols === 0) return null;
+	const out: string[][] = [];
+	for (let r = 0; r < rows; r++) {
+		const row: string[] = [];
+		for (let c = 0; c < cols; c++) row.push(model.cells.get(`${r}:${c}`)?.raw ?? "");
+		out.push(row);
+	}
+	return out;
 }

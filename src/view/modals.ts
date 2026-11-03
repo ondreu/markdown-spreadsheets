@@ -4,7 +4,7 @@ import { describeDiff, diffLines, diffStats, relativeTime, tableShape } from "..
 import type { GridModel } from "../model/GridModel";
 import { previewOf } from "../file/scanTables";
 import type { ScoredRegion } from "../file/AnchorResolver";
-import type { BackupEntry } from "../store/Sidecar";
+import type { BackupEntry, BackupSource } from "../store/Sidecar";
 import { CALC_FUNCTIONS, applyFunction, type Aggregate, type CalcFunction } from "../feature/QuickCalc";
 import { formatResult } from "../feature/QuickCalc";
 import type { CsvOptions } from "../feature/exportCsv";
@@ -67,19 +67,24 @@ export class ConfirmModal extends Modal {
  * wrong table and, worse, later writing to it.
  */
 export class TablePickerModal extends Modal {
+	private picked = false;
+
 	constructor(
 		app: App,
 		private readonly candidates: ScoredRegion[],
 		private readonly onPick: (candidate: ScoredRegion) => void,
+		private readonly opts: { title?: string; message?: string; onCancel?(): void } = {},
 	) {
 		super(app);
 	}
 
 	override onOpen(): void {
-		this.titleEl.setText("Choose the right table");
+		this.titleEl.setText(this.opts.title ?? "Choose the right table");
 		this.contentEl.createEl("p", {
 			cls: "mds-modal-note",
-			text: "Several tables in this note look alike, so the earlier one could not be identified with confidence.",
+			text:
+				this.opts.message ??
+				"Several tables in this note look alike, so the earlier one could not be identified with confidence.",
 		});
 		const list = this.contentEl.createDiv({ cls: "mds-table-picker" });
 		for (const candidate of this.candidates) {
@@ -94,6 +99,7 @@ export class TablePickerModal extends Modal {
 			].filter((p): p is string => p !== null);
 			item.createDiv({ cls: "mds-table-picker-meta", text: meta.join(" · ") });
 			item.addEventListener("click", () => {
+				this.picked = true;
 				this.close();
 				this.onPick(candidate);
 			});
@@ -102,6 +108,7 @@ export class TablePickerModal extends Modal {
 
 	override onClose(): void {
 		this.contentEl.empty();
+		if (!this.picked) this.opts.onCancel?.();
 	}
 }
 
@@ -246,11 +253,14 @@ export class CalculateModal extends Modal {
 export class FindReplaceModal extends Modal {
 	private options: FindOptions = { query: "", matchCase: false, wholeCell: false, regex: false };
 	private replacement = "";
+	private statusEl!: HTMLElement;
 
 	constructor(
 		app: App,
 		private readonly opts: {
 			onFind(options: FindOptions): number;
+			/** Selects the next match after the active cell; null when there is none. */
+			onFindNext(options: FindOptions): { index: number; count: number } | null;
 			onReplaceAll(options: FindOptions, replacement: string): number;
 		},
 	) {
@@ -259,15 +269,19 @@ export class FindReplaceModal extends Modal {
 
 	override onOpen(): void {
 		this.titleEl.setText("Find and replace");
-		const status = this.contentEl.createDiv({ cls: "mds-modal-note" });
+		this.statusEl = this.contentEl.createDiv({ cls: "mds-modal-note mds-find-status" });
 
-		new Setting(this.contentEl).setName("Find").addText((t) =>
+		new Setting(this.contentEl).setName("Find").addText((t) => {
 			t.setValue(this.options.query).onChange((value) => {
 				this.options.query = value;
-				const n = this.opts.onFind(this.options);
-				status.setText(value === "" ? "" : `${n} matching ${n === 1 ? "cell" : "cells"}`);
-			}),
-		);
+				this.recount();
+			});
+			t.inputEl.addEventListener("keydown", (evt) => {
+				if (evt.key !== "Enter" || evt.isComposing) return;
+				evt.preventDefault();
+				this.findNext();
+			});
+		});
 		new Setting(this.contentEl).setName("Replace with").addText((t) =>
 			t.onChange((value) => {
 				this.replacement = value;
@@ -276,6 +290,7 @@ export class FindReplaceModal extends Modal {
 		new Setting(this.contentEl).setName("Match case").addToggle((t) =>
 			t.onChange((value) => {
 				this.options.matchCase = value;
+				this.recount();
 			}),
 		);
 		new Setting(this.contentEl)
@@ -284,29 +299,61 @@ export class FindReplaceModal extends Modal {
 			.addToggle((t) =>
 				t.onChange((value) => {
 					this.options.wholeCell = value;
+					this.recount();
 				}),
 			);
 		new Setting(this.contentEl).setName("Regular expression").addToggle((t) =>
 			t.onChange((value) => {
 				this.options.regex = value;
+				this.recount();
 			}),
 		);
 
 		new Setting(this.contentEl)
+			.addButton((b) => b.setButtonText("Find next").onClick(() => this.findNext()))
 			.addButton((b) =>
 				b
 					.setButtonText("Replace all")
 					.setCta()
 					.onClick(() => {
 						const n = this.opts.onReplaceAll(this.options, this.replacement);
-						status.setText(`Replaced in ${n} ${n === 1 ? "cell" : "cells"}`);
+						this.statusEl.setText(`Replaced in ${n} ${n === 1 ? "cell" : "cells"}`);
 					}),
 			)
 			.addButton((b) => b.setButtonText("Close").onClick(() => this.close()));
 	}
 
+	/** Every option changes what matches, not only the query — the count has to follow all of them. */
+	private recount(): void {
+		if (this.options.query === "") {
+			this.statusEl.setText("");
+			return;
+		}
+		if (this.options.regex && !isValidRegex(this.options.query)) {
+			this.statusEl.setText("Not a valid regular expression");
+			return;
+		}
+		const n = this.opts.onFind(this.options);
+		this.statusEl.setText(`${n} matching ${n === 1 ? "cell" : "cells"}`);
+	}
+
+	private findNext(): void {
+		if (this.options.query === "") return;
+		const hit = this.opts.onFindNext(this.options);
+		this.statusEl.setText(hit === null ? "No matching cell" : `Match ${hit.index} of ${hit.count}`);
+	}
+
 	override onClose(): void {
 		this.contentEl.empty();
+	}
+}
+
+function isValidRegex(source: string): boolean {
+	try {
+		new RegExp(source);
+		return true;
+	} catch {
+		return false;
 	}
 }
 
@@ -545,6 +592,12 @@ export class ExportModal extends Modal {
 	}
 }
 
+const SOURCE_LABEL: Record<BackupSource, string> = {
+	opened: "As opened",
+	saved: "Saved",
+	unsaved: "Never saved",
+};
+
 /**
  * `Restore previous version` (§13.2): the last ten serialized regions, newest first.
  *
@@ -592,7 +645,7 @@ export class RestoreModal extends Modal {
 			const item = list.createEl("button", { cls: "mds-restore-item", attr: { type: "button" } });
 			item.createDiv({ cls: "mds-restore-when", text: relativeTime(entry.at, this.opts.now) });
 			const same = entry.text.trimEnd() === this.opts.current.trimEnd();
-			const meta = [new Date(entry.at).toLocaleString(), tableShape(entry.text)];
+			const meta = [SOURCE_LABEL[entry.source ?? "saved"], new Date(entry.at).toLocaleString(), tableShape(entry.text)];
 			if (same) meta.push("same as now");
 			item.createDiv({ cls: "mds-restore-meta", text: meta.join(" · ") });
 			this.itemEls.push(item);

@@ -170,8 +170,91 @@ without guessing a locale, and guessing wrong silently rewrites the day and the 
 
 ## 11. The in-note button decorates the rendered DOM only
 
+*Placement superseded by decision 18; the reasoning about not touching the note still holds.*
+
 `Table ▸ Edit` on a note's table is a Markdown post processor: it wraps the rendered `<table>` and
 adds a hover button. The note's text is never touched, which keeps it inside the §7 rule that the
 note is only marked up on explicit opt-in — a block ID still needs confirmation. The source line
 comes from `getSectionInfo`, so the button opens the table it sits on instead of an index guess; a
 table inside a callout or an embed has no section info and falls back to the picker.
+
+## 12. A code span needs its closing backticks
+
+**Design:** §6 gives `splitRow` as a toggle — every backtick flips an `inCode` flag, and an
+escaped character is skipped even inside code.
+
+**Built:** a backtick run opens a code span only when a run of the same length closes it later on
+the line, and backslashes do not escape inside the span (both CommonMark §6.1).
+
+The literal algorithm corrupts tables. One unmatched backtick — `it's a ` tick` — left `inCode` set
+to the end of the line, so every remaining pipe stopped separating cells and the next save wrote the
+rest of the row as one cell with escaped pipes. `` `a\` `` did the same, because the backslash
+"escaped" the closing backtick. Balanced spans still protect their pipes exactly as §6 intends, and
+the round-trip suite has a case for each form.
+
+## 13. A pipe the person escaped is not escaped again
+
+`escapeCell` escapes a `|` only when it follows an even run of backslashes. The parser never
+produces a pipe after an odd run — it unescapes `\|` — so nothing read from a note serializes
+differently. What changes is a cell where someone typed Markdown: `a \| b` used to become
+`a \\| b`, an escaped backslash and a bare pipe, which the next read split into two cells, shifting
+the rest of the row.
+
+## 14. The alignment row must have as many cells as the header
+
+`scanTables` now requires it, which is the GFM rule and what Obsidian's own table parser does.
+Without it, `a | b` over `---` — a setext heading — was found as a table, and opening and saving it
+rewrote the heading. A table the scanner no longer finds is one Obsidian does not render as a table
+either.
+
+## 15. A block ID after a blank line
+
+Obsidian's documentation asks for the block ID of a structured block, a table included, on its own
+line with a blank line before and after. `Writer.addBlockId` now writes it that way, preserving the
+note's line endings, and `blockIdAfter` reads an ID either after one blank line or — as earlier
+versions wrote it — directly below the table, so existing markers keep working.
+
+## 16. Line endings are kept per line
+
+`Writer` used to split the note on `/\r?\n/` and join it back with one detected ending, which
+rewrote every line ending of a note that mixed CRLF and LF — a change well outside the table, and
+one a Git diff shows as the whole file touched. `spliceLines` keeps each existing separator and
+gives new lines the ending of the region they replace.
+
+## 17. Versions remember why they were recorded
+
+`BackupEntry.source` is `opened`, `saved` or `unsaved`. Only a save coalesces into a save (§13.2's
+two-minute window from round three). Before this, the first autosave — 800 ms after the first
+keystroke — overwrote the version recorded when the table was opened, so `Restore a version` could
+not return to "before I started", which is what it is for.
+
+`unsaved` is new: in manual save mode, closing a tab with unsaved edits used to discard them
+silently, because `onClose` cannot be cancelled. The grid is now kept as a version and a notice
+says so; the note is not touched.
+
+## 18. The edit button lives in Live Preview; reading view is opt-in
+
+Supersedes the placement in decision 11. Live Preview does not run Markdown post processors on
+tables — Obsidian draws them with its own editable widget — so the button never appeared where
+people edit, and it did appear in reading view and in PDF export, which run through the post
+processor. A CodeMirror view plugin (`src/view/livePreviewButton.ts`) now adds the button to the
+widget on first hover; CodeMirror ignores DOM changes inside widgets, and the note's text is never
+touched. The reading-view button is behind `showTableButtonInReading`, off by default, and
+`@media print` hides both regardless.
+
+`@codemirror/view` and `@codemirror/state` are listed as dev dependencies at exactly the versions
+the `obsidian` package pins: Obsidian provides them at runtime, `esbuild.config.mjs` already marks
+them external, and `dependencies` stays empty.
+
+## 19. Icons are lists of names
+
+Obsidian ships one Lucide release, Lucide renames icons between releases, and an unknown name
+renders as nothing — which is why the sort buttons had no icon. `src/view/icons.ts` gives every
+icon a fallback list, newest name first, and uses the first one `getIcon` knows.
+
+## 20. Translucent theme colours are overlays, never backgrounds
+
+Obsidian's hover, selection and accent-tint variables are translucent. Used as the background of a
+sticky header they let the scrolling cells show through — the column letters of the active column
+were always see-through, because that column is always selected. Every cell and header now has an
+opaque base, and those colours are laid over it as a gradient layer.

@@ -31,6 +31,20 @@ describe("splitRow", () => {
 	it("does not treat an escaped backtick as opening a code span", () => {
 		expect(splitRow("| \\` | x |")).toEqual(["", " \\` ", " x ", ""]);
 	});
+
+	it("treats an unmatched backtick as text, so the pipes after it still split", () => {
+		// The first version toggled a code state on every backtick, and one apostrophe-like
+		// backtick merged the rest of the row into a single cell on the next save.
+		expect(splitRow("| it's a ` tick | foo | bar |")).toEqual(["", " it's a ` tick ", " foo ", " bar ", ""]);
+	});
+
+	it("does not let a backslash escape the closing backtick of a code span", () => {
+		expect(splitRow("| `a\\` | b |")).toEqual(["", " `a\\` ", " b ", ""]);
+	});
+
+	it("closes a code span only on a backtick run of the same length", () => {
+		expect(splitRow("| ``a`|b`` | c |")).toEqual(["", " ``a`|b`` ", " c ", ""]);
+	});
 });
 
 describe("splitCells", () => {
@@ -173,6 +187,23 @@ describe("escapeCell", () => {
 		expect(escapeCell("\\d+")).toBe("\\d+");
 	});
 
+	it("does not escape a pipe the person already escaped", () => {
+		// `a \\| b` would be an escaped backslash followed by a bare pipe: two cells on re-read.
+		expect(escapeCell("a \\| b")).toBe("a \\| b");
+		expect(escapeCell("a \\\\| b")).toBe("a \\\\\\| b");
+	});
+
+	it("keeps a typed escaped pipe inside one cell through a save", () => {
+		const model = parseTable("| A | B |\n| --- | --- |\n");
+		model.cells.set("1:0", { raw: "x \\| y" });
+		model.cells.set("1:1", { raw: "z" });
+		model.usedRange = { rows: 2, cols: 2 };
+		const again = parseTable(serializeTable(model));
+		expect(getRaw(again, 1, 0)).toBe("x | y");
+		expect(getRaw(again, 1, 1)).toBe("z");
+		expect(again.usedRange.cols).toBe(2);
+	});
+
 	it("flattens newlines, which a GFM cell cannot contain", () => {
 		expect(escapeCell("a\nb")).toBe("a b");
 	});
@@ -206,6 +237,9 @@ describe("round trip on pathological tables (§16 step 2)", () => {
 		["numbers with separators", "| 1 234,56 | 1.234,56 | 1,234.56 |\n| --- | --- | --- |\n"],
 		["unicode punctuation", "| — | … | „quoted” |\n| --- | --- | --- |\n"],
 		["crlf", "| A |\r\n| --- |\r\n| 1 |\r\n"],
+		["unmatched backtick", "| it's a ` tick | b |\n| --- | --- |\n| ` | `x` |\n"],
+		["double-backtick code span", "| ``a`|b`` | c |\n| --- | --- |\n"],
+		["backslash before a closing backtick", "| `a\\` | b |\n| --- | --- |\n"],
 	];
 
 	for (const [name, input] of cases) {

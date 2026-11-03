@@ -20,8 +20,10 @@ export interface MarkdownSpreadsheetsSettings {
 	defaultColWidth: number;
 	/** Rendered is the default: a cell full of link syntax is unreadable (D9). */
 	defaultRenderMode: "raw" | "rendered";
-	/** A hover button on tables in the note itself, next to the context-menu route (§11). */
+	/** A hover button on tables in Live Preview, next to the context-menu route (§11). */
 	showTableButton: boolean;
+	/** The same button in reading view. Off by default: reading view is also what PDF export renders. */
+	showTableButtonInReading: boolean;
 	/** The ribbon panel starts collapsed; the tab strip stays visible either way. */
 	ribbonCollapsed: boolean;
 	defaultDecimals: number;
@@ -46,6 +48,7 @@ export const DEFAULT_SETTINGS: MarkdownSpreadsheetsSettings = {
 	defaultColWidth: 120,
 	defaultRenderMode: "rendered",
 	showTableButton: true,
+	showTableButtonInReading: false,
 	ribbonCollapsed: false,
 	defaultDecimals: 2,
 	numberLocale: "",

@@ -3,7 +3,6 @@ import {
 	Notice,
 	Plugin,
 	TFile,
-	setIcon,
 	setTooltip,
 	type Editor,
 	type MarkdownFileInfo,
@@ -17,6 +16,8 @@ import { Sidecar } from "./store/Sidecar";
 import { VIEW_TYPE_GRID } from "./view/constants";
 import { GridView, type GridViewState } from "./view/GridView";
 import { TablePickerModal } from "./view/modals";
+import { iconName, setIconSafe } from "./view/icons";
+import { livePreviewTableButton } from "./view/livePreviewButton";
 
 export default class MarkdownSpreadsheetsPlugin extends Plugin {
 	sidecar!: Sidecar;
@@ -34,7 +35,7 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 		this.statusBarEl.addClass("markdown-spreadsheets-status");
 
 		// The left sidebar route, next to the command palette and the two context menus (§11).
-		this.addRibbonIcon("table", "Open table as a spreadsheet", () => {
+		this.addRibbonIcon(iconName("launcher"), "Open table as a spreadsheet", () => {
 			const info = this.activeMarkdownInfo();
 			if (info) {
 				void this.openFromEditor(info.editor, info.file);
@@ -48,6 +49,18 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 			new Notice("Open a note with a table first.");
 		});
 
+		// Live Preview, where tables are edited: a button on Obsidian's own table widget.
+		this.registerEditorExtension(
+			livePreviewTableButton({
+				enabled: () => this.sidecar.settings.showTableButton,
+				open: (file, text, line) => {
+					const region = regionAtLine(text, line);
+					if (region) void this.openRegion(file, anchorFromRegion(file.path, region));
+					else void this.openFirstTable(file);
+				},
+			}),
+		);
+		// Reading view only on request: it is also the path PDF export and embeds render through.
 		this.registerMarkdownPostProcessor((el, ctx) => this.decorateTables(el, ctx));
 
 		// No default hotkeys: `no-default-hotkeys` (§15.2). In-view keys live in the view's Scope.
@@ -122,7 +135,7 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 				menu.addItem((item) =>
 					item
 						.setTitle("Open table as a spreadsheet")
-						.setIcon("table")
+						.setIcon(iconName("launcher"))
 						.onClick(() => void this.openRegion(file, anchorFromRegion(file.path, region))),
 				);
 			}),
@@ -134,7 +147,7 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 				menu.addItem((item) =>
 					item
 						.setTitle("Open table as a spreadsheet")
-						.setIcon("table")
+						.setIcon(iconName("launcher"))
 						.onClick(() => void this.openFirstTable(file)),
 				);
 			}),
@@ -176,15 +189,19 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 	/* ------------------------------------------------------- in-note button */
 
 	/**
-	 * Puts a hover button on every table rendered in a note.
+	 * Puts a hover button on every table rendered in reading view.
 	 *
 	 * Only the rendered DOM is touched — the note's text is never modified, which is what keeps
 	 * this on the right side of "the note is only marked up on explicit opt-in" (§7). The source
 	 * line comes from `getSectionInfo`, so the button opens exactly the table it sits on rather
 	 * than guessing an index.
+	 *
+	 * Off by default. Post processors also run for PDF export, embeds and hover previews, and a
+	 * button in a reading surface — let alone in an exported PDF — was the opposite of what was
+	 * wanted; `styles.css` hides it from print as a second line of defence.
 	 */
 	private decorateTables(el: HTMLElement, ctx: MarkdownPostProcessorContext): void {
-		if (!this.sidecar.settings.showTableButton) return;
+		if (!this.sidecar.settings.showTableButtonInReading) return;
 		// Depending on the render path the element handed to a post processor is either the block
 		// wrapper or the table itself, and `findAll` only looks at descendants.
 		const tables = el.tagName === "TABLE" ? [el] : el.findAll("table");
@@ -196,7 +213,7 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 			table.replaceWith(wrapper);
 			wrapper.append(table);
 			const btn = wrapper.createEl("button", { cls: "mds-table-launcher-btn", attr: { type: "button" } });
-			setIcon(btn.createSpan(), "table");
+			setIconSafe(btn.createSpan(), "launcher");
 			btn.createSpan({ text: "Edit" });
 			setTooltip(btn, "Open this table as a spreadsheet");
 			btn.addEventListener("click", (evt) => {
@@ -273,6 +290,7 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 			this.app,
 			tables.map((region) => ({ region, score: 0 })),
 			(picked) => void this.openRegion(file, anchorFromRegion(file.path, picked.region)),
+			{ title: "Choose a table", message: `This note has ${tables.length} tables. Pick the one to open.` },
 		).open();
 	}
 

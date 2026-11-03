@@ -42,9 +42,26 @@ function isWide(cp: number): boolean {
  *
  * Only `|` is escaped — see `unescapePipes` for why the other backslash sequences are
  * left alone. Newlines cannot exist in a GFM cell (§3), so they collapse to spaces.
+ *
+ * A pipe that already follows an odd run of backslashes is already escaped. The parser never
+ * produces one (it unescapes `\|`), but a person typing Markdown into a cell writes `a \| b` on
+ * purpose. Escaping that again gave `a \\| b` — an escaped backslash and a bare pipe — so the
+ * next read split the cell in two and shifted the rest of the row one column to the right.
  */
 export function escapeCell(raw: string): string {
-	return raw.replace(/\r?\n/g, " ").split("|").join("\\|");
+	const flat = raw.replace(/\r?\n/g, " ");
+	let out = "";
+	let backslashes = 0;
+	for (const ch of flat) {
+		if (ch === "|") {
+			out += backslashes % 2 === 0 ? "\\|" : "|";
+			backslashes = 0;
+			continue;
+		}
+		backslashes = ch === "\\" ? backslashes + 1 : 0;
+		out += ch;
+	}
+	return out;
 }
 
 function pad(text: string, width: number, align: Align): string {

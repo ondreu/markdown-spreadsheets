@@ -48,6 +48,12 @@ that are easy to trip over:
   height at 30 px with `white-space: nowrap` and centred text, so a list item built from a button
   spills its last line over the item below unless it sets `height: auto`, `min-height: 0`,
   `white-space: normal` and `text-align: left`. That is what broke the restore list.
+- **Translucent theme colours are never a background on something sticky.** `--text-selection`,
+  `--background-modifier-hover` and friends are see-through, so a header painted with them lets the
+  scrolling cells show through. Put an opaque `background-color` underneath and lay the tint over
+  it with `background-image: linear-gradient(tint, tint)` (decision 20).
+- **Icon names are lists.** Lucide renames icons between releases and an unknown name renders as
+  nothing. Add new icons to `src/view/icons.ts` with fallbacks and use `setIconSafe`/`iconName`.
 - **A scrolling list needs `flex: 0 0 auto` on its items**, and this is the half that only shows up
   once the list is long. Both modal lists are flex columns with a `max-height`, so the items'
   default `flex-shrink: 1` squeezed them *below their own content* as soon as they stopped fitting
@@ -107,7 +113,7 @@ src/view/      GridView (orchestration), GridHost (the grid), Ribbon, StatusBar,
 `src/model/`, `src/feature/`, `src/store/`, `src/settings.ts` (types and defaults only; the tab
 lives in `src/view/SettingTab.ts`) and `src/file/scanTables.ts`/`AnchorResolver.ts` are free of
 Obsidian imports and directly unit-testable — keep them that way. Put new logic there rather than
-in the view when there is a choice; that is what makes the 190 tests possible without an Obsidian
+in the view when there is a choice; that is what makes the 200-plus tests possible without an Obsidian
 harness.
 
 ## Testing expectations

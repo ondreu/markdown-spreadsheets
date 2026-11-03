@@ -56,6 +56,21 @@ describe("Sidecar backups", () => {
 		expect(backups[0].at).toBe(T0);
 	});
 
+	it("never coalesces a burst of writes into the version the table was opened with", () => {
+		sidecar.pushBackup(KEY, "as opened", T0, "opened");
+		for (let i = 1; i <= 10; i++) sidecar.pushBackup(KEY, `edit ${i}`, T0 + i * 800);
+		const backups = sidecar.getBackups(KEY);
+		expect(backups.map((b) => b.text)).toEqual(["edit 10", "as opened"]);
+		expect(backups[1].source).toBe("opened");
+	});
+
+	it("keeps an unsaved grid as its own version", () => {
+		sidecar.pushBackup(KEY, "saved", T0);
+		sidecar.pushBackup(KEY, "never written", T0 + 1000, "unsaved");
+		sidecar.pushBackup(KEY, "saved again", T0 + 2000);
+		expect(sidecar.getBackups(KEY).map((b) => b.text)).toEqual(["saved again", "never written", "saved"]);
+	});
+
 	it("starts a new version once the writes are far enough apart", () => {
 		sidecar.pushBackup(KEY, "a", T0);
 		sidecar.pushBackup(KEY, "b", T0 + BACKUP_COALESCE_MS);

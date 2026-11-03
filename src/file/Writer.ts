@@ -16,9 +16,50 @@ export function regionHash(text: string): string {
 	return fnv1a(text.replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, ""));
 }
 
-function splitLines(data: string): { lines: string[]; eol: "\n" | "\r\n" } {
-	const eol = data.includes("\r\n") ? "\r\n" : "\n";
-	return { lines: data.split(/\r?\n/), eol };
+interface SplitText {
+	lines: string[];
+	/** `seps[i]` joins `lines[i]` and `lines[i + 1]`, so there is one fewer than there are lines. */
+	seps: string[];
+}
+
+function splitText(data: string): SplitText {
+	const parts = data.split(/(\r?\n)/);
+	const lines: string[] = [];
+	const seps: string[] = [];
+	for (let i = 0; i < parts.length; i++) (i % 2 === 0 ? lines : seps).push(parts[i]);
+	return { lines, seps };
+}
+
+/** The line ending most of the note uses, for lines that did not exist before. */
+function dominantEol(seps: string[]): string {
+	let crlf = 0;
+	for (const sep of seps) if (sep === "\r\n") crlf++;
+	return crlf * 2 > seps.length ? "\r\n" : "\n";
+}
+
+/**
+ * Replaces `deleteCount` lines at `start` with `insert`, keeping every other line ending exactly
+ * as it was.
+ *
+ * Splitting on `/\r?\n/` and joining with one detected ending used to rewrite the line endings of
+ * the whole note whenever it mixed CRLF and LF — a change far outside the table, and one a Git
+ * diff shows as every line touched. Only the new lines get an ending chosen here: the one the
+ * replaced region used, else the note's dominant one.
+ */
+export function spliceLines(data: string, start: number, deleteCount: number, insert: string[]): string {
+	const { lines, seps } = splitText(data);
+	const eol = seps[start] ?? seps[start - 1] ?? dominantEol(seps);
+	const end = start + deleteCount;
+	const outLines = [...lines.slice(0, start), ...insert, ...lines.slice(end)];
+	const outSeps: string[] = seps.slice(0, Math.min(start, seps.length));
+	// Appending past the last line needs a separator in front of the new block.
+	if (start >= lines.length && insert.length > 0 && lines.length > 0) outSeps.push(eol);
+	for (let i = 1; i < insert.length; i++) outSeps.push(eol);
+	if (end < lines.length && insert.length > 0) outSeps.push(deleteCount > 0 ? (seps[end - 1] ?? eol) : eol);
+	outSeps.push(...seps.slice(end));
+	let out = "";
+	for (let i = 0; i < outLines.length; i++) out += outLines[i] + (outSeps[i] ?? "");
+	return out;
 }
 
 /**
@@ -65,10 +106,8 @@ export class Writer {
 				return data;
 			}
 
-			const { lines, eol } = splitLines(data);
 			const replacement = normalized.split("\n");
-			lines.splice(region.startLine, region.endLine - region.startLine + 1, ...replacement);
-			const next = lines.join(eol);
+			const next = spliceLines(data, region.startLine, region.endLine - region.startLine + 1, replacement);
 
 			// Re-scan so the returned anchor describes the table as it now exists on disk.
 			const after = scanTables(next);
@@ -89,7 +128,7 @@ export class Writer {
 	async appendTable(file: TFile, blockText: string): Promise<TableRegion | null> {
 		let region: TableRegion | null = null;
 		await this.vault.process(file, (data) => {
-			const { eol } = splitLines(data);
+			const eol = dominantEol(splitText(data).seps);
 			const body = blockText.replace(/\r\n/g, "\n").replace(/\n+$/, "").split("\n").join(eol);
 			const sep = data.length === 0 || data.endsWith(eol + eol) ? "" : data.endsWith(eol) ? eol : eol + eol;
 			const next = data + sep + body + eol;
@@ -101,7 +140,11 @@ export class Writer {
 	}
 
 	/**
-	 * Layer 3 of §7: writes `^<id>` on its own line right after the table.
+	 * Layer 3 of §7: writes `^<id>` on its own line after the table.
+	 *
+	 * Obsidian's documentation asks for a blank line before and after the ID of a structured
+	 * block such as a table, so that is what is written; `blockIdAfter` reads it back, and also
+	 * reads an ID directly below the table, which is what earlier versions wrote.
 	 *
 	 * This is the only feature that modifies the note beyond the table itself, so it is never
 	 * reached without an explicit confirmation from the user.
@@ -116,10 +159,12 @@ export class Writer {
 				ok = true;
 				return data;
 			}
-			const { lines, eol } = splitLines(data);
-			lines.splice(region.endLine + 1, 0, `^${id}`);
+			const { lines } = splitText(data);
+			const following = lines[region.endLine + 1];
+			const insert = ["", `^${id}`];
+			if (following !== undefined && following.trim() !== "") insert.push("");
 			ok = true;
-			return lines.join(eol);
+			return spliceLines(data, region.endLine + 1, 0, insert);
 		});
 		return ok;
 	}

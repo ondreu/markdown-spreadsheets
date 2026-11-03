@@ -5,13 +5,14 @@ import { fnv1a } from "../model/hash";
 import type { NumberParseOptions } from "../model/numbers";
 import type { MarkdownSpreadsheetsSettings } from "../settings";
 import type { TableLayout } from "../store/Sidecar";
-import { fromTsv, looksLikeGrid, toTsv } from "../feature/clipboard";
+import { fromMarkdownTable, fromTsv, looksLikeGrid, toTsv } from "../feature/clipboard";
 import {
 	applyInlineFormat,
 	clearRange,
 	deleteCols,
 	deleteRows,
 	fillRange,
+	inlineFormatsOf,
 	insertCols,
 	insertRows,
 	moveCol,
@@ -21,6 +22,7 @@ import {
 	rectCols,
 	rectRows,
 	setColAlign,
+	sortRows,
 	writeRange,
 	type InlineFormat,
 	type Rect,
@@ -44,6 +46,7 @@ import {
 } from "./constants";
 import { asElement } from "./dom";
 import { GridStyles, type GeometrySpec } from "./gridStyles";
+import { iconName } from "./icons";
 
 export interface Selection {
 	rect: Rect;
@@ -65,6 +68,8 @@ export interface GridHostCallbacks {
 	onNotice(message: string): void;
 	/** A calculated value was placed, so the pending-target mode can end. */
 	onCalcPlaced(): void;
+	/** The in-cell editor's text changed, so the formula bar can mirror it. */
+	onEditorInput?(value: string): void;
 }
 
 export interface GridHostContext {
@@ -82,6 +87,25 @@ interface PendingCalc {
 	label: string;
 	text: string;
 }
+
+/**
+ * How an edit started, which decides what the arrow keys do — Excel's two modes. Typing into a
+ * cell is "enter": the arrows commit and move on, so a column can be filled without touching
+ * Enter. F2 or a double-click is "edit": the arrows move the caret inside the text.
+ */
+type EditMode = "enter" | "edit";
+
+/** What a drag that started with a mouse press is extending. */
+type DragKind = "cells" | "cols" | "rows";
+
+const ARROWS: Record<string, [number, number]> = {
+	ArrowUp: [-1, 0],
+	ArrowDown: [1, 0],
+	ArrowLeft: [0, -1],
+	ArrowRight: [0, 1],
+};
+
+const SELECTION_CLASSES = ["is-selected", "is-active", "is-sel-top", "is-sel-bottom", "is-sel-left", "is-sel-right"];
 
 /**
  * The grid itself: plain DOM, no virtualization (D8).
@@ -108,7 +132,7 @@ export class GridHost {
 	private cols = 0;
 	private selection: Selection = { rect: { r1: 0, c1: 0, r2: 0, c2: 0 }, active: { row: 0, col: 0 } };
 	private selectedEls: HTMLElement[] = [];
-	private editing: { row: number; col: number; input: HTMLInputElement; original: string } | null = null;
+	private editing: { row: number; col: number; input: HTMLInputElement; original: string; mode: EditMode } | null = null;
 	private renderMode: RenderMode;
 	private renderCache = new Map<string, DocumentFragment>();
 	private observer: IntersectionObserver | null = null;
@@ -117,7 +141,8 @@ export class GridHost {
 	private pendingCalc: PendingCalc | null = null;
 	private readonly styles = new GridStyles();
 	private geometryTimer: number | null = null;
-	private mouseSelecting = false;
+	private dragging: DragKind | null = null;
+	private scrollFrame: number | null = null;
 	private fillDrag: { source: Rect; last: Rect } | null = null;
 	private cleanup: Array<() => void> = [];
 
@@ -155,6 +180,7 @@ export class GridHost {
 	destroy(): void {
 		this.cancelEdit();
 		if (this.geometryTimer !== null) window.clearTimeout(this.geometryTimer);
+		if (this.scrollFrame !== null) this.scrollEl.ownerDocument.defaultView?.cancelAnimationFrame(this.scrollFrame);
 		this.observer?.disconnect();
 		this.observer = null;
 		for (const off of this.cleanup) off();
@@ -202,6 +228,12 @@ export class GridHost {
 		return { decimalSeparator: this.ctx.settings.decimalSeparator };
 	}
 
+	/** Inline formats the active cell carries as a whole, for the ribbon's pressed state. */
+	activeFormats(): Set<InlineFormat> {
+		const { row, col } = this.selection.active;
+		return inlineFormatsOf(getRaw(this.model, row, col));
+	}
+
 	/** Swaps in a new model/layout (undo, reload after an external change, table switch). */
 	replaceData(model: GridModel, layout: TableLayout, keepSelection = true): void {
 		this.cancelEdit();
@@ -240,7 +272,6 @@ export class GridHost {
 		this.observer?.disconnect();
 		this.observer = null;
 
-		this.fillHandleEl = this.canvasEl.createDiv({ cls: "mds-fill-handle mds-hidden" });
 		this.headRowEl = this.canvasEl.createDiv({ cls: "mds-row mds-head-row" });
 		this.headRowEl.createDiv({ cls: "mds-corner", attr: { "aria-hidden": "true" } });
 		for (let c = 0; c < this.cols; c++) this.appendColHead(c);
@@ -248,6 +279,8 @@ export class GridHost {
 		const frag = this.canvasEl.ownerDocument.win.createFragment();
 		for (let r = 0; r < this.rows; r++) frag.append(this.buildRow(r));
 		this.canvasEl.append(frag);
+		// Last in the canvas, so at equal z-index it paints over frozen rows but under the headers.
+		this.fillHandleEl = this.canvasEl.createDiv({ cls: "mds-fill-handle mds-hidden" });
 
 		this.applyGeometry(true);
 		this.markUsedRange();
@@ -261,6 +294,7 @@ export class GridHost {
 			attr: { "data-col": String(c) },
 		});
 		if (c < this.layout.frozenCols) el.addClass("is-frozen-col");
+		if (c === this.layout.frozenCols - 1) el.addClass("is-frozen-edge");
 		this.colHeadEls.set(c, el);
 	}
 
@@ -269,6 +303,7 @@ export class GridHost {
 		const rowEl = win.createDiv({ cls: `mds-row mds-r${r}`, attr: { "data-row": String(r) } });
 		if (r === 0) rowEl.addClass("is-header-row");
 		if (r < this.layout.frozenRows) rowEl.addClass("is-frozen-row");
+		if (r === this.layout.frozenRows - 1) rowEl.addClass("is-frozen-edge");
 
 		// Row 0 is the markdown header row; label it so its special status is visible (§9).
 		rowEl.createDiv({ cls: "mds-rowhead", text: String(r + 1), attr: { "data-row": String(r) } });
@@ -284,6 +319,7 @@ export class GridHost {
 			attr: { "data-row": String(r), "data-col": String(c) },
 		});
 		if (c < this.layout.frozenCols) el.addClass("is-frozen-col");
+		if (c === this.layout.frozenCols - 1) el.addClass("is-frozen-edge");
 		if (this.layout.wrapCols.includes(c)) el.addClass("is-wrap");
 		this.paintCell(el, r, c);
 		return el;
@@ -311,29 +347,34 @@ export class GridHost {
 		const raw = getRaw(this.model, r, c);
 		el.empty();
 		el.removeClass("is-rendered");
+		delete el.dataset.pending;
+		el.removeAttribute("aria-label");
 		this.applyAlign(el, c);
-		if (raw === "") {
-			el.removeAttribute("aria-label");
-			return;
-		}
+		if (raw === "") return;
 		if (this.renderMode === "rendered") {
-			// Content arrives when the cell scrolls into view; until then the raw text is shown
-			// so the grid never looks empty.
+			// Content seen before is cloned straight away. Painting the raw text first and waiting
+			// for the observer made every visible cell flash its Markdown source on every edit.
+			const cached = this.renderCache.get(fnv1a(raw));
+			if (cached) {
+				el.addClass("is-rendered");
+				el.append(cached.cloneNode(true));
+				return;
+			}
+			// New content arrives when the cell scrolls into view; until then the raw text is
+			// shown so the grid never looks empty.
 			el.setText(raw);
 			el.dataset.pending = "1";
-		} else {
-			el.setText(raw);
+			return;
 		}
-		// Full content in the tooltip, because a non-wrapped cell ellipsizes (§8.3).
-		el.setAttribute("aria-label", raw);
+		el.setText(raw);
 	}
 
-	private repaintCell(r: number, c: number): void {
+	private repaintCell(r: number, c: number): Promise<void> {
 		const el = this.cellEl(r, c);
-		if (!el) return;
+		if (!el) return Promise.resolve();
 		this.paintCell(el, r, c);
-		if (this.renderMode === "rendered") void this.renderCell(el, r, c);
 		this.updateUsedRangeFor(r, c);
+		return this.renderMode === "rendered" ? this.renderCell(el, r, c) : Promise.resolve();
 	}
 
 	private repaintAll(): void {
@@ -345,6 +386,7 @@ export class GridHost {
 		}
 		this.markUsedRange();
 		if (this.renderMode === "rendered") this.setupObserver();
+		this.paintSelection();
 	}
 
 	/* ------------------------------------------------------- used range paint */
@@ -436,6 +478,7 @@ export class GridHost {
 		const frag = this.canvasEl.ownerDocument.win.createFragment();
 		for (let r = this.rows; r < target; r++) frag.append(this.buildRow(r));
 		this.canvasEl.append(frag);
+		this.canvasEl.append(this.fillHandleEl);
 		this.rows = target;
 		this.applyGeometry(true);
 		this.markUsedRange();
@@ -468,6 +511,12 @@ export class GridHost {
 
 	/* ---------------------------------------------------------- selection */
 
+	/**
+	 * `active` is the anchor: the cell that receives typing and the fixed corner when a range is
+	 * extended. The moving corner is whichever corner of the rect sits opposite it. The first
+	 * version extended from the rect's top-left instead, so Shift+Up past the anchor, or a drag up
+	 * and to the left, lost the starting cell after the first step.
+	 */
 	setSelection(rect: Rect, active?: { row: number; col: number }): void {
 		const norm = normalizeRect(rect);
 		const bounded: Rect = {
@@ -488,32 +537,61 @@ export class GridHost {
 		this.ctx.callbacks.onSelectionChange(this.selection);
 	}
 
+	/** Selects one cell and brings it into view — used by find and by the formula bar. */
+	goTo(row: number, col: number): void {
+		this.ensureExtent(row, col);
+		this.setSelection({ r1: row, c1: col, r2: row, c2: col }, { row, col });
+		this.scrollIntoView(row, col);
+	}
+
+	/** The corner that moves when the range is extended. */
+	private head(): { row: number; col: number } {
+		const { rect, active } = this.selection;
+		return {
+			row: active.row === rect.r1 ? rect.r2 : rect.r1,
+			col: active.col === rect.c1 ? rect.c2 : rect.c1,
+		};
+	}
+
+	private extendTo(row: number, col: number): void {
+		const { active } = this.selection;
+		this.setSelection({ r1: active.row, c1: active.col, r2: row, c2: col }, active);
+	}
+
 	private paintSelection(): void {
-		for (const el of this.selectedEls) {
-			el.removeClass("is-selected");
-			el.removeClass("is-active");
-		}
+		for (const el of this.selectedEls) el.removeClasses(SELECTION_CLASSES);
 		this.selectedEls = [];
-		for (let c = 0; c < this.cols; c++) this.colHeadEls.get(c)?.removeClass("is-selected");
-		for (const rowEl of this.rowEls.values()) {
-			const head = rowEl.firstElementChild;
-			if (head !== null && head.instanceOf(HTMLElement)) head.removeClass("is-selected");
-		}
+		for (const el of this.selectedHeads) el.removeClass("is-selected");
+		this.selectedHeads = [];
 
 		const { rect, active } = this.selection;
+		const single = rect.r1 === rect.r2 && rect.c1 === rect.c2;
 		for (let r = rect.r1; r <= rect.r2; r++) {
 			const rowEl = this.rowEls.get(r);
 			if (!rowEl) continue;
 			const head = rowEl.firstElementChild;
-			if (head !== null && head.instanceOf(HTMLElement)) head.addClass("is-selected");
+			if (head !== null && head.instanceOf(HTMLElement)) {
+				head.addClass("is-selected");
+				this.selectedHeads.push(head);
+			}
 			for (let c = rect.c1; c <= rect.c2; c++) {
 				const el = this.cellEl(r, c);
 				if (!el) continue;
-				el.addClass("is-selected");
+				// The range is drawn as one outline; the cells on its edges carry the border.
+				if (!single) el.addClass("is-selected");
+				if (r === rect.r1) el.addClass("is-sel-top");
+				if (r === rect.r2) el.addClass("is-sel-bottom");
+				if (c === rect.c1) el.addClass("is-sel-left");
+				if (c === rect.c2) el.addClass("is-sel-right");
 				this.selectedEls.push(el);
 			}
 		}
-		for (let c = rect.c1; c <= rect.c2; c++) this.colHeadEls.get(c)?.addClass("is-selected");
+		for (let c = rect.c1; c <= rect.c2; c++) {
+			const head = this.colHeadEls.get(c);
+			if (!head) continue;
+			head.addClass("is-selected");
+			this.selectedHeads.push(head);
+		}
 		const activeEl = this.cellEl(active.row, active.col);
 		if (activeEl) {
 			activeEl.addClass("is-active");
@@ -522,51 +600,94 @@ export class GridHost {
 		this.positionFillHandle();
 	}
 
+	private selectedHeads: HTMLElement[] = [];
+
+	/**
+	 * The fill handle sits on the bottom-right corner of the range.
+	 *
+	 * Measured with bounding rects rather than `offsetTop`: a frozen row is `position: sticky`, so
+	 * its cells' offsets are relative to the row, not the canvas, and the handle of a header-row
+	 * selection used to land a row too high. For the same reason it is re-placed on scroll, and
+	 * hidden while its corner is scrolled under the frozen panes instead of painting over them.
+	 */
 	private positionFillHandle(): void {
 		const rect = this.selection.rect;
 		const anchor = this.cellEl(rect.r2, rect.c2);
-		if (!anchor || this.editing) {
+		if (!anchor || this.editing || this.hiddenRows.has(rect.r2)) {
+			this.fillHandleEl.addClass("mds-hidden");
+			return;
+		}
+		const canvasBox = this.canvasEl.getBoundingClientRect();
+		const cellBox = anchor.getBoundingClientRect();
+		const x = cellBox.right - canvasBox.left;
+		const y = cellBox.bottom - canvasBox.top;
+		const { height, width } = this.frozenExtent();
+		const underRows = rect.r2 >= this.layout.frozenRows && y - 4 < this.scrollEl.scrollTop + HEAD_HEIGHT + height;
+		const underCols = rect.c2 >= this.layout.frozenCols && x - 4 < this.scrollEl.scrollLeft + ROW_HEAD_WIDTH + width;
+		if (underRows || underCols) {
 			this.fillHandleEl.addClass("mds-hidden");
 			return;
 		}
 		this.fillHandleEl.removeClass("mds-hidden");
-		this.fillHandleEl.setCssProps({
-			"--mds-fill-x": `${anchor.offsetLeft + anchor.offsetWidth}px`,
-			"--mds-fill-y": `${anchor.offsetTop + anchor.offsetHeight}px`,
-		});
+		this.fillHandleEl.setCssProps({ "--mds-fill-x": `${x}px`, "--mds-fill-y": `${y}px` });
 	}
 
+	/** Pixel size of the frozen rows and columns, header excluded. */
+	private frozenExtent(): { height: number; width: number } {
+		const rowDefault = this.layout.rowHeightDefault ?? this.ctx.settings.defaultRowHeight;
+		let height = 0;
+		for (let r = 0; r < this.layout.frozenRows; r++) {
+			const h = this.layout.rowHeights[String(r)];
+			height += h !== undefined && h > 0 ? h : rowDefault;
+		}
+		let width = 0;
+		for (let c = 0; c < this.layout.frozenCols; c++) {
+			const w = this.layout.colWidths[c];
+			width += w !== undefined && w > 0 ? w : this.ctx.settings.defaultColWidth;
+		}
+		return { height, width };
+	}
+
+	/** Scrolls so the cell is visible below and right of the frozen panes. */
 	private scrollIntoView(row: number, col: number): void {
 		const el = this.cellEl(row, col);
 		if (!el) return;
-		const top = el.offsetTop;
-		const left = el.offsetLeft;
-		const bottom = top + el.offsetHeight;
-		const right = left + el.offsetWidth;
-		const viewTop = this.scrollEl.scrollTop + HEAD_HEIGHT;
-		const viewLeft = this.scrollEl.scrollLeft + ROW_HEAD_WIDTH;
+		const { height, width } = this.frozenExtent();
+		const canvasBox = this.canvasEl.getBoundingClientRect();
+		const box = el.getBoundingClientRect();
+		const top = box.top - canvasBox.top;
+		const left = box.left - canvasBox.left;
+		const bottom = top + box.height;
+		const right = left + box.width;
+		const viewTop = this.scrollEl.scrollTop + HEAD_HEIGHT + height;
+		const viewLeft = this.scrollEl.scrollLeft + ROW_HEAD_WIDTH + width;
 		const viewBottom = this.scrollEl.scrollTop + this.scrollEl.clientHeight;
 		const viewRight = this.scrollEl.scrollLeft + this.scrollEl.clientWidth;
 
-		if (top < viewTop) this.scrollEl.scrollTop = top - HEAD_HEIGHT;
-		else if (bottom > viewBottom) this.scrollEl.scrollTop = bottom - this.scrollEl.clientHeight;
-		if (left < viewLeft) this.scrollEl.scrollLeft = left - ROW_HEAD_WIDTH;
-		else if (right > viewRight) this.scrollEl.scrollLeft = right - this.scrollEl.clientWidth;
+		// A frozen row or column is always on screen in that axis; scrolling for it only jumps.
+		if (row >= this.layout.frozenRows) {
+			if (top < viewTop) this.scrollEl.scrollTop = top - HEAD_HEIGHT - height;
+			else if (bottom > viewBottom) this.scrollEl.scrollTop = bottom - this.scrollEl.clientHeight;
+		}
+		if (col >= this.layout.frozenCols) {
+			if (left < viewLeft) this.scrollEl.scrollLeft = left - ROW_HEAD_WIDTH - width;
+			else if (right > viewRight) this.scrollEl.scrollLeft = right - this.scrollEl.clientWidth;
+		}
 	}
 
 	/* ------------------------------------------------------------ navigation */
 
-	/** Moves the active cell. `extend` grows the selection instead of collapsing it. */
+	/** Moves the active cell. `extend` moves the far corner of the range instead. */
 	moveActive(dRow: number, dCol: number, extend = false): void {
-		const { active, rect } = this.selection;
-		let row = Math.max(0, active.row + dRow);
-		let col = Math.max(0, active.col + dCol);
+		const from = extend ? this.head() : this.selection.active;
+		let row = Math.max(0, from.row + dRow);
+		let col = Math.max(0, from.col + dCol);
 		if (dRow > 0 || dCol > 0) this.ensureExtent(row, col);
 		row = Math.min(row, this.rows - 1);
 		col = Math.min(col, this.cols - 1);
 		// Filtered rows are hidden, so stepping onto one would move the cursor out of sight.
 		row = this.skipHidden(row, dRow);
-		if (extend) this.setSelection({ r1: rect.r1, c1: rect.c1, r2: row, c2: col }, { row, col });
+		if (extend) this.extendTo(row, col);
 		else this.setSelection({ r1: row, c1: col, r2: row, c2: col }, { row, col });
 		this.scrollIntoView(row, col);
 	}
@@ -581,9 +702,9 @@ export class GridHost {
 
 	/** Ctrl+arrow: jump to the edge of the data block, Excel style. */
 	jumpToEdge(dRow: number, dCol: number, extend = false): void {
-		const { active, rect } = this.selection;
-		let row = active.row;
-		let col = active.col;
+		const from = extend ? this.head() : this.selection.active;
+		let row = from.row;
+		let col = from.col;
 		const occupied = (r: number, c: number) => getRaw(this.model, r, c) !== "";
 		const inBounds = (r: number, c: number) => r >= 0 && c >= 0 && r < this.rows && c < this.cols;
 
@@ -607,33 +728,55 @@ export class GridHost {
 				col = dCol > 0 ? Math.max(0, this.model.usedRange.cols - 1) : dCol < 0 ? 0 : col;
 			}
 		}
-		if (extend) this.setSelection({ r1: rect.r1, c1: rect.c1, r2: row, c2: col }, { row, col });
+		if (extend) this.extendTo(row, col);
 		else this.setSelection({ r1: row, c1: col, r2: row, c2: col }, { row, col });
 		this.scrollIntoView(row, col);
+	}
+
+	/** Home and End: the first column, and the last used column, of the current row. */
+	jumpToRowEdge(end: boolean, extend = false): void {
+		const from = extend ? this.head() : this.selection.active;
+		const col = end ? Math.max(0, this.model.usedRange.cols - 1) : 0;
+		if (extend) this.extendTo(from.row, col);
+		else this.setSelection({ r1: from.row, c1: col, r2: from.row, c2: col }, { row: from.row, col });
+		this.scrollIntoView(from.row, col);
 	}
 
 	selectAll(): void {
 		const rows = Math.max(this.model.usedRange.rows, 1);
 		const cols = Math.max(this.model.usedRange.cols, 1);
-		this.setSelection({ r1: 0, c1: 0, r2: rows - 1, c2: cols - 1 }, this.selection.active);
+		this.setSelection({ r1: 0, c1: 0, r2: rows - 1, c2: cols - 1 }, { row: 0, col: 0 });
 	}
 
-	selectColumns(cols: number[]): void {
-		if (cols.length === 0) return;
-		const c1 = Math.min(...cols);
-		const c2 = Math.max(...cols);
-		this.setSelection({ r1: 0, c1, r2: this.rows - 1, c2 }, { row: 0, col: c1 });
+	/** Whole columns from `from` to `to`; the first one keeps the active cell, Excel style. */
+	selectColumns(from: number, to = from): void {
+		this.setSelection({ r1: 0, c1: from, r2: this.rows - 1, c2: to }, { row: 0, col: from });
 	}
 
-	selectRows(rows: number[]): void {
-		if (rows.length === 0) return;
-		const r1 = Math.min(...rows);
-		const r2 = Math.max(...rows);
-		this.setSelection({ r1, c1: 0, r2, c2: this.cols - 1 }, { row: r1, col: 0 });
+	selectRows(from: number, to = from): void {
+		this.setSelection({ r1: from, c1: 0, r2: to, c2: this.cols - 1 }, { row: from, col: 0 });
+	}
+
+	/**
+	 * The selection as far as data is concerned. A whole column selected from its header spans
+	 * every row in the DOM — a hundred or more past the table — and copying or filling all of
+	 * that would write a block of empty cells; whole rows and columns stop at the used range.
+	 */
+	private effectiveRect(): Rect {
+		const rect = this.selection.rect;
+		const used = this.model.usedRange;
+		const out = { ...rect };
+		if (rect.r1 === 0 && rect.r2 === this.rows - 1 && used.rows > 0) out.r2 = Math.max(0, used.rows - 1);
+		if (rect.c1 === 0 && rect.c2 === this.cols - 1 && used.cols > 0) out.c2 = Math.max(0, used.cols - 1);
+		return out;
 	}
 
 	/* --------------------------------------------------------------- editing */
 
+	/**
+	 * Opens the in-cell editor. `initial` is the keystroke that started it, which puts the editor
+	 * in "enter" mode (arrows commit); without it the edit is F2-style and the arrows move the caret.
+	 */
 	beginEdit(initial?: string): void {
 		if (this.editing) return;
 		const { row, col } = this.selection.active;
@@ -641,25 +784,31 @@ export class GridHost {
 		if (!el) return;
 		const original = getRaw(this.model, row, col);
 		el.empty();
+		el.removeAttribute("aria-label");
 		el.addClass("is-editing");
-		const input = el.createEl("input", { cls: "mds-editor", attr: { type: "text" } });
+		const input = el.createEl("input", { cls: "mds-editor", attr: { type: "text", spellcheck: "false" } });
 		input.value = initial ?? original;
-		this.editing = { row, col, input, original };
+		this.editing = { row, col, input, original, mode: initial === undefined ? "edit" : "enter" };
 		this.fillHandleEl.addClass("mds-hidden");
 		input.focus();
-		if (initial === undefined) input.select();
-		else input.setSelectionRange(input.value.length, input.value.length);
+		// Caret at the end, as F2 does in Excel; selecting everything made the next key wipe the cell.
+		input.setSelectionRange(input.value.length, input.value.length);
 
 		const onKey = (evt: KeyboardEvent) => this.onEditorKey(evt);
-		const onBlur = () => this.commitEdit(0, 0);
+		// A blur commits but must not pull focus back: the person clicked somewhere else on purpose.
+		const onBlur = () => this.commitEdit(0, 0, false);
+		const onInput = () => this.ctx.callbacks.onEditorInput?.(input.value);
 		input.addEventListener("keydown", onKey);
 		input.addEventListener("blur", onBlur);
+		input.addEventListener("input", onInput);
 		// Per-edit, not appended to `cleanup`: that array lives as long as the grid, so pushing
-		// two closures per edited cell would keep every editor ever opened reachable.
+		// closures per edited cell would keep every editor ever opened reachable.
 		this.editorCleanup = () => {
 			input.removeEventListener("keydown", onKey);
 			input.removeEventListener("blur", onBlur);
+			input.removeEventListener("input", onInput);
 		};
+		this.ctx.callbacks.onEditorInput?.(input.value);
 	}
 
 	private editorCleanup: (() => void) | null = null;
@@ -670,6 +819,7 @@ export class GridHost {
 	}
 
 	private onEditorKey(evt: KeyboardEvent): void {
+		if (evt.isComposing) return;
 		if (evt.key === "Escape") {
 			evt.preventDefault();
 			evt.stopPropagation();
@@ -689,11 +839,25 @@ export class GridHost {
 			this.commitEdit(0, evt.shiftKey ? -1 : 1);
 			return;
 		}
+		if (evt.key === "F2" && this.editing) {
+			// Excel's toggle between the two modes, for when the arrows should move the caret.
+			evt.preventDefault();
+			this.editing.mode = this.editing.mode === "enter" ? "edit" : "enter";
+			return;
+		}
+		const arrow = ARROWS[evt.key];
+		if (arrow && this.editing?.mode === "enter" && !evt.shiftKey && !evt.ctrlKey && !evt.metaKey && !evt.altKey) {
+			evt.preventDefault();
+			evt.stopPropagation();
+			this.commitEdit(arrow[0], arrow[1]);
+			return;
+		}
 		// Everything else belongs to the input; keep it away from the grid's own handlers.
 		evt.stopPropagation();
 	}
 
-	commitEdit(dRow: number, dCol: number): void {
+	/** Commits the open editor, if any. `refocus` is false when focus is already moving elsewhere. */
+	commitEdit(dRow = 0, dCol = 0, refocus = true): void {
 		const editing = this.editing;
 		if (!editing) return;
 		this.editing = null;
@@ -702,15 +866,17 @@ export class GridHost {
 		const el = this.cellEl(editing.row, editing.col);
 		el?.removeClass("is-editing");
 		if (value !== editing.original) {
-			this.mutate("Edit cell", () => setRaw(this.model, editing.row, editing.col, value));
-			this.repaintCell(editing.row, editing.col);
+			this.mutate("Edit cell", () => setRaw(this.model, editing.row, editing.col, value), "cell");
+			void this.repaintCell(editing.row, editing.col).then(() => this.fitWrappedRows([editing.row]));
+			this.fitWrappedRows([editing.row]);
 		} else if (el) {
 			this.paintCell(el, editing.row, editing.col);
 			if (this.renderMode === "rendered") void this.renderCell(el, editing.row, editing.col);
 		}
-		this.focus();
+		if (refocus) this.focus();
 		if (dRow !== 0 || dCol !== 0) this.moveActive(dRow, dCol);
 		else this.paintSelection();
+		this.ctx.callbacks.onSelectionChange(this.selection);
 	}
 
 	cancelEdit(): void {
@@ -725,14 +891,21 @@ export class GridHost {
 			if (this.renderMode === "rendered") void this.renderCell(el, editing.row, editing.col);
 		}
 		this.paintSelection();
+		this.ctx.callbacks.onSelectionChange(this.selection);
 	}
 
 	/** Formula-bar commit path: writes into the active cell without entering cell edit mode. */
 	setActiveValue(value: string): void {
 		const { row, col } = this.selection.active;
+		this.setValueAt(row, col, value);
+	}
+
+	/** Writes one cell — the formula bar uses it for the cell it was editing, which may no longer be active. */
+	setValueAt(row: number, col: number, value: string): void {
 		if (getRaw(this.model, row, col) === value) return;
-		this.mutate("Edit cell", () => setRaw(this.model, row, col, value));
-		this.repaintCell(row, col);
+		this.mutate("Edit cell", () => setRaw(this.model, row, col, value), "cell");
+		void this.repaintCell(row, col).then(() => this.fitWrappedRows([row]));
+		this.fitWrappedRows([row]);
 	}
 
 	/* --------------------------------------------------------------- mutation */
@@ -741,9 +914,11 @@ export class GridHost {
 	 * Single funnel for every model change: snapshot for undo, run, recompute, notify.
 	 *
 	 * Nothing outside this class may touch the model, so there is no path to a change that
-	 * skips the undo stack or leaves the note marked clean.
+	 * skips the undo stack or leaves the note marked clean. An open cell editor is committed
+	 * first, as its own undo step: a repaint would otherwise destroy it with the text still in it.
 	 */
 	mutate(label: string, fn: () => void, repaint: "cell" | "all" = "all"): void {
+		if (this.editing) this.commitEdit(0, 0, false);
 		this.undo.push(label, this.model, this.layout);
 		fn();
 		recomputeUsedRange(this.model);
@@ -755,6 +930,7 @@ export class GridHost {
 	}
 
 	undoLast(): boolean {
+		this.commitEdit(0, 0, false);
 		const snapshot = this.undo.undo({ model: this.model, layout: this.layout });
 		if (!snapshot) return false;
 		this.replaceData(snapshot.model, snapshot.layout);
@@ -764,6 +940,7 @@ export class GridHost {
 	}
 
 	redoLast(): boolean {
+		this.commitEdit(0, 0, false);
 		const snapshot = this.undo.redo({ model: this.model, layout: this.layout });
 		if (!snapshot) return false;
 		this.replaceData(snapshot.model, snapshot.layout);
@@ -853,6 +1030,14 @@ export class GridHost {
 		this.ctx.callbacks.onLayoutChange();
 	}
 
+	/** Sorts every data row by one column; the header row never moves. */
+	sortByColumn(col: number, ascending: boolean, rows?: number[]): void {
+		this.mutate("Sort rows", () =>
+			sortRows(this.model, this.layout, { col, ascending, ...(rows && rows.length > 1 ? { rows } : {}) }, this.numberOpts()),
+		);
+		this.ctx.callbacks.onLayoutChange();
+	}
+
 	/** Alignment is per column in GFM (§3), so this applies to whole columns by definition. */
 	setAlignment(align: Align): void {
 		const cols = rectCols(this.selection.rect);
@@ -866,6 +1051,7 @@ export class GridHost {
 	/* --------------------------------------------------------------- sizing */
 
 	setColumnWidth(cols: number[], width: number): void {
+		if (cols.length === 0) return;
 		const w = Math.max(MIN_COL_WIDTH, Math.min(MAX_COL_WIDTH, Math.round(width)));
 		const widths = this.layout.colWidths.slice();
 		const needed = Math.max(...cols) + 1;
@@ -889,34 +1075,81 @@ export class GridHost {
 		this.ctx.callbacks.onLayoutChange();
 	}
 
-	/** Widest visible cell plus padding, capped so one long cell cannot fill the viewport. */
+	/**
+	 * Fits each column to its widest cell as displayed, capped so one long cell cannot fill the
+	 * viewport. Measured off-screen from the text and font each cell actually shows, so it can
+	 * shrink a column as well as widen it, and a bold header is measured bold.
+	 */
 	autofitColumns(cols: number[]): void {
+		const used = Math.max(this.model.usedRange.rows, 1);
+		const widths = this.layout.colWidths.slice();
 		for (const c of cols) {
 			let widest = MIN_COL_WIDTH;
-			for (let r = 0; r < this.rows; r++) {
+			for (let r = 0; r < Math.min(used, this.rows); r++) {
+				if (getRaw(this.model, r, c) === "") continue;
 				const el = this.cellEl(r, c);
 				if (!el) continue;
-				const raw = getRaw(this.model, r, c);
-				if (raw === "") continue;
-				widest = Math.max(widest, this.measureText(raw, el) + 20);
+				widest = Math.max(widest, this.measureText(el.textContent ?? "", el) + 18);
 			}
-			this.setColumnWidth([c], Math.min(widest, AUTOFIT_MAX_WIDTH));
+			while (widths.length <= c) widths.push(0);
+			widths[c] = Math.min(Math.round(widest), AUTOFIT_MAX_WIDTH);
+		}
+		this.layout.colWidths = widths;
+		this.applyGeometry(true);
+		this.ctx.callbacks.onLayoutChange();
+		this.fitWrappedRows(this.usedRowIndexes());
+	}
+
+	/**
+	 * Fits each row to its tallest cell. The first version read `scrollHeight`, which for a
+	 * fixed-height row is the row's own height, so every click grew the row by six pixels and
+	 * nothing ever shrank. The row is now laid out at `height: auto` for one measurement.
+	 */
+	autofitRows(rows: number[]): void {
+		this.fitRows(rows);
+		this.applyGeometry(true);
+		this.ctx.callbacks.onLayoutChange();
+	}
+
+	private fitRows(rows: number[]): boolean {
+		const base = this.layout.rowHeightDefault ?? this.ctx.settings.defaultRowHeight;
+		let changed = false;
+		for (const r of rows) {
+			const natural = this.naturalRowHeight(r);
+			if (natural === null) continue;
+			const key = String(r);
+			const before = this.layout.rowHeights[key];
+			if (natural <= base) delete this.layout.rowHeights[key];
+			else this.layout.rowHeights[key] = Math.min(natural, MAX_ROW_HEIGHT);
+			if (before !== this.layout.rowHeights[key]) changed = true;
+		}
+		return changed;
+	}
+
+	/** Re-fits rows that have a wrapped, non-empty cell — wrapped text only shows when the row grows. */
+	private fitWrappedRows(rows: number[]): void {
+		if (this.layout.wrapCols.length === 0) return;
+		const targets = rows.filter((r) => this.layout.wrapCols.some((c) => getRaw(this.model, r, c) !== ""));
+		if (targets.length === 0) return;
+		if (this.fitRows(targets)) {
+			this.applyGeometry(true);
+			this.ctx.callbacks.onLayoutChange();
 		}
 	}
 
-	autofitRows(rows: number[]): void {
-		// Wrapped text only has a natural height once the width is fixed, so measure the DOM.
-		for (const r of rows) {
-			const rowEl = this.rowEls.get(r);
-			if (!rowEl) continue;
-			let tallest = MIN_ROW_HEIGHT;
-			for (let c = 0; c < this.cols; c++) {
-				const el = this.cellEl(r, c);
-				if (!el) continue;
-				tallest = Math.max(tallest, el.scrollHeight + 6);
-			}
-			this.setRowHeight([r], Math.min(tallest, MAX_ROW_HEIGHT));
-		}
+	private naturalRowHeight(r: number): number | null {
+		const rowEl = this.rowEls.get(r);
+		if (!rowEl || this.hiddenRows.has(r)) return null;
+		rowEl.addClass("is-measuring");
+		const height = rowEl.getBoundingClientRect().height;
+		rowEl.removeClass("is-measuring");
+		return height > 0 ? Math.ceil(height) : null;
+	}
+
+	private usedRowIndexes(): number[] {
+		const out: number[] = [];
+		for (let r = 0; r < Math.min(this.model.usedRange.rows, this.rows); r++) out.push(r);
+		return out;
 	}
 
 	private measureEl: HTMLElement | null = null;
@@ -925,12 +1158,17 @@ export class GridHost {
 		if (!this.measureEl) this.measureEl = this.hostEl.createDiv({ cls: "mds-measure" });
 		const style = sample.ownerDocument.defaultView?.getComputedStyle(sample);
 		this.measureEl.setCssProps({
-			"--mds-measure-font": style ? `${style.fontSize} ${style.fontFamily}` : "inherit",
+			"--mds-measure-font": style ? `${style.fontWeight} ${style.fontSize} ${style.fontFamily}` : "inherit",
 		});
 		this.measureEl.setText(text);
 		return this.measureEl.offsetWidth;
 	}
 
+	/**
+	 * Wrapping is visual (§8.3), but a wrapped cell in a one-line row looks exactly like an
+	 * unwrapped one with the ellipsis removed — the toggle appeared to do nothing. Rows with text
+	 * in the column are fitted to the wrapped height, and fitted back when it is turned off.
+	 */
 	toggleWrap(cols: number[]): void {
 		const set = new Set(this.layout.wrapCols);
 		const allWrapped = cols.every((c) => set.has(c));
@@ -942,20 +1180,43 @@ export class GridHost {
 		for (let r = 0; r < this.rows; r++) {
 			for (const c of cols) this.cellEl(r, c)?.toggleClass("is-wrap", !allWrapped);
 		}
+		const rows = this.usedRowIndexes().filter((r) => cols.some((c) => getRaw(this.model, r, c) !== ""));
+		this.fitRows(rows);
+		this.applyGeometry(true);
 		this.ctx.callbacks.onLayoutChange();
 	}
 
 	setFreeze(rows: number, cols: number): void {
 		this.layout.frozenRows = Math.max(0, Math.min(rows, 10));
 		this.layout.frozenCols = Math.max(0, Math.min(cols, 10));
-		for (const [r, rowEl] of this.rowEls) rowEl.toggleClass("is-frozen-row", r < this.layout.frozenRows);
+		const fr = this.layout.frozenRows;
+		const fc = this.layout.frozenCols;
+		for (const [r, rowEl] of this.rowEls) {
+			rowEl.toggleClass("is-frozen-row", r < fr);
+			rowEl.toggleClass("is-frozen-edge", r === fr - 1);
+		}
 		for (let c = 0; c < this.cols; c++) {
-			const frozen = c < this.layout.frozenCols;
-			this.colHeadEls.get(c)?.toggleClass("is-frozen-col", frozen);
-			for (let r = 0; r < this.rows; r++) this.cellEl(r, c)?.toggleClass("is-frozen-col", frozen);
+			const frozen = c < fc;
+			const edge = c === fc - 1;
+			const head = this.colHeadEls.get(c);
+			head?.toggleClass("is-frozen-col", frozen);
+			head?.toggleClass("is-frozen-edge", edge);
+			for (let r = 0; r < this.rows; r++) {
+				const el = this.cellEl(r, c);
+				el?.toggleClass("is-frozen-col", frozen);
+				el?.toggleClass("is-frozen-edge", edge);
+			}
 		}
 		this.applyGeometry(true);
 		this.ctx.callbacks.onLayoutChange();
+	}
+
+	/** Excel's "Freeze panes": everything above and left of the active cell stays put. */
+	freezeAtSelection(): boolean {
+		const { row, col } = this.selection.active;
+		if (row === 0 && col === 0) return false;
+		this.setFreeze(row, col);
+		return true;
 	}
 
 	/* ------------------------------------------------------------ render mode */
@@ -972,15 +1233,21 @@ export class GridHost {
 	 * Rendered mode is lazy on purpose: a markdown render per cell over hundreds of cells is
 	 * the one thing that can make this view feel slow (§5), so only cells that actually enter
 	 * the viewport are rendered, and identical content is rendered once and cloned.
+	 *
+	 * Every repaint used to create a new observer without disconnecting the old one, so each edit
+	 * left another observer watching every pending cell for the life of the tab.
 	 */
 	private setupObserver(): void {
+		this.observer?.disconnect();
+		this.observer = null;
 		const win = this.scrollEl.ownerDocument.defaultView;
 		if (!win || typeof win.IntersectionObserver !== "function") return;
-		this.observer = new win.IntersectionObserver(
+		const observer = new win.IntersectionObserver(
 			(entries) => {
 				for (const entry of entries) {
 					if (!entry.isIntersecting) continue;
 					const el = entry.target;
+					observer.unobserve(el);
 					if (!el.instanceOf(HTMLElement)) continue;
 					const row = Number.parseInt(el.dataset.row ?? "", 10);
 					const col = Number.parseInt(el.dataset.col ?? "", 10);
@@ -989,16 +1256,18 @@ export class GridHost {
 			},
 			{ root: this.scrollEl, rootMargin: "200px" },
 		);
+		this.observer = observer;
 		for (let r = 0; r < this.rows; r++) {
 			for (let c = 0; c < this.cols; c++) {
 				const el = this.cellEl(r, c);
-				if (el && el.dataset.pending === "1") this.observer.observe(el);
+				if (el && el.dataset.pending === "1") observer.observe(el);
 			}
 		}
 	}
 
 	private async renderCell(el: HTMLElement, row: number, col: number): Promise<void> {
 		if (this.renderMode !== "rendered") return;
+		if (this.editing && this.editing.row === row && this.editing.col === col) return;
 		const raw = getRaw(this.model, row, col);
 		if (raw === "") return;
 		const key = fnv1a(raw);
@@ -1020,10 +1289,11 @@ export class GridHost {
 		const source = only !== null && only.tagName === "P" ? only : holder;
 		while (source.firstChild) frag.append(source.firstChild);
 		holder.detach();
-		this.renderCache.set(key, frag);
 		if (this.renderCache.size > 4000) this.renderCache.clear();
+		this.renderCache.set(key, frag);
 		const current = this.cellEl(row, col);
-		if (current && getRaw(this.model, row, col) === raw) {
+		const editingHere = this.editing !== null && this.editing.row === row && this.editing.col === col;
+		if (current && !editingHere && getRaw(this.model, row, col) === raw) {
 			current.empty();
 			current.addClass("is-rendered");
 			current.append(frag.cloneNode(true));
@@ -1086,36 +1356,50 @@ export class GridHost {
 	/* -------------------------------------------------------------- clipboard */
 
 	copySelection(): string {
-		return toTsv(readRange(this.model, this.selection.rect));
+		return toTsv(readRange(this.model, this.effectiveRect()));
 	}
 
 	cutSelection(): string {
 		const text = this.copySelection();
-		this.clearSelectionContents();
+		const rect = this.effectiveRect();
+		this.mutate("Cut", () => clearRange(this.model, rect));
 		return text;
 	}
 
+	/**
+	 * Pastes at the active cell.
+	 *
+	 * A Markdown table (copied out of a note) is read as one, TSV (Excel, LibreOffice, Sheets) as
+	 * a grid. A single value pasted onto a range fills the range, which is what a spreadsheet does.
+	 */
 	pasteText(text: string): void {
 		const { row, col } = this.selection.active;
-		if (!looksLikeGrid(text)) {
-			this.mutate("Paste", () => setRaw(this.model, row, col, text.replace(/\r?\n/g, " ")));
+		const values = fromMarkdownTable(text) ?? (looksLikeGrid(text) ? fromTsv(text) : [[text]]);
+		if (values.length === 0 || values[0].length === 0) return;
+		const rect = this.effectiveRect();
+		const multi = rect.r1 !== rect.r2 || rect.c1 !== rect.c2;
+		if (values.length === 1 && values[0].length === 1 && multi) {
+			const value = values[0][0].replace(/\r?\n/g, " ");
+			const fill: string[][] = [];
+			for (let r = rect.r1; r <= rect.r2; r++) {
+				const line: string[] = [];
+				for (let c = rect.c1; c <= rect.c2; c++) line.push(value);
+				fill.push(line);
+			}
+			this.mutate("Paste", () => writeRange(this.model, rect.r1, rect.c1, fill));
 			return;
 		}
-		const values = fromTsv(text);
-		if (values.length === 0) return;
-		const height = values.length;
-		const width = values[0].length;
+		const flat = values.map((line) => line.map((v) => v.replace(/\r?\n/g, " ")));
+		const height = flat.length;
+		const width = flat[0].length;
 		if (!this.ensureExtent(row + height - 1, col + width - 1)) return;
-		this.mutate("Paste", () => writeRange(this.model, row, col, values));
-		this.setSelection(
-			{ r1: row, c1: col, r2: row + height - 1, c2: col + width - 1 },
-			{ row, col },
-		);
+		this.mutate("Paste", () => writeRange(this.model, row, col, flat));
+		this.setSelection({ r1: row, c1: col, r2: row + height - 1, c2: col + width - 1 }, { row, col });
 	}
 
 	/** Markdown of the current selection, for `Export ▸ Copy as markdown`. */
 	selectionAsMarkdown(): string[][] {
-		return readRange(this.model, this.selection.rect);
+		return readRange(this.model, this.effectiveRect());
 	}
 
 	/* ------------------------------------------------------------------ fill */
@@ -1143,17 +1427,32 @@ export class GridHost {
 			this.cleanup.push(() => el.removeEventListener(type, handler as EventListener, options));
 		};
 
-		on(this.scrollEl, "scroll", () => this.maybeGrow(), { passive: true });
+		on(this.scrollEl, "scroll", () => this.onScroll(), { passive: true });
 		on(this.scrollEl, "mousedown", (evt) => this.onMouseDown(evt));
 		on(this.scrollEl, "mousemove", (evt) => this.onMouseMove(evt));
+		on(this.scrollEl, "mouseover", (evt) => this.onMouseOver(evt));
+		on(this.scrollEl, "click", (evt) => this.onClick(evt));
 		on(this.scrollEl, "dblclick", (evt) => this.onDoubleClick(evt));
 		on(this.scrollEl, "contextmenu", (evt) => this.onContextMenu(evt));
 		on(this.scrollEl, "keydown", (evt) => this.onContainerKey(evt));
-		on(this.scrollEl, "copy", (evt) => this.onCopy(evt, false));
-		on(this.scrollEl, "cut", (evt) => this.onCopy(evt, true));
-		on(this.scrollEl, "paste", (evt) => this.onPaste(evt));
 
-		const win = this.scrollEl.ownerDocument.defaultView;
+		// Clipboard events go to the element holding the text selection, or to `body` when there is
+		// none — and the grid deliberately has none. Listening on the grid itself therefore missed
+		// Ctrl+C whenever nothing had been clicked yet, so the document listens and checks focus.
+		const doc = this.scrollEl.ownerDocument;
+		const onCopy = (evt: ClipboardEvent) => this.onCopy(evt, false);
+		const onCut = (evt: ClipboardEvent) => this.onCopy(evt, true);
+		const onPaste = (evt: ClipboardEvent) => this.onPaste(evt);
+		doc.addEventListener("copy", onCopy);
+		doc.addEventListener("cut", onCut);
+		doc.addEventListener("paste", onPaste);
+		this.cleanup.push(() => {
+			doc.removeEventListener("copy", onCopy);
+			doc.removeEventListener("cut", onCut);
+			doc.removeEventListener("paste", onPaste);
+		});
+
+		const win = doc.defaultView;
 		if (win) {
 			const up = (evt: MouseEvent) => this.onMouseUp(evt);
 			win.addEventListener("mouseup", up);
@@ -1161,12 +1460,28 @@ export class GridHost {
 		}
 	}
 
+	/** True when keyboard focus is on the grid itself, not in an editor or anywhere else. */
+	private hasGridFocus(): boolean {
+		return this.scrollEl.ownerDocument.activeElement === this.scrollEl;
+	}
+
+	private onScroll(): void {
+		this.maybeGrow();
+		if (this.scrollFrame !== null) return;
+		const win = this.scrollEl.ownerDocument.defaultView;
+		if (!win) return;
+		this.scrollFrame = win.requestAnimationFrame(() => {
+			this.scrollFrame = null;
+			this.positionFillHandle();
+		});
+	}
+
 	/**
 	 * Plain typing starts an edit. Everything with a modifier, and every navigation key, is
 	 * handled by the view's `Scope` (§10) so it cannot collide with the note editor.
 	 */
 	private onContainerKey(evt: KeyboardEvent): void {
-		if (this.editing) return;
+		if (this.editing || evt.defaultPrevented || evt.isComposing) return;
 		if (evt.ctrlKey || evt.metaKey || evt.altKey) return;
 		if (evt.key.length !== 1) return;
 		evt.preventDefault();
@@ -1175,8 +1490,7 @@ export class GridHost {
 	}
 
 	private onCopy(evt: ClipboardEvent, cut: boolean): void {
-		if (this.editing) return;
-		if (evt.defaultPrevented) return;
+		if (evt.defaultPrevented || this.editing || !this.hasGridFocus()) return;
 		evt.preventDefault();
 		const text = cut ? this.cutSelection() : this.copySelection();
 		evt.clipboardData?.setData("text/plain", text);
@@ -1184,8 +1498,7 @@ export class GridHost {
 
 	/** `editor-drop-paste` (§15.2): respect an already-handled event, then claim this one. */
 	private onPaste(evt: ClipboardEvent): void {
-		if (this.editing) return;
-		if (evt.defaultPrevented) return;
+		if (evt.defaultPrevented || this.editing || !this.hasGridFocus()) return;
 		const text = evt.clipboardData?.getData("text/plain");
 		if (text === undefined || text === "") return;
 		evt.preventDefault();
@@ -1217,6 +1530,8 @@ export class GridHost {
 			this.fillDrag = { source: this.selection.rect, last: this.selection.rect };
 			return;
 		}
+		// Mod+click on a link in a rendered cell follows it; see `onClick`.
+		if (target !== null && (evt.ctrlKey || evt.metaKey) && target.closest("a") !== null) return;
 
 		const hit = this.hit(evt);
 		if (hit.kind === "colhead" && hit.el) {
@@ -1236,40 +1551,39 @@ export class GridHost {
 			}
 		}
 
-		if (this.editing) this.commitEdit(0, 0);
+		if (hit.kind === "none") return;
+		// Focus is set by hand below; the default would only start a text selection.
+		evt.preventDefault();
+		if (this.editing) this.commitEdit(0, 0, false);
 
 		switch (hit.kind) {
 			case "cell": {
 				if (this.pendingCalc) {
-					evt.preventDefault();
 					this.placeCalc(hit.row, hit.col);
 					return;
 				}
-				this.mouseSelecting = true;
-				if (evt.shiftKey) {
-					const rect = this.selection.rect;
-					this.setSelection({ r1: rect.r1, c1: rect.c1, r2: hit.row, c2: hit.col }, { row: hit.row, col: hit.col });
-				} else {
-					this.setSelection({ r1: hit.row, c1: hit.col, r2: hit.row, c2: hit.col }, { row: hit.row, col: hit.col });
-				}
-				this.focus();
+				this.dragging = "cells";
+				if (evt.shiftKey) this.extendTo(hit.row, hit.col);
+				else this.setSelection({ r1: hit.row, c1: hit.col, r2: hit.row, c2: hit.col }, { row: hit.row, col: hit.col });
 				break;
 			}
-			case "colhead":
-				this.selectColumns([hit.col]);
-				this.focus();
+			case "colhead": {
+				this.dragging = "cols";
+				const from = evt.shiftKey ? this.selection.active.col : hit.col;
+				this.selectColumns(from, hit.col);
 				break;
-			case "rowhead":
-				this.selectRows([hit.row]);
-				this.focus();
+			}
+			case "rowhead": {
+				this.dragging = "rows";
+				const from = evt.shiftKey ? this.selection.active.row : hit.row;
+				this.selectRows(from, hit.row);
 				break;
+			}
 			case "corner":
 				this.selectAll();
-				this.focus();
-				break;
-			default:
 				break;
 		}
+		this.focus();
 	}
 
 	private onMouseMove(evt: MouseEvent): void {
@@ -1289,11 +1603,12 @@ export class GridHost {
 			return;
 		}
 
-		if (this.mouseSelecting) {
+		if (this.dragging !== null) {
 			const hit = this.hit(evt);
-			if (hit.kind !== "cell") return;
-			const rect = this.selection.rect;
-			this.setSelection({ r1: rect.r1, c1: rect.c1, r2: hit.row, c2: hit.col }, this.selection.active);
+			const { active } = this.selection;
+			if (this.dragging === "cells" && hit.kind === "cell") this.extendTo(hit.row, hit.col);
+			else if (this.dragging === "cols" && hit.col >= 0) this.selectColumns(active.col, hit.col);
+			else if (this.dragging === "rows" && hit.row >= 0) this.selectRows(active.row, hit.row);
 			return;
 		}
 
@@ -1307,6 +1622,43 @@ export class GridHost {
 		if (hit.kind === "rowhead" && hit.el) {
 			hit.el.toggleClass("is-row-resize", this.rowResizeEdge(evt, hit.el, hit.row) !== null);
 		}
+	}
+
+	/**
+	 * The full text as a tooltip, but only on a cell that is actually cut off. A tooltip on every
+	 * cell followed the pointer around the whole grid and said nothing the cell did not.
+	 */
+	private onMouseOver(evt: MouseEvent): void {
+		const target = asElement(evt.target);
+		const el = target?.closest(".mds-cell") ?? null;
+		if (el === null || !el.instanceOf(HTMLElement) || el.hasClass("is-editing")) return;
+		const row = Number.parseInt(el.dataset.row ?? "-1", 10);
+		const col = Number.parseInt(el.dataset.col ?? "-1", 10);
+		const raw = row >= 0 && col >= 0 ? getRaw(this.model, row, col) : "";
+		const clipped = el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1;
+		if (raw !== "" && clipped) el.setAttribute("aria-label", raw);
+		else el.removeAttribute("aria-label");
+	}
+
+	/**
+	 * Links in rendered cells. A plain click selects the cell like anywhere else — following a link
+	 * on every click makes a cell impossible to select — and must not let the browser navigate the
+	 * app window. Ctrl/Cmd+click opens the link in a new tab, never in this one.
+	 */
+	private onClick(evt: MouseEvent): void {
+		const target = asElement(evt.target);
+		const link = target?.closest("a") ?? null;
+		if (link === null || !link.instanceOf(HTMLElement)) return;
+		evt.preventDefault();
+		if (!(evt.ctrlKey || evt.metaKey)) return;
+		evt.stopPropagation();
+		if (link.hasClass("internal-link")) {
+			const href = link.getAttribute("data-href") ?? link.getAttribute("href");
+			if (href) void this.ctx.app.workspace.openLinkText(href, this.ctx.sourcePath, "tab");
+			return;
+		}
+		const href = link.getAttribute("href");
+		if (href && /^[a-z][a-z0-9+.-]*:/i.test(href)) this.scrollEl.ownerDocument.defaultView?.open(href, "_blank");
 	}
 
 	private previewEls: HTMLElement[] = [];
@@ -1326,7 +1678,7 @@ export class GridHost {
 	}
 
 	private onMouseUp(_evt: MouseEvent): void {
-		this.mouseSelecting = false;
+		this.dragging = null;
 		if (this.fillDrag) {
 			const target = this.fillDrag.last;
 			this.fillDrag = null;
@@ -1345,7 +1697,8 @@ export class GridHost {
 			const edge = this.colResizeEdge(evt, hit.el, hit.col);
 			if (edge !== null) {
 				evt.preventDefault();
-				this.autofitColumns([edge]);
+				const selected = rectCols(this.selection.rect);
+				this.autofitColumns(selected.includes(edge) && selected.length > 1 ? selected : [edge]);
 				return;
 			}
 		}
@@ -1353,7 +1706,8 @@ export class GridHost {
 			const edge = this.rowResizeEdge(evt, hit.el, hit.row);
 			if (edge !== null) {
 				evt.preventDefault();
-				this.autofitRows([edge]);
+				const selected = rectRows(this.selection.rect);
+				this.autofitRows(selected.includes(edge) && selected.length > 1 ? selected : [edge]);
 				return;
 			}
 		}
@@ -1368,48 +1722,74 @@ export class GridHost {
 		const hit = this.hit(evt);
 		if (hit.kind === "none") return;
 		evt.preventDefault();
+		if (this.editing) this.commitEdit(0, 0, false);
 		const menu = new Menu();
 
 		if (hit.kind === "colhead") {
-			if (!rectCols(this.selection.rect).includes(hit.col)) this.selectColumns([hit.col]);
-			menu.addItem((i) => i.setTitle("Insert column left").setIcon("between-horizontal-start").onClick(() => this.insertColsAt("left")));
-			menu.addItem((i) => i.setTitle("Insert column right").setIcon("between-horizontal-end").onClick(() => this.insertColsAt("right")));
-			menu.addItem((i) => i.setTitle("Delete column").setIcon("trash-2").onClick(() => this.deleteSelectedCols()));
+			if (!rectCols(this.selection.rect).includes(hit.col)) this.selectColumns(hit.col);
+			menu.addItem((i) => i.setTitle("Insert column left").setIcon(iconName("colLeft")).onClick(() => this.insertColsAt("left")));
+			menu.addItem((i) => i.setTitle("Insert column right").setIcon(iconName("colRight")).onClick(() => this.insertColsAt("right")));
+			menu.addItem((i) => i.setTitle("Delete column").setIcon(iconName("remove")).onClick(() => this.deleteSelectedCols()));
 			menu.addSeparator();
-			menu.addItem((i) => i.setTitle("Autofit width").setIcon("move-horizontal").onClick(() => this.autofitColumns(rectCols(this.selection.rect))));
-			menu.addItem((i) => i.setTitle("Wrap text").setIcon("wrap-text").onClick(() => this.toggleWrap(rectCols(this.selection.rect))));
+			menu.addItem((i) => i.setTitle("Sort ascending").setIcon(iconName("sortAsc")).onClick(() => this.sortByColumn(hit.col, true)));
+			menu.addItem((i) => i.setTitle("Sort descending").setIcon(iconName("sortDesc")).onClick(() => this.sortByColumn(hit.col, false)));
+			menu.addSeparator();
+			menu.addItem((i) => i.setTitle("Autofit width").setIcon(iconName("autofitCols")).onClick(() => this.autofitColumns(rectCols(this.selection.rect))));
+			menu.addItem((i) => i.setTitle("Wrap text").setIcon(iconName("wrap")).onClick(() => this.toggleWrap(rectCols(this.selection.rect))));
 		} else if (hit.kind === "rowhead") {
-			if (!rectRows(this.selection.rect).includes(hit.row)) this.selectRows([hit.row]);
-			menu.addItem((i) => i.setTitle("Insert row above").setIcon("between-vertical-start").onClick(() => this.insertRowsAt("above")));
-			menu.addItem((i) => i.setTitle("Insert row below").setIcon("between-vertical-end").onClick(() => this.insertRowsAt("below")));
+			if (!rectRows(this.selection.rect).includes(hit.row)) this.selectRows(hit.row);
+			menu.addItem((i) =>
+				i
+					.setTitle("Insert row above")
+					.setIcon(iconName("rowAbove"))
+					.setDisabled(this.selection.rect.r1 === 0)
+					.onClick(() => this.insertRowsAt("above")),
+			);
+			menu.addItem((i) => i.setTitle("Insert row below").setIcon(iconName("rowBelow")).onClick(() => this.insertRowsAt("below")));
 			menu.addItem((i) =>
 				i
 					.setTitle("Delete row")
-					.setIcon("trash-2")
+					.setIcon(iconName("remove"))
 					.setDisabled(hit.row === 0)
 					.onClick(() => this.deleteSelectedRows()),
 			);
 			menu.addSeparator();
-			menu.addItem((i) => i.setTitle("Autofit height").setIcon("move-vertical").onClick(() => this.autofitRows(rectRows(this.selection.rect))));
-			menu.addItem((i) => i.setTitle("Reset height").setIcon("rotate-ccw").onClick(() => this.resetRowHeights(rectRows(this.selection.rect))));
+			menu.addItem((i) => i.setTitle("Autofit height").setIcon(iconName("autofitRows")).onClick(() => this.autofitRows(rectRows(this.selection.rect))));
+			menu.addItem((i) => i.setTitle("Reset height").setIcon(iconName("reset")).onClick(() => this.resetRowHeights(rectRows(this.selection.rect))));
 		} else {
-			menu.addItem((i) => i.setTitle("Edit cell").setIcon("pencil").onClick(() => this.beginEdit()));
-			menu.addItem((i) => i.setTitle("Clear contents").setIcon("eraser").onClick(() => this.clearSelectionContents()));
+			if (hit.kind === "cell" && !this.rectContains(hit.row, hit.col)) {
+				this.setSelection({ r1: hit.row, c1: hit.col, r2: hit.row, c2: hit.col }, { row: hit.row, col: hit.col });
+			}
+			const headerOnly = this.selection.rect.r1 === 0 && this.selection.rect.r2 === 0;
+			menu.addItem((i) => i.setTitle("Edit cell").setIcon(iconName("edit")).onClick(() => this.beginEdit()));
+			menu.addItem((i) => i.setTitle("Clear contents").setIcon(iconName("clear")).onClick(() => this.clearSelectionContents()));
 			menu.addSeparator();
-			menu.addItem((i) => i.setTitle("Insert row above").onClick(() => this.insertRowsAt("above")));
-			menu.addItem((i) => i.setTitle("Insert row below").onClick(() => this.insertRowsAt("below")));
-			menu.addItem((i) => i.setTitle("Insert column left").onClick(() => this.insertColsAt("left")));
-			menu.addItem((i) => i.setTitle("Insert column right").onClick(() => this.insertColsAt("right")));
+			menu.addItem((i) =>
+				i
+					.setTitle("Insert row above")
+					.setIcon(iconName("rowAbove"))
+					.setDisabled(this.selection.rect.r1 === 0)
+					.onClick(() => this.insertRowsAt("above")),
+			);
+			menu.addItem((i) => i.setTitle("Insert row below").setIcon(iconName("rowBelow")).onClick(() => this.insertRowsAt("below")));
+			menu.addItem((i) => i.setTitle("Insert column left").setIcon(iconName("colLeft")).onClick(() => this.insertColsAt("left")));
+			menu.addItem((i) => i.setTitle("Insert column right").setIcon(iconName("colRight")).onClick(() => this.insertColsAt("right")));
 			menu.addSeparator();
 			menu.addItem((i) =>
 				i
 					.setTitle("Delete row")
-					.setDisabled(this.selection.rect.r1 === 0 && this.selection.rect.r2 === 0)
+					.setIcon(iconName("remove"))
+					.setDisabled(headerOnly)
 					.onClick(() => this.deleteSelectedRows()),
 			);
-			menu.addItem((i) => i.setTitle("Delete column").onClick(() => this.deleteSelectedCols()));
+			menu.addItem((i) => i.setTitle("Delete column").setIcon(iconName("remove")).onClick(() => this.deleteSelectedCols()));
 		}
 		menu.showAtMouseEvent(evt);
+	}
+
+	private rectContains(row: number, col: number): boolean {
+		const r = this.selection.rect;
+		return row >= r.r1 && row <= r.r2 && col >= r.c1 && col <= r.c2;
 	}
 
 	/* ---------------------------------------------------------------- resize */

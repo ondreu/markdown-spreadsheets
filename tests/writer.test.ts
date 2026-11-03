@@ -150,6 +150,30 @@ describe("Writer.write", () => {
 		expect(vault.text).not.toMatch(/[^\r]\n/);
 	});
 
+	it("leaves the line endings of the rest of a mixed note alone", async () => {
+		// CRLF above the table, LF inside and below it: a note stitched together by two editors.
+		const mixed = "# Projekt\r\n\r\nIntro.\r\n\r\n| Name | Qty |\n| ---- | --- |\n| Bolt | 10 |\n\nClosing.\r\n";
+		const { vault, writer, anchor } = setup(mixed);
+		const region = scanTables(mixed)[0];
+		const model = parseTable(region.text);
+		model.cells.set("1:1", { raw: "77" });
+		const outcome = await writer.write(FILE, anchor, serializeTable(model), regionHash(region.text));
+		expect(outcome.kind).toBe("written");
+		expect(vault.text.startsWith("# Projekt\r\n\r\nIntro.\r\n\r\n| Name")).toBe(true);
+		expect(vault.text.endsWith("|\n\nClosing.\r\n")).toBe(true);
+		expect(vault.text).toContain("| Bolt | 77  |\n");
+	});
+
+	it("writes a table that ends the file without a trailing newline", async () => {
+		const text = "Intro\n\n| A |\n| --- |\n| 1 |";
+		const { vault, writer, anchor, hash } = setup(text);
+		const model = parseTable(scanTables(text)[0].text);
+		model.cells.set("1:0", { raw: "2" });
+		const outcome = await writer.write(FILE, anchor, serializeTable(model), hash);
+		expect(outcome.kind).toBe("written");
+		expect(vault.text).toBe("Intro\n\n| A   |\n| --- |\n| 2   |");
+	});
+
 	it("survives repeated edit-and-write cycles without drifting", async () => {
 		const { vault, writer } = setup(NOTE);
 		let anchor = anchorFromRegion(FILE.path, scanTables(NOTE)[0]);
@@ -190,12 +214,28 @@ describe("Writer.appendTable", () => {
 });
 
 describe("Writer.addBlockId", () => {
-	it("puts the marker on its own line after the table", async () => {
+	it("puts the marker on its own line, with a blank line on either side", async () => {
 		const { vault, writer, anchor } = setup(NOTE);
 		expect(await writer.addBlockId(FILE, anchor, "grid-a7f3")).toBe(true);
 		const lines = vault.text.split("\n");
-		expect(lines[7]).toBe("^grid-a7f3");
+		expect(lines.slice(6, 11)).toEqual(["| Bolt | 10 |", "", "^grid-a7f3", "", "Closing paragraph."]);
 		expect(scanTables(vault.text)[0].blockId).toBe("grid-a7f3");
+	});
+
+	it("adds the blank line after the marker when text follows the table directly", async () => {
+		const text = "| A |\n| --- |\n| 1 |\nText\n";
+		const { vault, writer, anchor } = setup(text);
+		await writer.addBlockId(FILE, anchor, "grid-b1");
+		expect(vault.text).toBe("| A |\n| --- |\n| 1 |\n\n^grid-b1\n\nText\n");
+		expect(scanTables(vault.text)[0].blockId).toBe("grid-b1");
+	});
+
+	it("works on a table that ends the file without a newline", async () => {
+		const text = "| A |\n| --- |\n| 1 |";
+		const { vault, writer, anchor } = setup(text);
+		await writer.addBlockId(FILE, anchor, "grid-c2");
+		expect(vault.text).toBe("| A |\n| --- |\n| 1 |\n\n^grid-c2");
+		expect(scanTables(vault.text)[0].blockId).toBe("grid-c2");
 	});
 
 	it("is idempotent once a marker exists", async () => {
