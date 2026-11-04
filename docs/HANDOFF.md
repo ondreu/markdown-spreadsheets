@@ -425,3 +425,17 @@ Seven checks in headless Chromium against the real `GridView`: no strip for one 
 table, labels from the headers, the open table active, a click switching the grid (and the active
 tab with it). The screenshot harness gained `setNote`, because the shim's vault always read one note
 and a tab strip needs two tables to exist at all.
+
+## Round thirteen: a note is a workbook
+
+`Table2!B3` and `Table2!C2:C9` read another table of the same note, and `recalculateWorkbook` runs
+the tables in document order until nothing changes (decision 31). The numbering is the position —
+no names to store, nothing to keep in sync, and a table inserted above renumbers the rest.
+
+`FormulaWatcher` remembers the tables of each note (headers and height, in memory only) and rewrites
+`TableN!` when one appears or disappears above another; a note open in an editor is not rewritten, it
+is reported instead. Verified in headless Chromium as well: a `=Table2!A2*2` written through the
+grid's own `setValueAt` came back as `42 %%=Table2!A2*2%%`, with the sibling table in scope.
+
+Tests went from 390 to 403: twelve for the parser, the workbook pass and `shiftTableRefs`, one for
+the watcher's renumbering.

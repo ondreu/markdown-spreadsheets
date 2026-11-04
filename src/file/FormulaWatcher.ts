@@ -5,6 +5,8 @@ import { parseTable } from "../model/parse";
 import { serializeTable } from "../model/serialize";
 import type { MarkdownSpreadsheetsSettings } from "../settings";
 import { recalculate } from "../feature/formula";
+import { shiftTableRefs, tableIndexMap } from "../feature/workbook";
+import { scanTables } from "./scanTables";
 import { Writer } from "./Writer";
 
 /**
@@ -38,6 +40,11 @@ const SWEEP_MAX_AGE_DAYS = 45;
 
 export class FormulaWatcher {
 	private readonly timers = new Map<string, number>();
+	/**
+	 * The tables each note had the last time it was looked at: headers and height, in order. Only in
+	 * memory — the note itself carries no record of what moved, and a restart simply starts over.
+	 */
+	private readonly structure = new Map<string, string[]>();
 	private disposed = false;
 	private sweeping = false;
 
@@ -46,12 +53,20 @@ export class FormulaWatcher {
 		private readonly settings: () => MarkdownSpreadsheetsSettings,
 		/** A note open in an editor or a grid: not ours to rewrite. */
 		private readonly isOpen: (path: string) => boolean,
+		/** Obsidian's `Notice` in the app; a no-op in tests, which have no Obsidian. */
+		private readonly notify: (message: string) => void = () => {},
 	) {}
 
 	/** A note changed on disk. Debounced per path: Sync delivers a burst of events per save. */
 	schedule(file: TFile): void {
 		if (this.disposed || file.extension !== "md") return;
-		if (!this.settings().recalculateInBackground || this.isOpen(file.path)) return;
+		if (!this.settings().recalculateInBackground) return;
+		// A note open in an editor is not ours to write, but its table order still has to be watched:
+		// inserting a table above another silently moves every `Table3!` reference.
+		if (this.isOpen(file.path)) {
+			void this.watchStructure(file, false);
+			return;
+		}
 		const running = this.timers.get(file.path);
 		if (running !== undefined) window.clearTimeout(running);
 		const id = window.setTimeout(() => {
@@ -63,7 +78,9 @@ export class FormulaWatcher {
 
 	/** Recalculates every table of one note. Returns how many tables needed a write. */
 	async run(file: TFile): Promise<number> {
-		if (this.disposed || this.isOpen(file.path) || !this.settings().recalculateInBackground) return 0;
+		if (this.disposed || !this.settings().recalculateInBackground) return 0;
+		await this.watchStructure(file, !this.isOpen(file.path));
+		if (this.isOpen(file.path)) return 0;
 		let text: string;
 		try {
 			text = await this.vault.cachedRead(file);
@@ -92,6 +109,48 @@ export class FormulaWatcher {
 			// A note being written by something else right now is not an error worth a notice; the
 			// next event schedules another attempt.
 			return 0;
+		}
+	}
+
+	/** What the tables of a note look like from the outside: headers, then how many lines. */
+	private fingerprints(text: string): string[] {
+		return scanTables(text).map((region) => `${region.headerCells.join("|")}#${region.text.split("\n").length}`);
+	}
+
+	/**
+	 * Keeps `TableN!` honest when a table is inserted or removed above another.
+	 *
+	 * Numbers are what the note says, so inserting a table renumbers everything below it. When the
+	 * note is closed the references are rewritten (`allowWrite`); when it is open in an editor they
+	 * cannot be, so it says so instead of writing under somebody's caret.
+	 */
+	private async watchStructure(file: TFile, allowWrite: boolean): Promise<void> {
+		let text: string;
+		try {
+			text = await this.vault.cachedRead(file);
+		} catch {
+			return;
+		}
+		const previous = this.structure.get(file.path);
+		const current = this.fingerprints(text);
+		this.structure.set(file.path, current);
+		if (previous === undefined || previous.length === 0 || !text.includes("Table")) return;
+		const { map, moved } = tableIndexMap(previous, current);
+		if (!moved) return;
+		const shifted = shiftTableRefs(text, map);
+		if (shifted === text) {
+			// Nothing references a table by number, so nothing can be wrong.
+			return;
+		}
+		if (!allowWrite) {
+			this.notify(`${file.basename}: a table was added or removed, so the TableN references in its formulas may point at another table. Close the note and let the plugin fix them, or check them by hand.`);
+			return;
+		}
+		try {
+			await this.vault.process(file, (data) => shiftTableRefs(data, map));
+			this.notify(`Moved the TableN references in ${file.basename} to follow the table they name.`);
+		} catch {
+			// Written by something else at this instant; the next modify event tries again.
 		}
 	}
 

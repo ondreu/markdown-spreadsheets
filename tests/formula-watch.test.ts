@@ -83,4 +83,18 @@ describe("FormulaWatcher", () => {
 		expect(vault.text.replace(/\s+/g, " ")).toContain("| 2 %%=1+1%% |");
 		expect(vault.text.replace(/\s+/g, " ")).toContain("| 4 %%=2+2%% |");
 	});
+
+	it("renumbers TableN references when a table is inserted above another", async () => {
+		const first = "| A |\n| --- |\n| 1 %%=Table2!B2%% |\n\n| B | C |\n| --- | --- |\n| 7 | 9 |\n";
+		const vault = new FakeVault(first);
+		const watcher = watcherFor(vault);
+		await watcher.run(file);
+		expect(vault.text).toContain("Table2!B2");
+
+		// A new table at the top pushes both others down by one.
+		vault.text = "| N |\n| --- |\n| 1 |\n\n" + first;
+		await watcher.run(file);
+		expect(vault.text).toContain("Table3!B2");
+		expect(vault.text).not.toContain("Table2!B2");
+	});
 });

@@ -123,6 +123,14 @@ References are spreadsheet style — `B2`, `B2:B9` — where row 1 is the Markdo
 - `SUMIF`, `SUMIFS`, `COUNTIF`, `COUNTIFS`, `AVERAGEIF`, `AVERAGEIFS`, whose criteria take a
   comparison (`">100"`), text, or wildcards (`"*desk*"`, `"?airs"`).
 
+A note with several tables is a workbook: `Table2!B3` reads a cell of the second table, counted from
+the top of the note, and `SUM(Table2!C2:C9)` sums a range of it. Nothing is stored to make that work —
+the number is the position, so a table inserted above renumbers the ones below it, and the plugin
+follows: while it is running it rewrites the references, and if the note is open in an editor it says
+so instead of writing under your caret. What it cannot see it does not pretend to see — a reference
+that ends up pointing at the wrong table shows a wrong number, so keep notes with cross-table
+formulas closed when you move tables around.
+
 Start typing a function name and the editor lists the ones that match, with their arguments and a
 one-line description; Enter writes the name and its opening parenthesis and leaves the caret inside.
 

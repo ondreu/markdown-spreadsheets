@@ -22,9 +22,10 @@ import { defaultLayout, type TableLayout } from "../store/Sidecar";
 import { aggregate, applyFunction, formatResult, summaryLine, type CalcFunction } from "../feature/QuickCalc";
 import { csvBytes, plainText, type CsvOptions } from "../feature/exportCsv";
 import { toHtmlTable, toJson } from "../feature/exportExtra";
-import { computeColumn, totalsRow } from "../feature/formula";
+import { computeColumn, recalculate, totalsRow } from "../feature/formula";
 import { readTableFile } from "../feature/tableFile";
 import { applyMerge, planMerge } from "../feature/merge";
+import { recalculateWorkbook } from "../feature/workbook";
 import {
 	columnStats,
 	duplicateHeaders,
@@ -110,6 +111,14 @@ export class GridView extends ItemView {
 	private noteRegionText = "";
 	/** The tabs under the grid: one per table in the note, as a spreadsheet has sheets. */
 	private sheetsEl!: HTMLElement;
+
+	/**
+	 * The note's other tables, parsed when a table is opened, so a `Table2!B3` can be calculated
+	 * without reading the file on every keystroke. Only this table is written; the others are here
+	 * to be read, exactly as the note stores them.
+	 */
+	private siblingTables: GridModel[] = [];
+	private siblingIndex = -1;
 	/** The cell the formula bar is editing, set on the first keystroke there. */
 	private formulaTarget: { row: number; col: number } | null = null;
 
@@ -321,6 +330,7 @@ export class GridView extends ItemView {
 		this.refreshRibbon();
 		this.refreshStatus();
 		void this.refreshSheets();
+		void this.loadSiblings();
 
 		const ragged = raggedRows(region.text);
 		if (ragged.length > 0) {
@@ -353,7 +363,8 @@ export class GridView extends ItemView {
 					onSelectionChange: (selection) => this.onSelectionChange(selection),
 					onNotice: (message) => new Notice(message),
 					onCalcPlaced: () => this.refreshRibbon(),
-					onEditorInput: (value) => {
+					onRecalculate: (model) => this.recalcWithWorkbook(model),
+				onEditorInput: (value) => {
 						this.formulaTarget = null;
 						this.formulaInputEl.value = value;
 						this.refreshTouchBar();
@@ -765,6 +776,42 @@ export class GridView extends ItemView {
 	 * "Table 2" says nothing. The index stays in the tooltip, because it is what the references and
 	 * the picker use.
 	 */
+	/**
+	 * Recalculates this table with its siblings in scope. The workbook runs every table in document
+	 * order; only the count for this one matters here, because only this one is written.
+	 */
+	private recalcWithWorkbook(model: GridModel): number {
+		const host = this.host;
+		if (host === null || this.siblingIndex < 0) return this.recalculateLocal(model);
+		const tables: GridModel[] = [];
+		let next = 0;
+		for (let i = 0; i <= this.siblingTables.length; i++) {
+			tables.push(i === this.siblingIndex ? model : this.siblingTables[next++]);
+		}
+		const result = recalculateWorkbook(tables, {
+			numberOpts: { decimalSeparator: this.plugin.sidecar.settings.decimalSeparator },
+			format: (value) => host.formatValueFor(value),
+		});
+		return result.perTable[this.siblingIndex] ?? 0;
+	}
+
+	private recalculateLocal(model: GridModel): number {
+		return recalculate(model, {
+			numberOpts: { decimalSeparator: this.plugin.sidecar.settings.decimalSeparator },
+			format: (value) => this.host?.formatValueFor(value) ?? String(value),
+		}).changed.length;
+	}
+
+	/** Parses the other tables of the note, once per opened table. */
+	private async loadSiblings(): Promise<void> {
+		const file = this.file;
+		if (!file || !this.anchor) return;
+		const regions = scanTables(await this.app.vault.cachedRead(file));
+		const mine = this.anchor.tableIndex;
+		this.siblingIndex = regions.findIndex((region) => region.index === mine);
+		this.siblingTables = regions.filter((region) => region.index !== mine).map((region) => parseTable(region.text));
+	}
+
 	private async refreshSheets(): Promise<void> {
 		const el = this.sheetsEl;
 		if (!el || !this.file) return;
