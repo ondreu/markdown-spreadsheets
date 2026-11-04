@@ -31,6 +31,9 @@ E.removeClasses = function (c: string[]) { this.classList.remove(...c); };
 E.toggleClass = function (c: string, v: boolean) { this.classList.toggle(c, v); };
 E.hasClass = function (c: string) { return this.classList.contains(c); };
 E.setText = function (t: string) { this.textContent = t; };
+// Obsidian's `appendText` adds a text node; the shim had no caller for it until the function
+// suggestions split the matched prefix from the rest of the name.
+E.appendText = function (t: string) { this.appendChild(this.ownerDocument.createTextNode(t)); };
 E.getText = function () { return this.textContent ?? ""; };
 E.find = function (s: string) { return this.querySelector(s); };
 E.findAll = function (s: string) { return Array.from(this.querySelectorAll(s)); };

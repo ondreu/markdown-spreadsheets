@@ -1,4 +1,5 @@
 import { prepareFuzzySearch, type App, type TFile } from "obsidian";
+import { FORMULA_FUNCTIONS } from "../feature/formula";
 import { asElement } from "./dom";
 
 /** What a suggestion replaces: `text[from, to)` of the editor's value becomes `insert`. */
@@ -12,6 +13,9 @@ export interface Suggestion {
 	caret?: number;
 	/** Picking it also commits the cell. */
 	commits?: boolean;
+	/** A function suggestion: the arguments as they read, and one line about it. */
+	signature?: string;
+	summary?: string;
 }
 
 export interface SuggestSource {
@@ -38,6 +42,8 @@ export class CellSuggest {
 	private items: Suggestion[] = [];
 	private index = 0;
 	private tags: string[] | null = null;
+	/** What a function list is filtering on, so the list can show which letters matched. */
+	private typed = "";
 	private files: TFile[] | null = null;
 	private forced = false;
 
@@ -81,8 +87,15 @@ export class CellSuggest {
 		const value = this.input.value;
 		const caret = this.input.selectionStart ?? value.length;
 		const before = value.slice(0, caret);
-		this.items = this.linkItems(before, value, caret) ?? this.tagItems(before, caret) ?? this.columnItems(value);
+		this.items =
+			this.formulaItems(before, caret) ??
+			this.linkItems(before, value, caret) ??
+			this.tagItems(before, caret) ??
+			this.columnItems(value);
 		if (this.items.length === 0) {
+			// Empty the list as well as hiding it: leftover rows stay readable to a screen reader
+			// and to anything counting items in the DOM.
+			this.el.empty();
 			this.el.addClass("mds-hidden");
 			return;
 		}
@@ -123,6 +136,52 @@ export class CellSuggest {
 		this.input.setSelectionRange(caret, caret);
 		this.close();
 		this.input.dispatchEvent(new Event("input"));
+	}
+
+	/**
+	 * Function names inside a formula. A formula is the one place where a bare word is a name, so
+	 * this looks only there, only at the start of a word, and never inside a string literal —
+	 * `="SUM"` is text, not a call.
+	 *
+	 * Picking one writes the name and its opening parenthesis and leaves the caret between them,
+	 * so the next thing typed is the first argument.
+	 */
+	private formulaItems(before: string, caret: number): Suggestion[] | null {
+		const trimmed = before.trimStart();
+		if (!trimmed.startsWith("=") || trimmed.startsWith("==")) return null;
+		// An odd number of quotes before the caret means the caret is inside a string.
+		let quotes = 0;
+		for (const ch of before) if (ch === '"') quotes++;
+		if (quotes % 2 === 1) return null;
+		const m = /(^|[^A-Za-z0-9_$])([A-Za-z]*)$/.exec(before);
+		if (m === null) return null;
+		const query = m[2];
+		const from = caret - query.length;
+		// With nothing typed, a name only makes sense where a value starts: after `=`, `(`, `,`
+		// or an operator. After a digit or a reference it is an argument being completed, not a
+		// function about to be named.
+		if (query === "" && from > 0 && !/[=(,;+\-*/^&<>]/.test(before[from - 1])) return null;
+		const lower = query.toLowerCase();
+		const starts = FORMULA_FUNCTIONS.filter((f) => f.name.toLowerCase().startsWith(lower));
+		const inside =
+			lower === ""
+				? []
+				: FORMULA_FUNCTIONS.filter((f) => !f.name.toLowerCase().startsWith(lower) && f.name.toLowerCase().includes(lower));
+		const hits = [...starts, ...inside].slice(0, 12);
+		if (hits.length === 0) return null;
+		this.typed = query;
+		return hits.map((f) => {
+			const insert = f.signature === "" ? `${f.name}()` : `${f.name}(`;
+			return {
+				label: f.name,
+				insert,
+				from,
+				to: caret,
+				caret: insert.length - (f.signature === "" ? 1 : 0),
+				signature: f.signature,
+				summary: f.summary,
+			};
+		});
 	}
 
 	private linkItems(before: string, value: string, caret: number): Suggestion[] | null {
@@ -170,6 +229,7 @@ export class CellSuggest {
 	}
 
 	private columnItems(value: string): Suggestion[] {
+		this.typed = "";
 		const typed = value.trim().toLowerCase();
 		if (!this.forced && typed === "") return [];
 		const values = this.source.columnValues();
@@ -206,6 +266,19 @@ export class CellSuggest {
 				attr: { "data-index": String(i), role: "option", "aria-selected": String(i === this.index) },
 			});
 			row.toggleClass("is-selected", i === this.index);
+			if (item.signature !== undefined) {
+				row.addClass("is-function");
+				const head = row.createDiv({ cls: "mds-suggest-head" });
+				const typedLength = item.label.toLowerCase().startsWith(this.typed.toLowerCase()) ? this.typed.length : 0;
+				// One run of text, not two elements: the name has to read and measure as one word.
+				const name = head.createSpan({ cls: "mds-suggest-name" });
+				if (typedLength > 0) name.createSpan({ cls: "is-match", text: item.label.slice(0, typedLength) });
+				name.appendText(item.label.slice(typedLength));
+				if (item.signature !== "") head.createSpan({ cls: "mds-suggest-signature", text: `(${item.signature})` });
+				else head.createSpan({ cls: "mds-suggest-signature", text: "()" });
+				row.createDiv({ cls: "mds-suggest-summary", text: item.summary ?? "" });
+				return;
+			}
 			row.createSpan({ cls: "mds-suggest-label", text: item.label });
 			if (item.detail) row.createSpan({ cls: "mds-suggest-detail", text: item.detail });
 		});

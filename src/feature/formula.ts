@@ -336,6 +336,45 @@ const FUNCTIONS: Record<string, { fn: FunctionName; min: number; max: number }> 
 	AVERAGEIFS: { fn: "AVERAGEIFS", min: 3, max: 255 },
 };
 
+/**
+ * What the editor offers while a function name is being typed: the arguments, and one line saying
+ * what it does. Kept next to `FUNCTIONS` and checked against it by a test, so a name cannot be
+ * suggested that the parser would reject.
+ */
+export interface FormulaFunctionDoc {
+	name: string;
+	/** The arguments only — the editor renders `NAME(signature)`. Empty for a constant. */
+	signature: string;
+	summary: string;
+}
+
+/** In the order the list shows them with nothing typed: the ones a table actually uses. */
+export const FORMULA_FUNCTIONS: readonly FormulaFunctionDoc[] = [
+	{ name: "SUM", signature: "number, …", summary: "Adds the numbers in the arguments" },
+	{ name: "IF", signature: "condition, then, else?", summary: "One value when a condition holds, another when it does not" },
+	{ name: "AVERAGE", signature: "number, …", summary: "The mean of the numbers" },
+	{ name: "COUNT", signature: "value, …", summary: "How many of the cells hold numbers" },
+	{ name: "COUNTIF", signature: "range, condition", summary: "Counts the cells that match a condition" },
+	{ name: "SUMIF", signature: "range, condition, sumRange?", summary: "Adds the cells whose neighbours match a condition" },
+	{ name: "COUNTA", signature: "value, …", summary: "How many of the cells are not empty" },
+	{ name: "MIN", signature: "number, …", summary: "The smallest number" },
+	{ name: "MAX", signature: "number, …", summary: "The largest number" },
+	{ name: "ROUND", signature: "number, digits", summary: "Rounds to a number of digits" },
+	{ name: "ABS", signature: "number", summary: "The value without its sign" },
+	{ name: "MEDIAN", signature: "number, …", summary: "The middle number" },
+	{ name: "PRODUCT", signature: "number, …", summary: "Multiplies the numbers" },
+	{ name: "IFERROR", signature: "value, fallback", summary: "A fallback when the first argument is an error" },
+	{ name: "AND", signature: "condition, …", summary: "True when every condition holds" },
+	{ name: "OR", signature: "condition, …", summary: "True when any condition holds" },
+	{ name: "NOT", signature: "condition", summary: "The opposite of a condition" },
+	{ name: "SUMIFS", signature: "sumRange, range, condition, …", summary: "Adds the cells that match several conditions" },
+	{ name: "COUNTIFS", signature: "range, condition, …", summary: "Counts the cells that match several conditions" },
+	{ name: "AVERAGEIF", signature: "range, condition, averageRange?", summary: "Averages the cells whose neighbours match a condition" },
+	{ name: "AVERAGEIFS", signature: "averageRange, range, condition, …", summary: "Averages the cells that match several conditions" },
+	{ name: "TRUE", signature: "", summary: "The constant true" },
+	{ name: "FALSE", signature: "", summary: "The constant false" },
+];
+
 const ERROR_CODES: readonly FormulaErrorCode[] = ["#VALUE!", "#REF!", "#DIV/0!", "#CYCLE!", "#ERROR!", "#NUM!", "#NAME?"];
 
 /** Resolves a bare column letter (`bracket` false) or a `[Header]` to a column index, or -1. */
