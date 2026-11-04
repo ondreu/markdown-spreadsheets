@@ -20,6 +20,7 @@ import { TablePickerModal } from "./view/modals";
 import { GRID_COMMANDS } from "./view/gridCommands";
 import { ImportModal, InsertTableModal, TableIndexModal, type VaultTable } from "./view/toolModals";
 import { Writer } from "./file/Writer";
+import { FormulaWatcher } from "./file/FormulaWatcher";
 import { parseTable } from "./model/parse";
 import { serializeTable } from "./model/serialize";
 import { setRaw, createModel, recomputeUsedRange, type Align } from "./model/GridModel";
@@ -30,6 +31,7 @@ import { livePreviewTableButton } from "./view/livePreviewButton";
 export default class MarkdownSpreadsheetsPlugin extends Plugin {
 	sidecar!: Sidecar;
 	private statusBarEl: HTMLElement | null = null;
+	private formulaWatcher: FormulaWatcher | null = null;
 
 	override async onload(): Promise<void> {
 		this.sidecar = new Sidecar(this);
@@ -222,6 +224,20 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 			}),
 		);
 
+		// A stored formula value is literal text, so a note edited outside the grid goes stale in
+		// silence. The watcher recalcs such a note behind the scenes; see `FormulaWatcher`.
+		this.formulaWatcher = new FormulaWatcher(
+			this.app.vault,
+			() => this.sidecar.settings,
+			(path) => this.isNoteBusy(path),
+		);
+		this.registerEvent(
+			this.app.vault.on("modify", (file) => {
+				if (file instanceof TFile) this.formulaWatcher?.schedule(file);
+			}),
+		);
+		this.app.workspace.onLayoutReady(() => this.formulaWatcher?.sweep());
+
 		// Sidecar keys embed the path, so a rename would otherwise orphan every column width.
 		this.registerEvent(
 			this.app.vault.on("rename", (file, oldPath) => {
@@ -244,7 +260,24 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 	override onunload(): void {
 		// No `detachLeavesOfType` here: `detach-leaves` (§15.2) — closing the user's tabs on
 		// update or disable is the plugin deciding something that is not its call.
+		this.formulaWatcher?.dispose();
 		void this.sidecar.saveNow();
+	}
+
+	/**
+	 * True when the note is open anywhere: an editor holds a buffer the vault write would race, and
+	 * an open grid has its own conflict handling and recalculates when it opens.
+	 */
+	private isNoteBusy(path: string): boolean {
+		for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+			const view = leaf.view;
+			if (view instanceof MarkdownView && view.file?.path === path) return true;
+		}
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_GRID)) {
+			const view = leaf.view;
+			if (view instanceof GridView && view.currentPath() === path) return true;
+		}
+		return false;
 	}
 
 	setStatusBarText(text: string): void {

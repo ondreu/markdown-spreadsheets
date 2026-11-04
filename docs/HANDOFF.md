@@ -392,3 +392,12 @@ six checks for pointing (insert, keep focus, drag into a range, replace, commit,
 `%%=SUM(D3)%%`) and ten for the list (order, signature and summary, the tinted prefix, Enter and the
 caret, computing the accepted formula, and no list inside a string or outside a formula). The
 screenshot harness's API shim gained `appendText`, which Obsidian has and it did not.
+
+## Round ten: the numbers keep themselves current
+
+A formula cell stores its value as text, so anything that edits the table outside the grid left a
+stale number behind with nothing to announce it. `FormulaWatcher` now recalculates such a note in
+the background (decision 28): debounced `vault.on("modify")`, only a note containing `%%=`, only a
+table whose value really changed, never a note that is open in an editor or a grid, and one chunked
+sweep over recently edited notes after startup. Six unit tests against a fake vault pin those rules;
+nothing in the watcher touches the view, so there is nothing for the browser harness to drive.
