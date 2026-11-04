@@ -405,3 +405,35 @@ column, and says nothing about functions.
 - **The typed letters are tinted, the rest is not.** A list that filters on two letters and does not
   show which two is a guessing game once the names are long.
 
+## 28. A note that changes outside the grid is recalculated in the background
+
+**Design:** decision 21 accepts that a formula cell stores its last value as literal text, which
+means the note is correct without the plugin and *stale* with it, until something recalculates.
+§13 recalculates when the grid opens and after every write. That leaves the case the whole design
+worries about: a change delivered by Obsidian Sync, or made by another plugin, while no grid is
+open. The number is then wrong in a way nothing announces.
+
+**Built:** `FormulaWatcher` (`src/file/FormulaWatcher.ts`), no button anywhere.
+
+- **It listens to `vault.on("modify")`**, debounced per path at 1.2 s, because one save from Sync
+  arrives as a burst of events.
+- **Only a note that contains `%%=` is opened.** The check is one `includes` on the cached text;
+  everything else stops there.
+- **Only a value that changed is written.** `recalculate` reports what it rewrote and the table is
+  serialized back only then — through `Writer.reformatAll`, which already skips a table whose hash
+  is unchanged, so a note that was right is never touched.
+- **A note that is open is skipped**, whether in an editor — whose buffer the vault write would
+  race and lose — or in a grid, which has its own conflict handling and recalcs on open. This is the
+  one rule that matters: a background write must never compete with a person.
+- **One sweep at startup**, 4 s after the workspace is ready, over notes edited in the last 45 days,
+  in chunks of 20 with a pause. The edits that matter most — a phone's changes arriving while the
+  desktop was closed — are exactly the ones no event announces.
+- **A table it had to write comes back in the configured layout** (aligned or compact), because the
+  value cannot be replaced without re-serializing the table. `compact` keeps that diff to the line
+  that changed.
+- **A failure is silent** by design: a note being written by something else at that instant is not
+  worth a notice, and the next modify event schedules another attempt.
+- **The setting exists** (`Recalculate when a note changes`, on) because a vault under Git or Sync
+  may prefer its numbers to move only while somebody is looking. The watcher checks it at every
+  step rather than at registration, so turning it off takes effect at once.
+

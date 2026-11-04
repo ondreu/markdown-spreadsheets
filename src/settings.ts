@@ -51,6 +51,11 @@ export interface MarkdownSpreadsheetsSettings {
 	timeFormat: string;
 	/** Suggestions while typing in a cell: links, tags and values already in the column. */
 	autocomplete: boolean;
+	/**
+	 * Recalculate the formula cells of a note that changed outside the grid — Obsidian Sync, another
+	 * plugin, an edit in the source. A stored value is literal text, so it goes stale silently.
+	 */
+	recalculateInBackground: boolean;
 	zebraRows: boolean;
 	/** Tints the row and column of the active cell. */
 	highlightActiveLine: boolean;
@@ -93,6 +98,7 @@ export const DEFAULT_SETTINGS: MarkdownSpreadsheetsSettings = {
 	dateFormat: "YYYY-MM-DD",
 	timeFormat: "HH:mm",
 	autocomplete: true,
+	recalculateInBackground: true,
 	zebraRows: false,
 	highlightActiveLine: true,
 	headerNamesInLetters: true,

@@ -73,6 +73,11 @@ No table yet? **Insert a new table and open it as a spreadsheet** creates one at
 
 - Export to CSV, Excel (with real formulas) or JSON — the whole table or just the selection. Copy as
   Markdown, as a formatted table for Word or email, as JSON or as text. Import CSV, TSV or Excel.
+- **The stored value is kept current.** A formula cell holds its last value as text, so a note edited
+  outside the grid — on your phone, by another plugin, in the source view — would keep a stale
+  number. The plugin recalculates such a note in the background, and once over recently edited notes
+  when it starts. Only a value that actually changed is written, and a note you have open is left
+  alone.
 - **Never overwrites silently.** If the table changed in the note while the grid was open, you get
   the choice. The last versions are kept: the table as it was when opened, each save, and — in
   manual save mode — changes you closed without saving. Restoring highlights what changed.
@@ -183,7 +188,8 @@ Obsidian's settings.
 | Open the spreadsheet in | A new tab | A split puts the grid next to the note. |
 | Toolbar | Icons and labels | Icons only for a one-row toolbar. |
 | Touch layout | Automatic | Always on a touchscreen laptop; never on a tablet with a trackpad. |
-| Suggestions while typing | On | Off if you never want the pop-up. |
+| Suggestions while typing | On | Off if you never want the pop-up — including the function list. |
+| Recalculate when a note changes | On | Off if your vault is Synced and you would rather the numbers change only while the grid is open. |
 | Status bar figures | Sum, average, count | Add minimum, maximum or filled cells. |
 | CSV delimiter, byte order mark | `;`, on | What Excel expects where the comma is the decimal mark. |
 | Number locale, decimal separator | System | How `1 234,56` is read and results are written. |

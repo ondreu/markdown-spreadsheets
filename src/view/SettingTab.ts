@@ -241,6 +241,18 @@ export class MarkdownSpreadsheetsSettingTab extends PluginSettingTab {
 				}),
 			);
 
+		new Setting(containerEl)
+			.setName("Recalculate when a note changes")
+			.setDesc(
+				"A formula cell stores its last value as text, so an edit from Obsidian Sync, another plugin or the source view leaves it stale. The plugin then recalculates the tables of that note in the background, and once over recently edited notes at startup. Notes open in an editor or a grid are left to the grid.",
+			)
+			.addToggle((t) =>
+				t.setValue(settings.recalculateInBackground).onChange((value) => {
+					settings.recalculateInBackground = value;
+					commit();
+				}),
+			);
+
 		new Setting(containerEl).setName("Appearance").setHeading();
 
 		new Setting(containerEl)
