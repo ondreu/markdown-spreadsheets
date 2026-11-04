@@ -36,6 +36,9 @@ No table yet? **Insert a new table and open it as a spreadsheet** creates one at
   Ctrl+D to fill down, the fill handle for series (numbers, dates, weekdays, `Item 1 → Item 2`).
 - **Suggestions while typing**: notes after `[[`, tags after `#`, and the values already used in the
   same column — Alt+↓ lists them all.
+- **Pick cells instead of typing them**: while a formula is being typed, a click in the grid writes
+  that cell's reference at the caret, and dragging writes a range — as in Excel. The editor keeps
+  focus, so the formula carries on where it left off.
 - **Rows and columns**: insert, duplicate, delete, move with the buttons or by dragging the row number
   or column letter, hide columns in the grid only.
 - **Cells show what the note shows** — links, emphasis, code and images are rendered; editing always
@@ -154,6 +157,7 @@ a keyboard and trackpad.
 | Ctrl+Enter | Write what you typed into every selected cell |
 | Alt+↓ | Pick a value already used in the column |
 | Ctrl+; · Ctrl+Shift+; | Insert today's date · the time |
+| Click or drag a cell while typing a formula | Write its reference, or a range, at the caret |
 | Ctrl+K | Turn the selection into a `[[link]]` |
 | Ctrl+B / I | Bold, italic — `**x**`, `__x__`, `*x*` and `_x_` are all recognised |
 | Ctrl+D | Fill down (a single row copies the row above) |

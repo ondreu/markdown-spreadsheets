@@ -202,6 +202,14 @@ export class GridHost {
 	 * references is wrong in a way that looks right.
 	 */
 	private copiedBlock: { r1: number; c1: number; text: string } | null = null;
+
+	/**
+	 * The reference the last pick wrote into the formula, and the cell it started from. A cell
+	 * clicked while a formula is being typed is a reference, as in Excel: the grid is the picker.
+	 */
+	private pointing: { start: number; end: number; anchor: { row: number; col: number } } | null = null;
+	private pointDrag = false;
+	private pointEls: HTMLElement[] = [];
 	private readonly gesture = new GestureTracker();
 	private longPressTimer: number | null = null;
 	/**
@@ -1027,6 +1035,8 @@ export class GridHost {
 				})
 			: null;
 		this.editing = { row, col, input, original, mode: initial === undefined ? "edit" : "enter", suggest };
+		this.pointing = null;
+		this.pointDrag = false;
 		this.fillHandleEl.addClass("mds-hidden");
 		input.focus();
 		// Caret at the end, as F2 does in Excel; selecting everything made the next key wipe the cell.
@@ -1038,6 +1048,8 @@ export class GridHost {
 		const onBlur = () => this.commitEdit(0, 0, false);
 		const onInput = () => {
 			this.sizeEditor();
+			// Typing means the reference is finished; the next click starts a new one.
+			this.pointing = null;
 			suggest?.update();
 			this.ctx.callbacks.onEditorInput?.(input.value);
 		};
@@ -1076,11 +1088,76 @@ export class GridHost {
 		input.setCssProps({ "--mds-editor-h": `${Math.max(cell.clientHeight, input.scrollHeight)}px` });
 	}
 
+	/** True when the open editor holds a formula, so a click in the grid picks a reference. */
+	private pointMode(): boolean {
+		const editing = this.editing;
+		return editing !== null && editing.input.value.trimStart().startsWith("=");
+	}
+
+	/** How a range reads inside a formula. Row 1 is the header, as everywhere else. */
+	private referenceText(from: { row: number; col: number }, to: { row: number; col: number }): string {
+		const first = `${colName(from.col)}${from.row + 1}`;
+		const last = `${colName(to.col)}${to.row + 1}`;
+		return first === last ? first : `${first}:${last}`;
+	}
+
+	/**
+	 * Writes the reference of one cell — or, after a drag, of a range — into the formula at the
+	 * caret. A reference already there is replaced rather than doubled, the way Excel picks the
+	 * cell the caret just left, and the selection outline stays out of the way: the editor keeps
+	 * focus and the pick is shown as a dashed outline instead.
+	 */
+	private pickReference(row: number, col: number): void {
+		const editing = this.editing;
+		if (editing === null) return;
+		const input = editing.input;
+		const value = input.value;
+		const anchor = this.pointing?.anchor ?? { row, col };
+		const text = this.referenceText(anchor, { row, col });
+		let start = this.pointing?.start ?? input.selectionStart ?? value.length;
+		const end = this.pointing?.end ?? input.selectionEnd ?? start;
+		if (this.pointing === null) {
+			// A reference directly before the caret is what this click is changing.
+			const tail = /(\$?[A-Za-z]{1,3}\$?\d+)(:\$?[A-Za-z]{1,3}\$?\d+)?$/.exec(value.slice(0, start));
+			if (tail !== null) start -= tail[0].length;
+		}
+		input.value = value.slice(0, start) + text + value.slice(end);
+		const caret = start + text.length;
+		input.setSelectionRange(caret, caret);
+		this.pointing = { start, end: caret, anchor };
+		this.sizeEditor();
+		editing.suggest?.update();
+		this.ctx.callbacks.onEditorInput?.(input.value);
+		this.previewPoint({ r1: Math.min(anchor.row, row), c1: Math.min(anchor.col, col), r2: Math.max(anchor.row, row), c2: Math.max(anchor.col, col) });
+	}
+
+	private previewPoint(rect: Rect): void {
+		for (const el of this.pointEls) el.removeClass("is-point-preview");
+		this.pointEls = [];
+		const r = normalizeRect(rect);
+		for (let row = r.r1; row <= r.r2; row++) {
+			for (let col = r.c1; col <= r.c2; col++) {
+				const el = this.cellEl(row, col);
+				if (!el) continue;
+				el.addClass("is-point-preview");
+				this.pointEls.push(el);
+			}
+		}
+	}
+
+	private clearPointPreview(): void {
+		for (const el of this.pointEls) el.removeClass("is-point-preview");
+		this.pointEls = [];
+	}
+
 	private editorCleanup: (() => void) | null = null;
 
 	private releaseEditor(): void {
 		this.editorCleanup?.();
 		this.editorCleanup = null;
+		this.clearPointPreview();
+		this.pointDrag = false;
+		this.pointing = null;
 	}
 
 	private onEditorKey(evt: KeyboardEvent): void {
@@ -2222,6 +2299,17 @@ export class GridHost {
 		// A click inside the open editor belongs to the editor: it places the caret or starts a
 		// text selection. Committing here would make it impossible to click into a word.
 		if (this.editing !== null && target !== null && target.hasClass("mds-editor")) return;
+		if (this.pointMode()) {
+			const picked = this.hit(evt);
+			if (picked.kind === "cell") {
+				// The editor keeps focus: preventDefault on mousedown is what stops the blur, and
+				// the blur is what would commit the half-typed formula.
+				evt.preventDefault();
+				this.pointDrag = true;
+				this.pickReference(picked.row, picked.col);
+				return;
+			}
+		}
 		if (target !== null && target.hasClass("mds-fill-handle")) {
 			evt.preventDefault();
 			this.fillDrag = { source: this.selection.rect, last: this.selection.rect };
@@ -2341,6 +2429,11 @@ export class GridHost {
 	}
 
 	private onMouseMove(evt: MouseEvent): void {
+		if (this.pointDrag) {
+			const hit = this.hit(evt);
+			if (hit.kind === "cell") this.pickReference(hit.row, hit.col);
+			return;
+		}
 		if (this.headerDrag) {
 			const hit = this.hit(evt);
 			const drag = this.headerDrag;
@@ -2454,6 +2547,10 @@ export class GridHost {
 	}
 
 	private onMouseUp(_evt: MouseEvent): void {
+		// The drop ends the pick as well as the drag: the next click is a new reference, and the
+		// one the drag wrote is replaced by the caret test in `pickReference`.
+		this.pointDrag = false;
+		this.pointing = null;
 		this.dragging = null;
 		const drag = this.headerDrag;
 		if (drag) {

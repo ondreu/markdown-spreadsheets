@@ -755,6 +755,12 @@
 	outline-offset: -2px;
 }
 
+/* The cell a formula is pointing at, while the editor still has focus. */
+.mds-cell.is-point-preview {
+	outline: 1px dashed var(--mds-accent);
+	outline-offset: -2px;
+}
+
 .mds-cell.is-editing {
 	padding: 0;
 	overflow: visible;
