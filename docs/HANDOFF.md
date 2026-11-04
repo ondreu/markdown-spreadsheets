@@ -439,3 +439,15 @@ grid's own `setValueAt` came back as `42 %%=Table2!A2*2%%`, with the sibling tab
 
 Tests went from 390 to 403: twelve for the parser, the workbook pass and `shiftTableRefs`, one for
 the watcher's renumbering.
+
+## Round fourteen: the pivot panel
+
+`PivotModal` groups the open table by one column and aggregates another, live, writing nothing until
+**Insert as a table** is pressed (decision 32). `src/feature/pivot.ts` is pure and has nine tests; the
+panel's own look was checked at 1200 px and at 390 px and adjusted twice — first for the column
+suggestion (it opened on "group by Qty, sum Task"), then for the button row on a phone.
+
+Both screenshots are in `docs/images` (`pivot-desktop.png`, `pivot-mobile.png`). Making them required
+the harness's Obsidian shim to grow real `Modal` and `Setting` implementations; until then every
+dialog rendered as an empty box, which is why the merge dialog had never been seen.
+

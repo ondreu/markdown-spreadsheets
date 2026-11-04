@@ -512,3 +512,28 @@ which settles any realistic chain).
 - **The XLSX export carries the value only.** `Table2!B3` has no Excel equivalent: a sheet-qualified
   reference needs a sheet name the note does not have.
 
+## 32. The pivot is a panel, and the table it can write is a snapshot
+
+**Design:** §12 covers quick calculations and the status bar. Grouping rows was not in scope.
+
+**Built:** a pivot panel — group by a column, aggregate another, live preview — and one button that
+writes the result into the grid as a plain Markdown table.
+
+- **A view, not a generated table.** A pivot table that refreshes itself has to know which rows and
+  which settings produced it, and knowing that means metadata in the note. The panel therefore
+  recomputes from the open table every time it is shown, and the table it can write is a snapshot,
+  with the notice saying so.
+- **The panels picks sensible columns on open.** Grouping a table by its unique-per-row column, or
+  summing a column of names, produces a perfectly formatted nothing — the first version did exactly
+  that. Grouping now prefers text with a handful of repeated values; the value is the column with the
+  most numbers.
+- **Labels are labels.** `[[Carla]]`, `**Done**` and `%%=…%%` are stripped before grouping, so a
+  group is called "Carla" and not "[[Carla]]".
+- **Numbers line up.** Right-aligned, tabular figures, a rule above the total, a caption line that
+  says how many rows were grouped and how many were left out because they had no value or were not a
+  number. The total row appears only when there is more than one group.
+- **A skipped count is a fact, not a silent loss.** "7 not a number" is on screen next to the
+  preview, because a sum that quietly ignores cells is worse than one that says it did.
+- **Same shape on a phone.** The dialog is full width at 390 px, the table scrolls if it must, and
+  the three buttons wrap instead of hyphenating.
+

@@ -76,6 +76,12 @@ No table yet? **Insert a new table and open it as a spreadsheet** creates one at
   one click, **compute a column** from an expression such as `[Qty] * [Unit price]`.
 - **Column statistics**, **format numbers** as currency, percent or fixed decimals, and one-off
   results (`Calculate`) inserted as plain values.
+- **Pivot**: group the rows by one column and sum, average, count, min or max another. The panel reads
+  the table as it is now and updates as you change the settings; it writes nothing. *Insert as a
+  table* drops the result in as an ordinary Markdown table — a snapshot, and labelled as one, because
+  a pivot that regenerated itself would have to remember where it came from.
+
+![The pivot panel: grouped by Owner, summing Cost, with a total row](docs/images/pivot-desktop.png)
 
 ### Export, import, safety
 

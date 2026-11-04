@@ -25,6 +25,8 @@ import { toHtmlTable, toJson } from "../feature/exportExtra";
 import { computeColumn, recalculate, totalsRow } from "../feature/formula";
 import { readTableFile } from "../feature/tableFile";
 import { applyMerge, planMerge } from "../feature/merge";
+import { PivotModal } from "./PivotModal";
+import { suggestGroupColumn, suggestValueColumn } from "../feature/pivot";
 import { recalculateWorkbook } from "../feature/workbook";
 import {
 	columnStats,
@@ -1340,6 +1342,9 @@ export class GridView extends ItemView {
 						label: "Tools",
 						items: [
 							cluster("tools", [
+								action("pivot", "Pivot", "pivotTable", () => this.openPivot(), {
+									tooltip: "group the rows by a column and add up another",
+								}),
 								action("text-to-columns", "Split into columns", "split", () => this.openTextToColumns(), {
 									tooltip: `splits column ${colLabel} at a separator`,
 								}),
@@ -1901,6 +1906,26 @@ export class GridView extends ItemView {
 			onCopy: (text) => {
 				void navigator.clipboard.writeText(text);
 				new Notice(`Copied ${text}`);
+			},
+		}).open();
+	}
+
+	/** The pivot panel: a live preview, written into the note only when asked. */
+	private openPivot(): void {
+		const host = this.host;
+		if (!host) return;
+		const model = host.getModel();
+		const headers: string[] = [];
+		for (let c = 0; c < Math.max(model.usedRange.cols, 1); c++) headers.push(plainText(getRaw(model, 0, c)).trim());
+		new PivotModal(this.app, {
+			model,
+			headers,
+			suggestedGroupCol: suggestGroupColumn(model),
+			suggestedValueCol: suggestValueColumn(model, suggestGroupColumn(model)),
+			format: (value) => host.formatValueFor(value),
+			insert: (values) => host.pasteValues(values, "Insert pivot"),
+			copy: (text) => {
+				void navigator.clipboard.writeText(text).then(() => new Notice("Copied the pivot as a Markdown table."));
 			},
 		}).open();
 	}
