@@ -100,9 +100,175 @@ export class ItemView extends Component {
 	registerDomEvent(el: HTMLElement, type: string, cb: any) { el.addEventListener(type, cb); }
 	async setState() {}
 }
-export class Modal { app: any; contentEl = document.createElement("div"); titleEl = document.createElement("div"); modalEl = document.createElement("div"); constructor(app: any) { this.app = app; } open() {} close() {} }
-export class FuzzySuggestModal<T> extends Modal { setPlaceholder() {} }
-export class Setting { constructor(_el: HTMLElement) {} setName() { return this; } setDesc() { return this; } setHeading() { return this; } addButton() { return this; } addText() { return this; } addToggle() { return this; } addDropdown() { return this; } addSlider() { return this; } }
+// The dialogs are part of the plugin, so the harness renders them for real: `open()` builds the
+// same container Obsidian does, and `Setting` draws its rows, controls included.
+export class Modal {
+	app: any;
+	contentEl = document.createElement("div");
+	titleEl = document.createElement("div");
+	modalEl = document.createElement("div");
+	private container: HTMLElement | null = null;
+
+	constructor(app: any) {
+		this.app = app;
+		this.titleEl.className = "modal-title";
+		this.contentEl.className = "modal-content";
+		this.modalEl.className = "modal";
+	}
+
+	open(): void {
+		this.modalEl.append(this.titleEl, this.contentEl);
+		const container = document.createElement("div");
+		container.className = "modal-container";
+		container.append(this.modalEl);
+		document.body.append(container);
+		this.container = container;
+		(this as unknown as { onOpen?: () => void }).onOpen?.();
+	}
+
+	close(): void {
+		(this as unknown as { onClose?: () => void }).onClose?.();
+		this.container?.remove();
+		this.container = null;
+	}
+}
+export class FuzzySuggestModal<T> extends Modal {
+	setPlaceholder() {
+		return this;
+	}
+}
+
+type Control = Record<string, unknown>;
+
+export class Setting {
+	private readonly row = document.createElement("div");
+	private readonly info = document.createElement("div");
+	private readonly nameEl = document.createElement("div");
+	private readonly descEl = document.createElement("div");
+	private readonly control = document.createElement("div");
+
+	constructor(el: HTMLElement) {
+		this.row.className = "setting-item";
+		this.info.className = "setting-item-info";
+		this.nameEl.className = "setting-item-name";
+		this.descEl.className = "setting-item-description";
+		this.control.className = "setting-item-control";
+		this.info.append(this.nameEl, this.descEl);
+		this.row.append(this.info, this.control);
+		el.append(this.row);
+	}
+
+	setName(text: string): this {
+		this.nameEl.textContent = text;
+		return this;
+	}
+
+	setDesc(text: string): this {
+		this.descEl.textContent = text;
+		return this;
+	}
+
+	setHeading(): this {
+		this.row.className = "setting-item setting-item-heading";
+		return this;
+	}
+
+	addButton(cb: (c: Control) => unknown): this {
+		const el = document.createElement("button");
+		el.className = "mod-cta";
+		const api: Control = {
+			buttonEl: el,
+			setButtonText: (t: string) => (el.textContent = t) && api,
+			setCta: () => api,
+			setWarning: () => api,
+			setDisabled: (d: boolean) => (el.disabled = d) && api,
+			onClick: (fn: () => void) => {
+				el.addEventListener("click", fn);
+				return api;
+			},
+		};
+		cb(api);
+		this.control.append(el);
+		return this;
+	}
+
+	addDropdown(cb: (c: Control) => unknown): this {
+		const el = document.createElement("select");
+		const api: Control = {
+			selectEl: el,
+			addOption: (value: string, label: string) => {
+				const option = document.createElement("option");
+				option.value = value;
+				option.textContent = label;
+				el.append(option);
+				return api;
+			},
+			addOptions: () => api,
+			setValue: (value: string) => {
+				el.value = value;
+				return api;
+			},
+			onChange: (fn: (value: string) => void) => {
+				el.addEventListener("change", () => fn(el.value));
+				return api;
+			},
+		};
+		cb(api);
+		this.control.append(el);
+		return this;
+	}
+
+	addToggle(cb: (c: Control) => unknown): this {
+		const el = document.createElement("input");
+		el.type = "checkbox";
+		const api: Control = {
+			toggleEl: el,
+			setValue: (v: boolean) => {
+				el.checked = v;
+				return api;
+			},
+			onChange: (fn: (value: boolean) => void) => {
+				el.addEventListener("change", () => fn(el.checked));
+				return api;
+			},
+		};
+		cb(api);
+		this.control.append(el);
+		return this;
+	}
+
+	addText(cb: (c: Control) => unknown): this {
+		const el = document.createElement("input");
+		el.type = "text";
+		const api: Control = {
+			inputEl: el,
+			setPlaceholder: (p: string) => {
+				el.placeholder = p;
+				return api;
+			},
+			setValue: (v: string) => {
+				el.value = v;
+				return api;
+			},
+			onChange: (fn: (value: string) => void) => {
+				el.addEventListener("input", () => fn(el.value));
+				return api;
+			},
+		};
+		cb(api);
+		this.control.append(el);
+		return this;
+	}
+
+	addSlider(cb: (c: Control) => unknown): this {
+		const el = document.createElement("input");
+		el.type = "range";
+		const api: Control = { sliderEl: el, setValue: () => api, onChange: () => api };
+		cb(api);
+		this.control.append(el);
+		return this;
+	}
+}
 export class PluginSettingTab {}
 export class Plugin {}
 export class MarkdownView {}

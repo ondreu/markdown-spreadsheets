@@ -1,4 +1,4 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 body { margin: 0; font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--text-normal); background: var(--background-primary);
  --font-ui-small: 13px; --font-ui-smaller: 12px; --font-ui-medium: 15px; --font-semibold: 600; --font-normal: 400; --font-medium: 500;
@@ -17,5 +17,17 @@ select.dropdown, input { font: inherit; color: var(--text-normal); background: v
 body.is-mobile #view { width: 390px; height: 760px; border: none; }
 body.is-mobile { --font-ui-small: 15px; --font-ui-smaller: 12px; }
 .mds-formula-input { height: 26px; padding: 0 8px; }
+/* The little that Obsidian's own modal chrome does, enough to judge a dialog's layout. */
+.modal-container { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.35); }
+.modal { width: min(640px, 92vw); max-height: 88vh; overflow-y: auto; padding: 18px 20px 8px; border-radius: var(--radius-m); background: var(--background-primary); box-shadow: var(--shadow-l); }
+.modal-title { font-size: 1.15rem; font-weight: var(--font-semibold); margin-bottom: 8px; }
+.modal-content p { margin: 0 0 10px; color: var(--text-muted); font-size: var(--font-ui-small); }
+.setting-item { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 0; border-top: 1px solid var(--background-modifier-border); }
+.setting-item:first-child { border-top: none; }
+.setting-item-name { font-size: var(--font-ui-small); }
+.setting-item-description { color: var(--text-faint); font-size: var(--font-ui-smaller); }
+.setting-item-control { display: flex; gap: 8px; align-items: center; }
+.setting-item-control button { height: 28px; padding: 0 12px; }
+.modal-note { color: var(--text-muted); }
 </style>
 <link rel="stylesheet" href="../../styles.css"></head><body class="theme-light"><div id="view"></div><script src="icons.js"></script><script src="bundle.js"></script></body></html>

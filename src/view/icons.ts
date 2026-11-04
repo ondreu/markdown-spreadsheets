@@ -97,6 +97,7 @@ export const ICONS = {
 	json: ["file-json", "braces", "file-code"],
 	html: ["code-xml", "code"],
 	importFile: ["file-input", "import", "download"],
+	pivotTable: ["table-2", "table", "layout-grid"],
 	mergeFile: ["git-merge", "merge", "combine"],
 	switchTable: ["table-properties", "table", "list"],
 	pasteSpecial: ["clipboard-type", "clipboard-paste", "clipboard"],

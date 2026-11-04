@@ -1314,6 +1314,92 @@
 	background-color: var(--background-primary);
 }
 
+/* --------------------------------------------------------------- pivot panel */
+
+.mds-pivot-modal {
+	width: min(620px, 92vw);
+}
+
+.mds-pivot {
+	margin: 6px 0 14px;
+}
+
+.mds-pivot-scroll {
+	overflow-x: auto;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+}
+
+.mds-pivot-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: var(--font-ui-small);
+}
+
+.mds-pivot-table th,
+.mds-pivot-table td {
+	padding: 6px 12px;
+	text-align: left;
+	white-space: nowrap;
+}
+
+.mds-pivot-table thead th {
+	position: sticky;
+	top: 0;
+	background-color: var(--background-secondary);
+	color: var(--text-muted);
+	font-weight: var(--font-medium);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.mds-pivot-table tbody th {
+	font-weight: var(--font-normal);
+}
+
+.mds-pivot-table tbody tr:nth-child(even) {
+	background-color: var(--background-primary-alt);
+}
+
+/* Numbers line up: tabular figures, right aligned, and a hair of tracking. */
+.mds-pivot-table .is-number {
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+	font-feature-settings: "tnum" 1;
+}
+
+.mds-pivot-table tfoot th,
+.mds-pivot-table tfoot td {
+	border-top: 1px solid var(--background-modifier-border);
+	font-weight: var(--font-semibold);
+	background-color: var(--background-secondary);
+}
+
+.mds-pivot-empty {
+	padding: 18px 12px;
+	border: 1px dashed var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+
+/* A phone: three buttons do not fit on one line, so they wrap instead of hyphenating. */
+@media (max-width: 480px) {
+	.mds-pivot-modal .setting-item-control {
+		flex-wrap: wrap;
+		justify-content: flex-start;
+	}
+
+	.mds-pivot-modal .setting-item-control button {
+		white-space: nowrap;
+	}
+}
+
+.mds-pivot-caption {
+	margin: 0 0 6px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
 /* The merge dialog's consequence line: what will happen, in numbers. */
 .mds-modal-summary {
 	font-size: var(--font-ui-small);
