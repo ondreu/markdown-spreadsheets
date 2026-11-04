@@ -46,5 +46,10 @@ const plugin: any = { loadData: async () => store.data, saveData: async (d: unkn
 	(window as any).view = view;
 	(window as any).host = (view as any).host;
 	(window as any).noteText = () => text;
+	// The screenshots only ever need one note; the sheet-tab check needs a second table.
+	(window as any).setNote = (next: string) => {
+		text = next;
+	};
+	(window as any).reloadTable = () => (view as any).openTable(file.path);
 	(window as any).ready = true;
 })();

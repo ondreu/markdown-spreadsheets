@@ -41,6 +41,9 @@ No table yet? **Insert a new table and open it as a spreadsheet** creates one at
   focus, so the formula carries on where it left off.
 - **Rows and columns**: insert, duplicate, delete, move with the buttons or by dragging the row number
   or column letter, hide columns in the grid only.
+- **A note with several tables gets sheet tabs** under the grid, labelled by each table's own first
+  headers. Clicking one switches the grid to that table; nothing about the note changes, and a
+  single-table note shows no strip at all.
 - **Cells show what the note shows** — links, emphasis, code and images are rendered; editing always
   shows the Markdown. Ctrl+click follows a link, Ctrl+hover previews it.
 - A long cell opens in an editor that grows over its neighbours, so it can be read whole.
