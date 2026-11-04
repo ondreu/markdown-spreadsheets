@@ -302,6 +302,9 @@ export class GridView extends ItemView {
 	private async adoptRegion(region: TableRegion, failures: number): Promise<void> {
 		if (!this.file) return;
 		this.anchor = anchorFromRegion(this.file.path, region);
+		// Before anything is calculated: a `Table1!B3` in this table would otherwise read an empty
+		// scope on the first pass and write zeros that nothing later fixes.
+		await this.loadSiblings();
 		this.layoutKey = anchorKey(this.anchor);
 		this.expectedHash = regionHash(region.text);
 
@@ -332,7 +335,6 @@ export class GridView extends ItemView {
 		this.refreshRibbon();
 		this.refreshStatus();
 		void this.refreshSheets();
-		void this.loadSiblings();
 
 		const ragged = raggedRows(region.text);
 		if (ragged.length > 0) {
