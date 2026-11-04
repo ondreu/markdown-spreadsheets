@@ -5,7 +5,7 @@ import { fnv1a } from "../model/hash";
 import { formatNumber, type NumberParseOptions } from "../model/numbers";
 import type { MarkdownSpreadsheetsSettings } from "../settings";
 import type { TableLayout } from "../store/Sidecar";
-import { fromMarkdownTable, fromTsv, looksLikeGrid, toTsv } from "../feature/clipboard";
+import { fromMarkdownTable, fromTsv, looksLikeGrid, shiftFormulas, toTsv } from "../feature/clipboard";
 import {
 	applyInlineFormat,
 	clearRange,
@@ -195,6 +195,13 @@ export class GridHost {
 	private headerDrag: { kind: "col" | "row"; from: number; to: number; moved: boolean } | null = null;
 	private filterPopover: FilterPopover | null = null;
 	private changedEls: HTMLElement[] = [];
+
+	/**
+	 * Where the last copy came from. The clipboard itself only carries text, so without this a
+	 * pasted formula cannot know how far it moved — and a formula that does not move its relative
+	 * references is wrong in a way that looks right.
+	 */
+	private copiedBlock: { r1: number; c1: number; text: string } | null = null;
 	private readonly gesture = new GestureTracker();
 	private longPressTimer: number | null = null;
 	/**
@@ -1836,7 +1843,10 @@ export class GridHost {
 	/* -------------------------------------------------------------- clipboard */
 
 	copySelection(): string {
-		return toTsv(readRange(this.model, this.effectiveRect()));
+		const rect = this.effectiveRect();
+		const text = toTsv(readRange(this.model, rect));
+		this.copiedBlock = { r1: rect.r1, c1: rect.c1, text };
+		return text;
 	}
 
 	cutSelection(): string {
@@ -1869,7 +1879,11 @@ export class GridHost {
 			this.mutate("Paste", () => writeRange(this.model, rect.r1, rect.c1, fill));
 			return;
 		}
-		const flat = values.map((line) => line.map((v) => v.replace(/\r?\n/g, " ")));
+		const pasted = values.map((line) => line.map((v) => v.replace(/\r?\n/g, " ")));
+		// A block copied inside the grid moves its formulas with it; anything from outside keeps
+		// its references, because there is no telling where it came from.
+		const own = this.copiedBlock;
+		const flat = own !== null && own.text === text ? shiftFormulas(pasted, row - own.r1, col - own.c1) : pasted;
 		const height = flat.length;
 		const width = flat[0].length;
 		if (!this.ensureExtent(row + height - 1, col + width - 1)) return;

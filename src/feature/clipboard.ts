@@ -1,4 +1,5 @@
 import { isDelimiterRow, parseTable, splitCells } from "../model/parse";
+import { buildFormulaCell, parseFormulaCell, translateFormula } from "./formula";
 
 /**
  * TSV is the lingua franca of the system clipboard: Excel, LibreOffice and Google Sheets all
@@ -10,6 +11,22 @@ function encodeCell(raw: string): string {
 	const flat = raw.replace(/\r?\n/g, " ");
 	if (/[\t"\n\r]/.test(flat)) return `"${flat.split('"').join('""')}"`;
 	return flat;
+}
+
+/**
+ * Moves the formulas of a copied block with it: a cell copied two rows down reads two rows down,
+ * as in Excel. Anything that is not a formula is left exactly as it was.
+ */
+export function shiftFormulas(values: string[][], dRow: number, dCol: number): string[][] {
+	if (dRow === 0 && dCol === 0) return values;
+	return values.map((line) =>
+		line.map((raw) => {
+			const formula = parseFormulaCell(raw);
+			if (formula === null) return raw;
+			const expr = translateFormula(formula.expr, dRow, dCol);
+			return expr === null ? raw : buildFormulaCell(formula.display, expr);
+		}),
+	);
 }
 
 export function toTsv(values: string[][]): string {
