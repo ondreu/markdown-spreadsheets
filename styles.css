@@ -1303,7 +1303,9 @@
 }
 
 .mds-suggest-item.is-selected {
-	background-color: var(--background-modifier-hover);
+	/* The accent tint is what Obsidian's own suggestion list uses for the row Enter will take;
+	 * the plain hover colour is too faint to read as a selection on a light theme. */
+	background-color: var(--background-modifier-active-hover, var(--background-modifier-hover));
 }
 
 .mds-suggest-label {
@@ -1319,6 +1321,53 @@
 	text-overflow: ellipsis;
 	color: var(--text-faint);
 	font-size: var(--font-ui-smaller);
+}
+
+/* A function suggestion is two lines: the signature, and what the function does. */
+.mds-suggest-item.is-function {
+	flex-direction: column;
+	align-items: stretch;
+	gap: 2px;
+	padding: 6px 8px;
+}
+
+.mds-suggest-item.is-function + .mds-suggest-item.is-function {
+	margin-top: 1px;
+}
+
+.mds-suggest-head {
+	display: flex;
+	align-items: baseline;
+	gap: 0;
+	min-width: 0;
+}
+
+.mds-suggest-name {
+	font-family: var(--font-monospace);
+	font-weight: var(--font-semibold);
+}
+
+/* The letters that matched, so a longer list still explains itself at a glance. */
+.mds-suggest-name .is-match {
+	color: var(--text-accent);
+}
+
+.mds-suggest-signature {
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.mds-suggest-summary {
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	font-size: var(--font-ui-smaller);
+	/* `--text-faint` disappears on a light theme at this size; muted still reads as secondary. */
+	color: var(--text-muted);
 }
 
 /* ------------------------------------------------- sort and filter drop-down */

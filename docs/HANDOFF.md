@@ -380,3 +380,15 @@ Tests went from 352 to 367. New coverage: branch laziness, text comparison witho
 results surviving the cell format, wildcards and comparison criteria, multi-criteria ranges,
 `TRUE`/`FALSE` as constants, export to Excel syntax, and that a reference inside a string literal
 is not shifted when rows move.
+
+## Round nine: pointing at cells, and the function list
+
+Writing a formula now feels like Excel: a click in the grid writes a reference at the caret and a
+drag writes a range (decision 26), and typing a name offers the matching functions with their
+arguments and a one-line description, in the popup the editor already had (decision 27).
+
+Both are view work, so both were driven in headless Chromium against the real `GridView`:
+six checks for pointing (insert, keep focus, drag into a range, replace, commit, the note holding
+`%%=SUM(D3)%%`) and ten for the list (order, signature and summary, the tinted prefix, Enter and the
+caret, computing the accepted formula, and no list inside a string or outside a formula). The
+screenshot harness's API shim gained `appendText`, which Obsidian has and it did not.

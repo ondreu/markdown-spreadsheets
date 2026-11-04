@@ -3,6 +3,7 @@ import { createModel, getRaw, recomputeUsedRange, setRaw, type GridModel } from 
 import { parseTable } from "../src/model/parse";
 import { serializeTable } from "../src/model/serialize";
 import {
+	FORMULA_FUNCTIONS,
 	adjustFormulaRefs,
 	buildFormulaCell,
 	computeColumn,
@@ -563,5 +564,27 @@ describe("translateFormula", () => {
 		// A half-typed formula has no meaning yet; its references still move.
 		expect(translateFormula("A2+", 1, 0)).toBe("A3+");
 		expect(translateFormula('A2+"x', 1, 0)).toBeNull();
+	});
+});
+
+describe("function suggestions", () => {
+	it("offers only names the parser knows", () => {
+		const m = grid([["A"], ["1"]]);
+		for (const doc of FORMULA_FUNCTIONS) {
+			// Arity may be wrong for a bare call; an unknown name is the failure this guards.
+			expect(evalAt(m, 3, 0, `${doc.name}()`), doc.name).not.toBe("#NAME?");
+		}
+	});
+
+	it("has a signature and a description for every entry", () => {
+		for (const doc of FORMULA_FUNCTIONS) {
+			expect(doc.summary.trim(), doc.name).not.toBe("");
+			// A constant takes no arguments; everything else has at least one.
+			expect(doc.signature === "" || /^[a-zA-Z]/.test(doc.signature), doc.name).toBe(true);
+		}
+	});
+
+	it("leads with the functions a table actually uses", () => {
+		expect(FORMULA_FUNCTIONS.slice(0, 3).map((f) => f.name)).toEqual(["SUM", "IF", "AVERAGE"]);
 	});
 });

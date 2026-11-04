@@ -110,6 +110,9 @@ References are spreadsheet style — `B2`, `B2:B9` — where row 1 is the Markdo
 - `SUMIF`, `SUMIFS`, `COUNTIF`, `COUNTIFS`, `AVERAGEIF`, `AVERAGEIFS`, whose criteria take a
   comparison (`">100"`), text, or wildcards (`"*desk*"`, `"?airs"`).
 
+Start typing a function name and the editor lists the ones that match, with their arguments and a
+one-line description; Enter writes the name and its opening parenthesis and leaves the caret inside.
+
 A formula can produce text, so `=IF(C2>2, "many", "few")` or `="Total: " & SUM(C2:C9)` is fine;
 one line, as the table requires. Errors show as `#REF!`, `#DIV/0!`, `#CYCLE!`, `#VALUE!`,
 `#NUM!` or `#NAME?`, and the grid says why under the cell. A cell starting with `==` stays an

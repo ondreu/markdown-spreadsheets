@@ -383,3 +383,25 @@ writes `B2:C4`.
 - **Not on touch.** There is no hover and no mousedown; a tap that picked a cell would fight the
   tap that edits one.
 
+## 27. The function list lives in the editor's suggestion popup
+
+**Design:** §9 has one suggestion popup for `[[` links, `#` tags and the values already used in a
+column, and says nothing about functions.
+
+**Built:** a fourth source in the same popup, offered only inside a formula.
+
+- **It is the same popup, not a second one.** Two keyboard handlers competing for Enter is the bug
+  the popup exists to avoid (`CellSuggest` asks first, always). A second popup would reintroduce it.
+- **Only where a name can start.** The caret must be at the start of a word, inside a formula —
+  `=` without the doubles, since `==` is Obsidian's highlight — and outside a string literal, where
+  a word is text and not a call.
+- **The list is documentation, not only completion.** Each row is the name, its arguments and one
+  line about what it does, because the formula language now has twenty-three functions and no one
+  remembers the argument order of `AVERAGEIFS`. Two lines, monospace signature, muted description.
+- **`FORMULA_FUNCTIONS` is checked against `FUNCTIONS` by a test.** A name that the parser rejects
+  must never be offered, which is the one way this list can go quietly wrong.
+- **Picking writes `NAME(` and puts the caret inside**, so the next keystroke is the first argument;
+  a constant such as `TRUE` gets `TRUE()` and the caret between the parentheses.
+- **The typed letters are tinted, the rest is not.** A list that filters on two letters and does not
+  show which two is a guessing game once the names are long.
+
