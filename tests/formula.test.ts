@@ -400,3 +400,144 @@ describe("recalculate keeps a display that already has the right value", () => {
 		expect(getRaw(m, 2, 0)).toBe("1 200 %%=SUM(A2:A2)%%");
 	});
 });
+
+describe("conditions", () => {
+	const table = (): GridModel =>
+		grid([
+			["Item", "Kind", "Qty", "Price"],
+			["Movers", "Moving", "2", "1200"],
+			["Desks", "Furniture", "3", "6980"],
+			["Chairs", "Furniture", "5", "640"],
+			["Lamps", "Light", "4", "890"],
+		]);
+	const at = (expr: string, row = 6, col = 0): string => evalAt(table(), row, col, expr);
+
+	it("takes the branch it should, and only that one", () => {
+		expect(at('IF(C2>2,"many","few")')).toBe("few");
+		expect(at('IF(C3>=3,"many","few")')).toBe("many");
+		expect(at("IF(TRUE,5,1/0)")).toBe("5");
+		expect(at("IF(FALSE,1/0,5)")).toBe("5");
+		// Excel shows FALSE for a missing third argument; an empty cell reads better in a note.
+		expect(at("IF(FALSE,5)")).toBe("");
+	});
+
+	it("compares text without case and numbers by value", () => {
+		expect(at('IF(B2="moving","same","other")')).toBe("same");
+		expect(at('IF(B2<>"Moving","other","same")')).toBe("same");
+		expect(at("IF(C2=2,10,20)")).toBe("10");
+		expect(at('IF(D3>1000,"dear","cheap")')).toBe("dear");
+		// Text sorts after numbers, as in Excel.
+		expect(at('IF("abc">5,"text wins","number wins")')).toBe("text wins");
+	});
+
+	it("joins text with &", () => {
+		expect(at('A2 & " (" & C2 & " pcs)"')).toBe("Movers (2 pcs)");
+		expect(at('IF(C2>1,"qty " & C2,"none")')).toBe("qty 2");
+	});
+
+	it("catches an error with IFERROR", () => {
+		expect(at('IFERROR(1/0,"n/a")')).toBe("n/a");
+		expect(at("IFERROR(C2*2,0)")).toBe("4");
+		expect(at('IFERROR(SUM(D2:D5),"n/a")')).toBe("9710");
+	});
+
+	it("combines conditions with AND, OR and NOT", () => {
+		expect(at('IF(AND(C2>1,D2>1000),"both","no")')).toBe("both");
+		expect(at('IF(OR(C2>9,D2>1000),"either","no")')).toBe("either");
+		expect(at('IF(NOT(B2="Furniture"),"not furniture","furniture")')).toBe("not furniture");
+		expect(at("AND(TRUE,TRUE)")).toBe("TRUE");
+		expect(at("OR(FALSE,FALSE)")).toBe("FALSE");
+	});
+
+	it("writes a text result as a plain cell that still reads without the plugin", () => {
+		const m = table();
+		setRaw(m, 6, 0, buildFormulaCell("0", 'IF(C2>2,"many","few")'));
+		recalculate(m, plain);
+		expect(getRaw(m, 6, 0)).toBe('few %%=IF(C2>2,"many","few")%%');
+		expect(stripFormula(getRaw(m, 6, 0))).toBe("few");
+		// A line break inside a result would break the row.
+		expect(at('"a\nb"')).toBe("a b");
+	});
+});
+
+describe("conditional aggregates", () => {
+	const table = (): GridModel =>
+		grid([
+			["Item", "Kind", "Qty", "Price"],
+			["Movers", "Moving", "2", "1200"],
+			["Desks", "Furniture", "3", "6980"],
+			["Chairs", "Furniture", "5", "640"],
+			["Lamps", "Light", "4", "890"],
+		]);
+	const at = (expr: string, row = 6, col = 0): string => evalAt(table(), row, col, expr);
+
+	it("sums by a text criterion", () => {
+		expect(at('SUMIF(B2:B5,"Furniture",C2:C5)')).toBe("8");
+		expect(at('SUMIF(B2:B5,"furniture",C2:C5)')).toBe("8");
+		expect(at('SUMIF(B2:B5,"Nope",C2:C5)')).toBe("0");
+	});
+
+	it("sums by a comparison in the criterion", () => {
+		expect(at('SUMIF(C2:C5,">2")')).toBe("12");
+		expect(at('SUMIF(C2:C5,"<=2",D2:D5)')).toBe("1200");
+		expect(at('SUMIF(D2:D5,"<>640")')).toBe("9070");
+	});
+
+	it("counts, including wildcards and empty cells", () => {
+		expect(at('COUNTIF(B2:B5,"Furniture")')).toBe("2");
+		expect(at('COUNTIF(A2:A5,"*esk*")')).toBe("1");
+		expect(at('COUNTIF(A2:A5,"*airs")')).toBe("1");
+		expect(at('COUNTIF(B2:B5,"")')).toBe("0");
+		expect(at('COUNTIF(B2:B5,"<>")')).toBe("4");
+	});
+
+	it("averages the matches", () => {
+		expect(at('AVERAGEIF(B2:B5,"Furniture",C2:C5)')).toBe("4");
+		expect(at('AVERAGEIF(B2:B5,"Nope",C2:C5)')).toBe("#DIV/0!");
+	});
+
+	it("handles several criteria", () => {
+		expect(at('SUMIFS(C2:C5,B2:B5,"Furniture",C2:C5,">3")')).toBe("5");
+		expect(at('COUNTIFS(B2:B5,"Furniture",D2:D5,"<1000")')).toBe("1");
+		expect(at('AVERAGEIFS(D2:D5,B2:B5,"Furniture")')).toBe("3810");
+		// Too few arguments for one value range plus one pair.
+		expect(at('SUMIFS(C2:C5,B2:B5)')).toBe("#ERROR!");
+	});
+});
+
+describe("new functions in the other paths", () => {
+	it("exports to Excel syntax with its own separators", () => {
+		expect(toExcelFormula('IF(A2>3,"yes","no")')).toBe('IF(A2>3,"yes","no")');
+		expect(toExcelFormula("AVG(A2:A5)")).toBe("AVERAGE(A2:A5)");
+		expect(toExcelFormula("SUM(A2:A3;B2:B3)")).toBe("SUM(A2:A3,B2:B3)");
+	});
+
+	it("leaves a reference inside a string alone when rows move", () => {
+		const m = grid([["A", "B"], ["1", ""]]);
+		setRaw(m, 1, 1, buildFormulaCell("", '"B2" & B2'));
+		adjustFormulaRefs(m, { kind: "insertRows", at: 1, count: 2 });
+		// The expression moves; the cell itself is moved by the row operation, not here.
+		expect(parseFormulaCell(getRaw(m, 1, 1))?.expr).toBe('"B2" & B4');
+	});
+
+	it("computes a column that returns text", () => {
+		const m = grid([
+			["Item", "Qty"],
+			["Movers", "2"],
+			["Desks", "3"],
+		]);
+		const result = computeColumn(m, 2, 'A & " x" & B', plain);
+		expect(result.written).toBe(2);
+		expect(getRaw(m, 1, 2)).toBe("Movers x2");
+	});
+
+	it("reports the reason an error happened", () => {
+		const m = grid([["A", "B"], ["text", ""], ["", ""]]);
+		setRaw(m, 1, 1, buildFormulaCell("0", 'IF(A2="x",1,2)'));
+		setRaw(m, 2, 1, buildFormulaCell("0", "A2+1"));
+		const result = recalculate(m, plain);
+		expect(result.errors).toHaveLength(1);
+		expect(result.errors[0]).toMatchObject({ row: 2, col: 1, code: "#VALUE!" });
+		expect(result.errors[0].message).toContain("number");
+	});
+});

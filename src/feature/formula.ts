@@ -142,7 +142,7 @@ function wrapCode(s: string): string {
 
 /* --------------------------------------------------------------- tokenizer */
 
-type TokenType = "num" | "ref" | "name" | "func" | "bracket" | "error" | "op" | "lparen" | "rparen" | "sep" | "colon";
+type TokenType = "num" | "str" | "ref" | "name" | "func" | "bracket" | "error" | "op" | "lparen" | "rparen" | "sep" | "colon";
 
 interface Token {
 	type: TokenType;
@@ -206,7 +206,31 @@ function tokenize(src: string): Token[] {
 			push("error", err);
 			continue;
 		}
-		if ("+-*/^".includes(ch)) push("op", ch);
+		// Excel's only string literal. A doubled quote inside stands for one quote.
+		if (ch === '"') {
+			let j = i + 1;
+			for (;;) {
+				if (j >= src.length) throw new FormulaError("#ERROR!", "Missing closing quote");
+				if (src[j] !== '"') {
+					j++;
+					continue;
+				}
+				if (src[j + 1] === '"') {
+					j += 2;
+					continue;
+				}
+				break;
+			}
+			out.push({ type: "str", text: src.slice(i, j + 1), start, end: j + 1 });
+			i = j + 1;
+			continue;
+		}
+		if (ch === "<" || ch === ">" || ch === "=") {
+			const two = src.slice(i, i + 2);
+			push("op", two === "<=" || two === ">=" || two === "<>" ? two : ch);
+			continue;
+		}
+		if ("+-*/^&".includes(ch)) push("op", ch);
 		else if (ch === "(") push("lparen", ch);
 		else if (ch === ")") push("rparen", ch);
 		// `;` is the argument separator in comma-decimal locales of Excel.
@@ -242,10 +266,14 @@ function formatRef(ref: RefParts): string {
 
 /* ------------------------------------------------------------------ parser */
 
-type BinaryOp = "+" | "-" | "*" | "/" | "^";
+type ArithmeticOp = "+" | "-" | "*" | "/" | "^";
+type ComparisonOp = "=" | "<>" | "<" | "<=" | ">" | ">=";
+/** `&` concatenates, as in Excel; everything else is an operator or a comparison. */
+type BinaryOp = ArithmeticOp | ComparisonOp | "&";
 
 type Node =
 	| { kind: "num"; value: number }
+	| { kind: "str"; value: string }
 	| { kind: "ref"; row: number; col: number }
 	| { kind: "range"; r1: number; c1: number; r2: number; c2: number }
 	/** A column of the current row — only in `computeColumn` expressions. */
@@ -255,7 +283,30 @@ type Node =
 	| { kind: "bin"; op: BinaryOp; left: Node; right: Node }
 	| { kind: "call"; fn: FunctionName; args: Node[] };
 
-type FunctionName = "SUM" | "AVERAGE" | "MIN" | "MAX" | "COUNT" | "COUNTA" | "MEDIAN" | "PRODUCT" | "ROUND" | "ABS";
+type FunctionName =
+	| "SUM"
+	| "AVERAGE"
+	| "MIN"
+	| "MAX"
+	| "COUNT"
+	| "COUNTA"
+	| "MEDIAN"
+	| "PRODUCT"
+	| "ROUND"
+	| "ABS"
+	| "IF"
+	| "IFERROR"
+	| "AND"
+	| "OR"
+	| "NOT"
+	| "TRUE"
+	| "FALSE"
+	| "SUMIF"
+	| "SUMIFS"
+	| "COUNTIF"
+	| "COUNTIFS"
+	| "AVERAGEIF"
+	| "AVERAGEIFS";
 
 /** Canonical name and arity. AVG is accepted as an alias and exported to Excel as AVERAGE. */
 const FUNCTIONS: Record<string, { fn: FunctionName; min: number; max: number }> = {
@@ -270,6 +321,19 @@ const FUNCTIONS: Record<string, { fn: FunctionName; min: number; max: number }> 
 	PRODUCT: { fn: "PRODUCT", min: 1, max: 255 },
 	ROUND: { fn: "ROUND", min: 2, max: 2 },
 	ABS: { fn: "ABS", min: 1, max: 1 },
+	IF: { fn: "IF", min: 2, max: 3 },
+	IFERROR: { fn: "IFERROR", min: 2, max: 2 },
+	AND: { fn: "AND", min: 1, max: 255 },
+	OR: { fn: "OR", min: 1, max: 255 },
+	NOT: { fn: "NOT", min: 1, max: 1 },
+	TRUE: { fn: "TRUE", min: 0, max: 0 },
+	FALSE: { fn: "FALSE", min: 0, max: 0 },
+	SUMIF: { fn: "SUMIF", min: 2, max: 3 },
+	SUMIFS: { fn: "SUMIFS", min: 3, max: 255 },
+	COUNTIF: { fn: "COUNTIF", min: 2, max: 2 },
+	COUNTIFS: { fn: "COUNTIFS", min: 2, max: 255 },
+	AVERAGEIF: { fn: "AVERAGEIF", min: 2, max: 3 },
+	AVERAGEIFS: { fn: "AVERAGEIFS", min: 3, max: 255 },
 };
 
 const ERROR_CODES: readonly FormulaErrorCode[] = ["#VALUE!", "#REF!", "#DIV/0!", "#CYCLE!", "#ERROR!", "#NUM!", "#NAME?"];
@@ -292,7 +356,7 @@ class Parser {
 
 	parse(): Node {
 		if (this.tokens.length === 0) throw new FormulaError("#ERROR!", "The formula is empty");
-		const node = this.additive();
+		const node = this.comparison();
 		const extra = this.tokens[this.pos];
 		if (extra !== undefined) throw new FormulaError("#ERROR!", `Unexpected "${extra.text}"`);
 		return node;
@@ -312,6 +376,25 @@ class Parser {
 	private isOp(...ops: string[]): boolean {
 		const tok = this.peek();
 		return tok !== undefined && tok.type === "op" && ops.includes(tok.text);
+	}
+
+	/** Comparison binds loosest, so `A1+1>2` is `(A1+1)>2`, as in Excel. */
+	private comparison(): Node {
+		let left = this.concat();
+		while (this.isOp("=", "<>", "<", "<=", ">", ">=")) {
+			const op = this.next().text as ComparisonOp;
+			left = { kind: "bin", op, left, right: this.concat() };
+		}
+		return left;
+	}
+
+	private concat(): Node {
+		let left = this.additive();
+		while (this.isOp("&")) {
+			this.next();
+			left = { kind: "bin", op: "&", left, right: this.additive() };
+		}
+		return left;
 	}
 
 	private additive(): Node {
@@ -358,6 +441,8 @@ class Parser {
 		switch (tok.type) {
 			case "num":
 				return { kind: "num", value: Number.parseFloat(tok.text) };
+			case "str":
+				return { kind: "str", value: tok.text.slice(1, -1).replace(/""/g, '"') };
 			case "error":
 				return { kind: "err", code: errorCodeOf(tok.text) };
 			case "ref": {
@@ -377,6 +462,9 @@ class Parser {
 			}
 			case "name":
 			case "bracket": {
+				// `TRUE` and `FALSE` are constants in Excel, with or without the parentheses.
+				const constant = tok.type === "name" ? tok.text.toUpperCase() : "";
+				if (constant === "TRUE" || constant === "FALSE") return { kind: "call", fn: constant, args: [] };
 				const col = this.columns === null ? -1 : this.columns(tok.text, tok.type === "bracket");
 				if (col < 0) throw new FormulaError("#NAME?", `Unknown name: ${tok.text}`);
 				return { kind: "col", col };
@@ -384,7 +472,7 @@ class Parser {
 			case "func":
 				return this.call(tok);
 			case "lparen": {
-				const inner = this.additive();
+				const inner = this.comparison();
 				if (this.next().type !== "rparen") throw new FormulaError("#ERROR!", 'Missing ")"');
 				return inner;
 			}
@@ -400,7 +488,7 @@ class Parser {
 		const args: Node[] = [];
 		if (this.peek()?.type !== "rparen") {
 			for (;;) {
-				args.push(this.additive());
+				args.push(this.comparison());
 				if (this.peek()?.type !== "sep") break;
 				this.next();
 			}
@@ -425,7 +513,17 @@ function parseExpr(expr: string, columns: ColumnResolver | null = null): Node {
 
 /* -------------------------------------------------------------- evaluation */
 
-type CellValue = { t: "empty" } | { t: "num"; n: number } | { t: "text" } | { t: "err"; code: FormulaErrorCode };
+/**
+ * What a formula works with. Cells only ever hold the first four; booleans and text results exist
+ * so that `IF`, comparisons and `&` can be written at all.
+ */
+type CellValue =
+	| { t: "empty" }
+	| { t: "num"; n: number }
+	| { t: "text"; s: string }
+	| { t: "bool"; b: boolean }
+	/** `message` explains the error to the user; it never reaches the note. */
+	| { t: "err"; code: FormulaErrorCode; message?: string };
 
 interface CellSource {
 	value(row: number, col: number): CellValue;
@@ -438,26 +536,8 @@ interface EvalContext {
 	source: CellSource;
 	/** The current row, for `col` nodes. */
 	row: number;
-}
-
-function classify(raw: string, numberOpts?: NumberParseOptions): CellValue {
-	const shown = stripFormula(raw);
-	if (shown.trim() === "") return { t: "empty" };
-	const n = parseNumber(shown, numberOpts);
-	return n === null ? { t: "text" } : { t: "num", n };
-}
-
-function cellNumber(v: CellValue): number {
-	switch (v.t) {
-		case "empty":
-			return 0;
-		case "num":
-			return v.n;
-		case "text":
-			throw new FormulaError("#VALUE!", "Text where a number was expected");
-		case "err":
-			throw new FormulaError(v.code, `A referenced cell shows ${v.code}`);
-	}
+	/** How text is read as a number, for criteria such as `">1 200"`. */
+	numberOpts?: NumberParseOptions;
 }
 
 function refValue(ctx: EvalContext, row: number, col: number): CellValue {
@@ -465,28 +545,169 @@ function refValue(ctx: EvalContext, row: number, col: number): CellValue {
 	return ctx.source.value(row, col);
 }
 
-function evalNum(node: Node, ctx: EvalContext): number {
+function classify(raw: string, numberOpts?: NumberParseOptions): CellValue {
+	const shown = stripFormula(raw);
+	if (shown.trim() === "") return { t: "empty" };
+	const n = parseNumber(shown, numberOpts);
+	return n === null ? { t: "text", s: shown.trim() } : { t: "num", n };
+}
+
+/**
+ * A number out of any value: empty counts as 0, a boolean as 1 or 0, text is an error. Excel
+ * agrees except on text that looks like a number, where it coerces silently; refusing is the
+ * honest behaviour for a note, where a stray word in a sum is nearly always a mistake.
+ */
+function toNumber(v: CellValue): number {
+	switch (v.t) {
+		case "empty":
+			return 0;
+		case "num":
+			return v.n;
+		case "bool":
+			return v.b ? 1 : 0;
+		case "text":
+			throw new FormulaError("#VALUE!", "Text where a number was expected");
+		case "err":
+			throw new FormulaError(v.code, v.message ?? `A referenced cell shows ${v.code}`);
+	}
+}
+
+/** How a value reads when it is concatenated, compared as text, or written into a cell. */
+function toText(v: CellValue): string {
+	switch (v.t) {
+		case "empty":
+			return "";
+		case "num":
+			return String(clean(v.n));
+		case "bool":
+			return v.b ? "TRUE" : "FALSE";
+		case "text":
+			return v.s;
+		case "err":
+			throw new FormulaError(v.code, v.message ?? `A referenced cell shows ${v.code}`);
+	}
+}
+
+function toBool(v: CellValue): boolean {
+	switch (v.t) {
+		case "empty":
+			return false;
+		case "num":
+			return v.n !== 0;
+		case "bool":
+			return v.b;
+		case "text":
+			throw new FormulaError("#VALUE!", "Text where a condition was expected");
+		case "err":
+			throw new FormulaError(v.code, v.message ?? `A referenced cell shows ${v.code}`);
+	}
+}
+
+/** Excel's type order: numbers before text before booleans. */
+function typeRank(v: CellValue): number {
+	switch (v.t) {
+		case "num":
+		case "empty":
+			return 0;
+		case "text":
+			return 1;
+		case "bool":
+			return 2;
+		case "err":
+			return 3;
+	}
+}
+
+/** An empty cell takes the type of the other side: `=""` is true, `=0` is true, so is `=FALSE`. */
+function blankLike(v: CellValue): CellValue {
+	switch (v.t) {
+		case "num":
+			return { t: "num", n: 0 };
+		case "text":
+			return { t: "text", s: "" };
+		case "bool":
+			return { t: "bool", b: false };
+		default:
+			return { t: "empty" };
+	}
+}
+
+/** Negative, zero or positive, the way a three-way comparison wants it. Text compares without case. */
+function compareValues(a: CellValue, b: CellValue): number {
+	if (a.t === "err") throw new FormulaError(a.code, a.message ?? `A referenced cell shows ${a.code}`);
+	if (b.t === "err") throw new FormulaError(b.code, b.message ?? `A referenced cell shows ${b.code}`);
+	const left = a.t === "empty" && b.t !== "empty" ? blankLike(b) : a;
+	const right = b.t === "empty" && a.t !== "empty" ? blankLike(a) : b;
+	if (left.t !== right.t) return typeRank(left) - typeRank(right);
+	if (left.t === "num" && right.t === "num") return left.n === right.n ? 0 : left.n < right.n ? -1 : 1;
+	if (left.t === "bool" && right.t === "bool") return Number(left.b) - Number(right.b);
+	if (left.t === "text" && right.t === "text") {
+		const l = left.s.toLowerCase();
+		const r = right.s.toLowerCase();
+		return l === r ? 0 : l < r ? -1 : 1;
+	}
+	return 0;
+}
+
+const COMPARISON_OPS: readonly string[] = ["=", "<>", "<", "<=", ">", ">="];
+
+function isComparison(op: BinaryOp): op is ComparisonOp {
+	return COMPARISON_OPS.includes(op);
+}
+
+function comparisonHolds(op: ComparisonOp, d: number): boolean {
+	switch (op) {
+		case "=":
+			return d === 0;
+		case "<>":
+			return d !== 0;
+		case "<":
+			return d < 0;
+		case "<=":
+			return d <= 0;
+		case ">":
+			return d > 0;
+		case ">=":
+			return d >= 0;
+	}
+}
+
+function evalValue(node: Node, ctx: EvalContext): CellValue {
 	switch (node.kind) {
 		case "num":
-			return node.value;
+			return { t: "num", n: node.value };
+		case "str":
+			return { t: "text", s: node.value };
 		case "err":
 			throw new FormulaError(node.code, node.code === "#REF!" ? "Reference to a deleted row or column" : `The formula contains ${node.code}`);
 		case "ref":
-			return cellNumber(refValue(ctx, node.row, node.col));
+			return refValue(ctx, node.row, node.col);
 		case "col":
-			return cellNumber(refValue(ctx, ctx.row, node.col));
+			return refValue(ctx, ctx.row, node.col);
 		case "range":
 			throw new FormulaError("#VALUE!", "A range can only be used inside a function");
 		case "neg":
-			return -evalNum(node.arg, ctx);
-		case "bin":
-			return binary(node.op, evalNum(node.left, ctx), evalNum(node.right, ctx));
+			return { t: "num", n: -toNumber(evalValue(node.arg, ctx)) };
+		case "bin": {
+			if (node.op === "&") {
+				return { t: "text", s: toText(evalValue(node.left, ctx)) + toText(evalValue(node.right, ctx)) };
+			}
+			if (isComparison(node.op)) {
+				const d = compareValues(evalValue(node.left, ctx), evalValue(node.right, ctx));
+				return { t: "bool", b: comparisonHolds(node.op, d) };
+			}
+			return { t: "num", n: binary(node.op, toNumber(evalValue(node.left, ctx)), toNumber(evalValue(node.right, ctx))) };
+		}
 		case "call":
 			return evalCall(node.fn, node.args, ctx);
 	}
 }
 
-function binary(op: BinaryOp, a: number, b: number): number {
+function evalNum(node: Node, ctx: EvalContext): number {
+	return toNumber(evalValue(node, ctx));
+}
+
+function binary(op: ArithmeticOp, a: number, b: number): number {
 	let out: number;
 	switch (op) {
 		case "+":
@@ -528,7 +749,8 @@ function collect(args: Node[], ctx: EvalContext, tolerateErrors: boolean): Colle
 		if (v.t === "empty") return;
 		out.filled++;
 		if (v.t === "num") out.nums.push(v.n);
-		else if (v.t === "err" && !tolerateErrors) throw new FormulaError(v.code, `A referenced cell shows ${v.code}`);
+		else if (v.t === "bool") out.nums.push(v.b ? 1 : 0);
+		else if (v.t === "err" && !tolerateErrors) throw new FormulaError(v.code, v.message ?? `A referenced cell shows ${v.code}`);
 	};
 	for (const arg of args) {
 		if (arg.kind === "range") {
@@ -550,37 +772,238 @@ function collect(args: Node[], ctx: EvalContext, tolerateErrors: boolean): Colle
 	return out;
 }
 
-function evalCall(fn: FunctionName, args: Node[], ctx: EvalContext): number {
+/** The operands of AND and OR: text and empties inside references are skipped, as in Excel. */
+function logicalOperands(args: Node[], ctx: EvalContext): boolean[] {
+	const out: boolean[] = [];
+	for (const arg of args) {
+		if (arg.kind === "range" || arg.kind === "ref" || arg.kind === "col") {
+			for (const v of valuesOf(arg, ctx)) {
+				if (v.t === "num") out.push(v.n !== 0);
+				else if (v.t === "bool") out.push(v.b);
+				else if (v.t === "err") throw new FormulaError(v.code, v.message ?? `A referenced cell shows ${v.code}`);
+			}
+			continue;
+		}
+		out.push(toBool(evalValue(arg, ctx)));
+	}
+	return out;
+}
+
+interface Rect {
+	r1: number;
+	c1: number;
+	r2: number;
+	c2: number;
+}
+
+/** A range argument, clipped to what the table can hold; a single reference is a 1×1 range. */
+function rectOf(node: Node, ctx: EvalContext): Rect {
+	if (node.kind === "range") {
+		if (node.r1 < 0 || node.c1 < 0) throw new FormulaError("#REF!", "Reference to a cell that does not exist");
+		return {
+			r1: node.r1,
+			c1: node.c1,
+			r2: Math.min(node.r2, Math.max(ctx.source.rows - 1, node.r1)),
+			c2: Math.min(node.c2, Math.max(ctx.source.cols - 1, node.c1)),
+		};
+	}
+	if (node.kind === "ref") return { r1: node.row, c1: node.col, r2: node.row, c2: node.col };
+	if (node.kind === "col") return { r1: ctx.row, c1: node.col, r2: ctx.row, c2: node.col };
+	throw new FormulaError("#VALUE!", "A range is expected here");
+}
+
+function* valuesOf(node: Node, ctx: EvalContext): Generator<CellValue> {
+	const rect = rectOf(node, ctx);
+	for (let r = rect.r1; r <= rect.r2; r++) {
+		for (let c = rect.c1; c <= rect.c2; c++) yield ctx.source.value(r, c);
+	}
+}
+
+const CRITERIA_RE = /^(<=|>=|<>|=|<|>)?([\s\S]*)$/;
+
+function escapeRegExp(ch: string): string {
+	return ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Excel's `*` and `?` wildcards, with `~` escaping them. Null when the text has no wildcard. */
+function wildcardRegex(body: string): RegExp | null {
+	let wild = false;
+	let out = "";
+	for (let i = 0; i < body.length; i++) {
+		const ch = body[i];
+		if (ch === "~" && i + 1 < body.length) {
+			out += escapeRegExp(body[i + 1]);
+			i++;
+		} else if (ch === "*") {
+			out += "[\\s\\S]*";
+			wild = true;
+		} else if (ch === "?") {
+			out += "[\\s\\S]";
+			wild = true;
+		} else {
+			out += escapeRegExp(ch);
+		}
+	}
+	return wild ? new RegExp(`^${out}$`, "i") : null;
+}
+
+function compareNumber(actual: number, target: number, op: ComparisonOp): boolean {
+	return comparisonHolds(op, actual === target ? 0 : actual < target ? -1 : 1);
+}
+
+/**
+ * Turns a criterion into a test: a number matches numbers, `">100"` matches numbers above 100,
+ * `"Movers"` matches text without case, `"*ov*"` uses wildcards, and `""` with `=` or `<>`
+ * matches empty or non-empty cells.
+ */
+function predicateFor(crit: CellValue, numberOpts?: NumberParseOptions): (v: CellValue) => boolean {
+	if (crit.t === "num") return (v) => v.t === "num" && v.n === crit.n;
+	if (crit.t === "bool") return (v) => v.t === "bool" && v.b === crit.b;
+	if (crit.t === "err") throw new FormulaError(crit.code, "A condition cannot be an error");
+	const m = CRITERIA_RE.exec(crit.t === "text" ? crit.s : "");
+	const op = (m?.[1] ?? "=") as ComparisonOp;
+	const body = m?.[2] ?? "";
+	if (body === "") {
+		const empty = (v: CellValue): boolean => v.t === "empty";
+		return op === "<>" ? (v) => !empty(v) : empty;
+	}
+	const number = parseNumber(body, numberOpts);
+	if (number !== null) return (v) => v.t === "num" && compareNumber(v.n, number, op);
+	const wildcard = wildcardRegex(body);
+	const same = (v: CellValue): boolean => v.t !== "empty" && (wildcard?.test(toText(v)) ?? toText(v).toLowerCase() === body.toLowerCase());
+	if (op === "=") return same;
+	if (op === "<>") return (v) => v.t !== "empty" && !same(v);
+	return (v) => {
+		if (v.t === "empty") return false;
+		const s = toText(v).toLowerCase();
+		const b = body.toLowerCase();
+		return comparisonHolds(op, s === b ? 0 : s < b ? -1 : 1);
+	};
+}
+
+/**
+ * SUMIF/COUNTIF/AVERAGEIF and their plural forms.
+ *
+ * The singular form pairs the criteria range with the sum range by offset; the plural form walks
+ * every criteria/value pair over the first range's rectangle, which is how Excel defines it: all
+ * ranges must be the same shape, and a shorter one reads as empty rather than as an error.
+ */
+function conditionalAggregate(fn: FunctionName, args: Node[], ctx: EvalContext): CellValue {
+	const counting = fn === "COUNTIF" || fn === "COUNTIFS";
+	const plural = fn === "SUMIFS" || fn === "COUNTIFS" || fn === "AVERAGEIFS";
+	// The plural forms take criteria in pairs; the ones that also sum take a value range first.
+	const remainder = counting ? 0 : 1;
+	if (plural && args.length % 2 !== remainder) {
+		throw new FormulaError("#VALUE!", `${fn} needs a value range and a condition for every range`);
+	}
+	const pairs: Array<{ rect: Rect; test: (v: CellValue) => boolean }> = [];
+	let sums: Rect | null = null;
+	if (plural) {
+		if (!counting) sums = rectOf(args[0], ctx);
+		for (let i = counting ? 0 : 1; i + 1 < args.length; i += 2) {
+			pairs.push({ rect: rectOf(args[i], ctx), test: predicateFor(evalValue(args[i + 1], ctx), ctx.numberOpts) });
+		}
+	} else {
+		const criteria = rectOf(args[0], ctx);
+		pairs.push({ rect: criteria, test: predicateFor(evalValue(args[1], ctx), ctx.numberOpts) });
+		// Without a third argument Excel sums the criteria range itself.
+		if (!counting) sums = args.length > 2 ? rectOf(args[2], ctx) : criteria;
+	}
+	const frame = pairs[0].rect;
+	const rows = frame.r2 - frame.r1 + 1;
+	const cols = frame.c2 - frame.c1 + 1;
+	let matched = 0;
+	const nums: number[] = [];
+	for (let dr = 0; dr < rows; dr++) {
+		for (let dc = 0; dc < cols; dc++) {
+			const hit = pairs.every(({ rect, test }) => {
+				const r = rect.r1 + dr;
+				const c = rect.c1 + dc;
+				return test(r <= rect.r2 && c <= rect.c2 ? ctx.source.value(r, c) : { t: "empty" });
+			});
+			if (!hit) continue;
+			matched++;
+			if (sums === null) continue;
+			const r = sums.r1 + dr;
+			const c = sums.c1 + dc;
+			if (r > sums.r2 || c > sums.c2) continue;
+			const v = ctx.source.value(r, c);
+			if (v.t === "num") nums.push(v.n);
+			else if (v.t === "err") throw new FormulaError(v.code, v.message ?? `A referenced cell shows ${v.code}`);
+		}
+	}
+	if (counting) return { t: "num", n: matched };
+	const total = nums.reduce((a, n) => a + n, 0);
+	if (fn === "AVERAGEIF" || fn === "AVERAGEIFS") {
+		if (nums.length === 0) throw new FormulaError("#DIV/0!", "No matching number to average");
+		return { t: "num", n: total / nums.length };
+	}
+	return { t: "num", n: total };
+}
+
+function evalCall(fn: FunctionName, args: Node[], ctx: EvalContext): CellValue {
 	switch (fn) {
+		case "IF": {
+			const cond = toBool(evalValue(args[0], ctx));
+			// Only the branch that is taken is evaluated, as in Excel: the other one may divide by zero.
+			if (cond) return evalValue(args[1], ctx);
+			return args.length > 2 ? evalValue(args[2], ctx) : { t: "empty" };
+		}
+		case "IFERROR":
+			try {
+				return evalValue(args[0], ctx);
+			} catch (e) {
+				if (!(e instanceof FormulaError)) throw e;
+				return evalValue(args[1], ctx);
+			}
+		case "AND":
+		case "OR": {
+			const operands = logicalOperands(args, ctx);
+			if (operands.length === 0) throw new FormulaError("#VALUE!", `${fn} of no values`);
+			return { t: "bool", b: fn === "AND" ? operands.every(Boolean) : operands.some(Boolean) };
+		}
+		case "NOT":
+			return { t: "bool", b: !toBool(evalValue(args[0], ctx)) };
+		case "TRUE":
+			return { t: "bool", b: true };
+		case "FALSE":
+			return { t: "bool", b: false };
+		case "SUMIF":
+		case "COUNTIF":
+		case "AVERAGEIF":
+		case "SUMIFS":
+		case "COUNTIFS":
+		case "AVERAGEIFS":
+			return conditionalAggregate(fn, args, ctx);
 		case "ROUND":
-			return round(evalNum(args[0], ctx), Math.trunc(evalNum(args[1], ctx)));
+			return { t: "num", n: round(evalNum(args[0], ctx), Math.trunc(evalNum(args[1], ctx))) };
 		case "ABS":
-			return Math.abs(evalNum(args[0], ctx));
+			return { t: "num", n: Math.abs(evalNum(args[0], ctx)) };
 		case "COUNT":
-			return collect(args, ctx, true).nums.length;
+			return { t: "num", n: collect(args, ctx, true).nums.length };
 		case "COUNTA":
-			return collect(args, ctx, true).filled;
+			return { t: "num", n: collect(args, ctx, true).filled };
 		default:
 			break;
 	}
 	const { nums } = collect(args, ctx, false);
 	switch (fn) {
 		case "SUM":
-			return nums.reduce((a, n) => a + n, 0);
+			return { t: "num", n: nums.reduce((a, n) => a + n, 0) };
 		case "AVERAGE":
 			if (nums.length === 0) throw new FormulaError("#DIV/0!", "AVERAGE of no numbers");
-			return nums.reduce((a, n) => a + n, 0) / nums.length;
+			return { t: "num", n: nums.reduce((a, n) => a + n, 0) / nums.length };
 		case "MIN":
-			return nums.length === 0 ? 0 : nums.reduce((a, n) => (n < a ? n : a), nums[0]);
+			return { t: "num", n: nums.length === 0 ? 0 : nums.reduce((a, n) => (n < a ? n : a), nums[0]) };
 		case "MAX":
-			return nums.length === 0 ? 0 : nums.reduce((a, n) => (n > a ? n : a), nums[0]);
+			return { t: "num", n: nums.length === 0 ? 0 : nums.reduce((a, n) => (n > a ? n : a), nums[0]) };
 		case "PRODUCT":
-			return nums.length === 0 ? 0 : nums.reduce((a, n) => a * n, 1);
+			return { t: "num", n: nums.length === 0 ? 0 : nums.reduce((a, n) => a * n, 1) };
 		case "MEDIAN": {
 			if (nums.length === 0) throw new FormulaError("#NUM!", "MEDIAN of no numbers");
 			const sorted = nums.slice().sort((a, b) => a - b);
 			const mid = Math.floor(sorted.length / 2);
-			return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+			return { t: "num", n: sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2 };
 		}
 		default:
 			throw new FormulaError("#NAME?", "Unknown function");
@@ -606,6 +1029,30 @@ function round(x: number, digits: number): number {
 function clean(n: number): number {
 	const v = Number.parseFloat(n.toPrecision(15));
 	return v === 0 ? 0 : v;
+}
+
+/**
+ * A text result has to survive as a note cell: one line, no comment markers. A pipe is left alone
+ * because the serializer escapes it.
+ */
+function cellText(s: string): string {
+	return s.replace(/\r?\n/g, " ").replace(/%%/g, "% %").trim();
+}
+
+/** What a non-numeric result looks like inside the cell. */
+function displayText(v: CellValue): string {
+	switch (v.t) {
+		case "num":
+			return String(clean(v.n));
+		case "text":
+			return cellText(v.s);
+		case "bool":
+			return v.b ? "TRUE" : "FALSE";
+		case "empty":
+			return "";
+		case "err":
+			return v.code;
+	}
 }
 
 /* ------------------------------------------------------------ recalculation */
@@ -669,17 +1116,13 @@ export function recalculate(model: GridModel, opts: RecalcOptions): RecalcResult
 	}
 	if (entries.size === 0) return { changed: [], errors: [] };
 
-	const computed = new Map<CellAddr, number | FormulaError>();
+	const computed = new Map<CellAddr, CellValue>();
 	const source: CellSource = {
 		rows,
 		cols,
 		value(row, col) {
 			const key = addrKey(row, col);
-			if (entries.has(key)) {
-				const v = computed.get(key);
-				if (v === undefined) return { t: "err", code: "#CYCLE!" };
-				return typeof v === "number" ? { t: "num", n: v } : { t: "err", code: v.code };
-			}
+			if (entries.has(key)) return computed.get(key) ?? { t: "err", code: "#CYCLE!" };
 			return classify(getRaw(model, row, col), opts.numberOpts);
 		},
 	};
@@ -701,7 +1144,7 @@ export function recalculate(model: GridModel, opts: RecalcOptions): RecalcResult
 	const queue = all.filter((e) => pending.get(e.key) === 0);
 	for (let qi = 0; qi < queue.length; qi++) {
 		const entry = queue[qi];
-		computed.set(entry.key, evaluateEntry(entry, source));
+		computed.set(entry.key, evaluateEntry(entry, source, opts.numberOpts));
 		for (const dependent of dependents.get(entry.key) ?? []) {
 			const left = (pending.get(dependent) ?? 0) - 1;
 			pending.set(dependent, left);
@@ -712,7 +1155,7 @@ export function recalculate(model: GridModel, opts: RecalcOptions): RecalcResult
 		}
 	}
 	for (const entry of all) {
-		if (!computed.has(entry.key)) computed.set(entry.key, new FormulaError("#CYCLE!", "Circular reference"));
+		if (!computed.has(entry.key)) computed.set(entry.key, { t: "err", code: "#CYCLE!", message: "Circular reference" });
 	}
 
 	const result: RecalcResult = { changed: [], errors: [] };
@@ -720,16 +1163,22 @@ export function recalculate(model: GridModel, opts: RecalcOptions): RecalcResult
 		const value = computed.get(entry.key);
 		if (value === undefined) continue;
 		let text: string;
-		if (typeof value === "number") {
+		if (value.t === "num") {
 			// A display that already reads as this number stays as written. Formatting is locale
 			// dependent, and rewriting "1 200" as "1,200" on another machine would make every open
 			// on that machine an edit — two devices would rewrite the note back and forth forever.
 			const shown = parseNumber(entry.cell.display, opts.numberOpts);
-			if (shown !== null && Math.abs(shown - clean(value)) <= 1e-9 * Math.max(1, Math.abs(shown))) continue;
-			text = opts.format(clean(value));
+			if (shown !== null && Math.abs(shown - clean(value.n)) <= 1e-9 * Math.max(1, Math.abs(shown))) continue;
+			text = opts.format(clean(value.n));
+		} else if (value.t === "text") {
+			text = cellText(value.s);
+		} else if (value.t === "bool") {
+			text = value.b ? "TRUE" : "FALSE";
+		} else if (value.t === "empty") {
+			text = "";
 		} else {
 			text = value.code;
-			result.errors.push({ row: entry.row, col: entry.col, code: value.code, message: value.message });
+			result.errors.push({ row: entry.row, col: entry.col, code: value.code, message: value.message ?? "The formula cannot be evaluated" });
 		}
 		const next = buildFormulaCell(withLayersOf(entry.cell.display, text), entry.cell.expr);
 		if (next !== entry.raw) {
@@ -740,12 +1189,16 @@ export function recalculate(model: GridModel, opts: RecalcOptions): RecalcResult
 	return result;
 }
 
-function evaluateEntry(entry: FormulaEntry, source: CellSource): number | FormulaError {
-	if (entry.ast === null) return entry.parseError ?? new FormulaError("#ERROR!", "The formula cannot be read");
+function evaluateEntry(entry: FormulaEntry, source: CellSource, numberOpts?: NumberParseOptions): CellValue {
+	if (entry.ast === null) {
+		const problem = entry.parseError ?? new FormulaError("#ERROR!", "The formula cannot be read");
+		return { t: "err", code: problem.code, message: problem.message };
+	}
 	try {
-		return evalNum(entry.ast, { source, row: entry.row });
+		return evalValue(entry.ast, { source, row: entry.row, numberOpts });
 	} catch (e) {
-		return asFormulaError(e);
+		const problem = asFormulaError(e);
+		return { t: "err", code: problem.code, message: problem.message };
 	}
 }
 
@@ -1028,7 +1481,8 @@ export function computeColumn(model: GridModel, target: number, expr: string, op
 		if (!occupied.has(r)) continue;
 		let value: string;
 		try {
-			value = opts.format(clean(evalNum(ast, { source, row: r })));
+			const computed = evalValue(ast, { source, row: r, numberOpts: opts.numberOpts });
+			value = computed.t === "num" ? opts.format(clean(computed.n)) : displayText(computed);
 		} catch (e) {
 			value = asFormulaError(e).code;
 			result.errors++;

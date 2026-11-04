@@ -334,3 +334,28 @@ about the note, the write path or the anchor changes; this is the view only.
 The Node built-ins rule (`no-nodejs-modules`) now applies, because the manifest says mobile. The
 plugin itself never imported one; the tests do, and run only in Node, so the rule is off for
 `tests/` in `eslint.config.mjs`.
+
+## 25. Formulas have values, not only numbers
+
+**Design:** D2 and decision 21 describe formulas as arithmetic over cells, which is what the first
+release needed.
+
+**Built:** a value is a number, text, a boolean, empty or an error. Comparisons (`= <> < <= > >=`),
+`&`, `IF`, `IFERROR`, `AND`, `OR`, `NOT` and the conditional aggregates need that, and text has to
+survive the trip through the note.
+
+- **Text results are written as plain cell text.** `IF(C2>2,"many","few")` stores `many %%=…%%`,
+  which reads correctly without the plugin. A line break becomes a space and `%%` becomes `% %`,
+  because either would break the table or the comment; a pipe is left to the serializer, which
+  already escapes it.
+- **A text value in arithmetic is `#VALUE!`, not 0.** Excel coerces `"12"` silently; in a note a
+  stray word in a sum is nearly always a mistake, and a visible error is worth the difference.
+- **A missing third argument of `IF` gives an empty cell.** Excel gives `FALSE`, which is noise in
+  a note. Everything else follows Excel, because the XLSX export hands this same text to it.
+- **Criteria follow Excel's rules**: `">100"`, `"*desk*"`, `"<>"`, an empty string for empty cells,
+  and text matched without case. Matching is by value, so a number cell matches `"100"`.
+- **The dependency graph is unchanged.** `IF` evaluates only the branch it takes (so
+  `IF(C2>0, 1/C2, 0)` is safe), but both branches still contribute edges, and an edge that does not
+  run cannot cause a cycle — the sort is over references, not over evaluation.
+- **`TRUE` and `FALSE` work with and without parentheses**, as in Excel.
+
