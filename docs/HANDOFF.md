@@ -367,3 +367,16 @@ to Android's WebView and further from iOS's WKWebView. Check, in this order:
 5. **The Live Preview button** is always visible on screens without hover (`@media (hover: none)`).
    Whether tapping it competes with Obsidian entering the table for editing is unknown.
 
+
+## Round eight: conditions, text and conditional aggregates
+
+The formula language grew a value model — number, text, boolean, empty, error — behind
+`IF`, `IFERROR`, `AND`, `OR`, `NOT`, `&`, the six comparison operators and
+`SUMIF(S)`, `COUNTIF(S)`, `AVERAGEIF(S)`. Decision 25 has the reasoning; the cell format,
+the write path and the dependency graph are unchanged, so a note written by this version still
+reads in every plain Markdown viewer.
+
+Tests went from 352 to 367. New coverage: branch laziness, text comparison without case, text
+results surviving the cell format, wildcards and comparison criteria, multi-criteria ranges,
+`TRUE`/`FALSE` as constants, export to Excel syntax, and that a reference inside a string literal
+is not shifted when rows move.
