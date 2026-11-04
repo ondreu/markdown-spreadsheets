@@ -31,6 +31,7 @@ export const GRID_COMMANDS: Array<[id: string, name: string]> = [
 	["sort-asc", "Sort ascending by the active column"],
 	["sort-desc", "Sort descending by the active column"],
 	["sort-multi", "Sort by several columns"],
+	["merge-file", "Merge a spreadsheet into this table"],
 	["filter", "Filter rows"],
 	["filter-clear", "Clear filters"],
 	["find", "Find and replace"],

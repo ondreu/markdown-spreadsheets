@@ -1,4 +1,4 @@
-import { FuzzySuggestModal, Modal, Setting, type App, type FuzzyMatch, type TFile } from "obsidian";
+import { FuzzySuggestModal, Modal, Notice, Setting, type App, type FuzzyMatch, type TFile } from "obsidian";
 import { colName } from "../model/address";
 import { formatCompact } from "../model/numbers";
 import type { ColumnStats, NumberFormatOptions, NumberStyle } from "../feature/transform";
@@ -460,5 +460,139 @@ export class TableIndexModal extends FuzzySuggestModal<VaultTable> {
 
 	onChooseItem(item: VaultTable): void {
 		this.onPick(item);
+	}
+}
+
+/** What the merge dialog needs to know, and what it hands back. */
+export interface MergeChoice {
+	keyCols: number[];
+	align: "header" | "position";
+	addColumns: boolean;
+	removeMissing: boolean;
+}
+
+export interface MergeSummary {
+	updated: number;
+	added: number;
+	removed: number;
+	columns: number;
+	duplicates: number;
+}
+
+/**
+ * Merging a file into a table, with the consequences shown before anything is written.
+ *
+ * No merge can be undone from here — the grid's own undo covers it, one step — so the dialog says
+ * what will happen in numbers: how many rows are matched, added, removed, which columns are new,
+ * and whether the key repeats in the table, which is the one result people do not expect.
+ */
+export class MergeModal extends Modal {
+	private choice: MergeChoice = { keyCols: [0], align: "header", addColumns: true, removeMissing: false };
+
+	constructor(
+		app: App,
+		private readonly opts: {
+			fileName: string;
+			/** Table headers, in column order, with the column letter. */
+			headers: Array<{ col: number; label: string; name: string }>;
+			rowCount: number;
+			importHeaders: string[];
+			preview(choice: MergeChoice): MergeSummary | { error: string };
+			apply(choice: MergeChoice): MergeSummary;
+		},
+	) {
+		super(app);
+	}
+
+	override onOpen(): void {
+		this.titleEl.setText("Merge a file into this table");
+		this.contentEl.createEl("p", {
+			cls: "mds-modal-note",
+			text: `${this.opts.fileName}: ${this.opts.rowCount} ${this.opts.rowCount === 1 ? "row" : "rows"}, ${this.opts.importHeaders.length} columns. Rows are matched by a key column; only the columns the file carries are written.`,
+		});
+
+		new Setting(this.contentEl).setName("Match rows by").addDropdown((d) => {
+			for (const header of this.opts.headers) d.addOption(String(header.col), header.label);
+			d.setValue(String(this.choice.keyCols[0] ?? 0));
+			d.onChange((value) => {
+				this.choice.keyCols = [Number.parseInt(value, 10)];
+				this.refresh();
+			});
+		});
+
+		new Setting(this.contentEl)
+			.setName("Match columns by")
+			.setDesc("Header name is what makes a reordered export work; position is the literal one.")
+			.addDropdown((d) => {
+				d.addOption("header", "Header name");
+				d.addOption("position", "Position");
+				d.setValue(this.choice.align);
+				d.onChange((value) => {
+					this.choice.align = value === "position" ? "position" : "header";
+					this.refresh();
+				});
+			});
+
+		new Setting(this.contentEl)
+			.setName("Add columns the table does not have")
+			.setDesc("Off keeps the table's own shape and ignores the extra columns.")
+			.addToggle((t) =>
+				t.setValue(this.choice.addColumns).onChange((value) => {
+					this.choice.addColumns = value;
+					this.refresh();
+				}),
+			);
+
+		new Setting(this.contentEl)
+			.setName("Delete rows the file no longer has")
+			.setDesc("Off by default: a row that disappeared from an export is usually news, not a deletion.")
+			.addToggle((t) =>
+				t.setValue(this.choice.removeMissing).onChange((value) => {
+					this.choice.removeMissing = value;
+					this.refresh();
+				}),
+			);
+
+		this.summaryEl = this.contentEl.createEl("p", { cls: "mds-modal-summary" });
+		this.refresh();
+
+		new Setting(this.contentEl)
+			.addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()))
+			.addButton((b) => {
+				this.mergeButton = b.buttonEl;
+				b.setButtonText("Merge")
+					.setCta()
+					.onClick(() => {
+						const result = this.opts.apply(this.choice);
+						this.close();
+						new Notice(
+							`Merged ${this.opts.fileName}: ${result.updated} updated, ${result.added} added${result.removed > 0 ? `, ${result.removed} removed` : ""}${result.columns > 0 ? `, ${result.columns} new ${result.columns === 1 ? "column" : "columns"}` : ""}.`,
+						);
+					});
+			});
+	}
+
+	private summaryEl: HTMLElement | null = null;
+	private mergeButton: HTMLButtonElement | null = null;
+
+	private refresh(): void {
+		if (!this.summaryEl) return;
+		const summary = this.opts.preview(this.choice);
+		if ("error" in summary) {
+			this.mergeButton?.setAttribute("disabled", "true");
+			this.summaryEl.setText(`Cannot merge: ${summary.error}`);
+			this.summaryEl.addClass("is-error");
+			return;
+		}
+		this.mergeButton?.removeAttribute("disabled");
+		this.summaryEl.removeClass("is-error");
+		const parts = [
+			`${summary.updated} ${summary.updated === 1 ? "row" : "rows"} updated`,
+			`${summary.added} added`,
+		];
+		if (summary.removed > 0) parts.push(`${summary.removed} removed`);
+		if (summary.columns > 0) parts.push(`${summary.columns} new ${summary.columns === 1 ? "column" : "columns"}`);
+		if (summary.duplicates > 0) parts.push(`${summary.duplicates} repeated key ${summary.duplicates === 1 ? "row" : "rows"} left as they are`);
+		this.summaryEl.setText(`${parts.join(" · ")}.`);
 	}
 }

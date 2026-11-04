@@ -24,6 +24,7 @@ import { csvBytes, plainText, type CsvOptions } from "../feature/exportCsv";
 import { toHtmlTable, toJson } from "../feature/exportExtra";
 import { computeColumn, totalsRow } from "../feature/formula";
 import { readTableFile } from "../feature/tableFile";
+import { applyMerge, planMerge } from "../feature/merge";
 import {
 	columnStats,
 	duplicateHeaders,
@@ -47,17 +48,7 @@ import { MAX_COL_WIDTH, MAX_ROW_HEIGHT, MIN_COL_WIDTH, MIN_ROW_HEIGHT, VIEW_TYPE
 import { GridHost, type Selection } from "./GridHost";
 import { formatNow } from "./GridHost";
 import { iconName, setIconSafe, type IconKey } from "./icons";
-import {
-	ColumnStatsModal,
-	ColumnsModal,
-	ComputeColumnModal,
-	GoToModal,
-	ImportModal,
-	MultiSortModal,
-	NumberFormatModal,
-	TextPromptModal,
-	TotalsModal,
-} from "./toolModals";
+import { ColumnsModal, ColumnStatsModal, ComputeColumnModal, GoToModal, ImportModal, MergeModal, MultiSortModal, NumberFormatModal, TextPromptModal, TotalsModal } from "./toolModals";
 import { Menu } from "obsidian";
 import { colIndex } from "../model/address";
 import { Ribbon, type RibbonAction, type RibbonItem, type RibbonTab } from "./Ribbon";
@@ -1473,6 +1464,9 @@ export class GridView extends ItemView {
 							button("import", "Import", "importFile", () => this.openImport(), {
 								tooltip: "CSV or Excel into the grid, at the active cell",
 							}),
+							button("merge-file", "Merge", "mergeFile", () => this.openMerge(), {
+								tooltip: "CSV or Excel merged into this table by a key column",
+							}),
 						],
 					},
 					{
@@ -1835,6 +1829,70 @@ export class GridView extends ItemView {
 			onCopy: (text) => {
 				void navigator.clipboard.writeText(text);
 				new Notice(`Copied ${text}`);
+			},
+		}).open();
+	}
+
+	/** Merge a file into this table by a key column, with the consequences shown first. */
+	private openMerge(): void {
+		const host = this.host;
+		if (!host) return;
+		const files = this.app.vault.getFiles().filter((f) => ["csv", "tsv", "xlsx"].includes(f.extension.toLowerCase()));
+		new ImportModal(this.app, {
+			files,
+			target: "It is merged into this table by a key column.",
+			onVaultFile: (file) => void this.mergeValues(file.name, () => this.app.vault.readBinary(file)),
+			onDiskFile: (file) => void this.mergeValues(file.name, () => file.arrayBuffer()),
+		}).open();
+	}
+
+	private async mergeValues(name: string, read: () => Promise<ArrayBuffer>): Promise<void> {
+		const host = this.host;
+		if (!host) return;
+		let values: string[][];
+		try {
+			values = await readTableFile(name, await read());
+		} catch (error) {
+			new Notice(`Could not read ${name} — ${error instanceof Error ? error.message : String(error)}`);
+			return;
+		}
+		if (values.length < 2) {
+			new Notice(`${name} needs a header row and at least one row of data.`);
+			return;
+		}
+		const model = host.getModel();
+		const headers = [];
+		for (let c = 0; c < Math.max(model.usedRange.cols, 1); c++) {
+			const head = plainText(getRaw(model, 0, c)).trim();
+			headers.push({ col: c, label: head === "" ? colName(c) : `${colName(c)} · ${head}`, name: head });
+		}
+		new MergeModal(this.app, {
+			fileName: name,
+			headers,
+			rowCount: values.length - 1,
+			importHeaders: values[0],
+			preview: (choice) => {
+				try {
+					const plan = planMerge(model, values, choice);
+					return {
+						updated: plan.matches.length,
+						added: plan.newRows.length,
+						removed: choice.removeMissing ? plan.missing.length : 0,
+						columns: plan.newColumns.length,
+						duplicates: plan.duplicates,
+					};
+				} catch (error) {
+					return { error: error instanceof Error ? error.message : String(error) };
+				}
+			},
+			apply: (choice) => {
+				let result = { updated: 0, added: 0, removed: 0, columns: 0, duplicates: 0 };
+				host.mutate("Merge file", () => {
+					const plan = planMerge(model, values, choice);
+					const applied = applyMerge(model, host.getLayout(), values, plan);
+					result = { ...applied, duplicates: plan.duplicates };
+				});
+				return result;
 			},
 		}).open();
 	}

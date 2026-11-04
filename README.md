@@ -55,6 +55,11 @@ No table yet? **Insert a new table and open it as a spreadsheet** creates one at
 - Sort by several columns, find and replace (with Find next, regex, whole-cell), go to a cell.
 - **Tools**: split a column at a separator, merge columns, remove duplicate rows, change case, trim
   spaces, replace `&nbsp;`.
+- **Merge a file into the table by a key** — a price list, a stock export or a time sheet comes back
+  with the same rows and some new ones: match by the code column, update what the file carries, add
+  what is new, and optionally drop what it no longer has. Columns are matched by header name, so a
+  reordered export still works, and the dialog says how many rows will be updated, added or removed
+  before anything is written.
 - **Paste** from Excel, LibreOffice or Google Sheets, a Markdown table copied from a note, a single
   value onto a whole range, transposed, or as plain text. Paste or drop an image and it is saved as
   an attachment and linked; drop a note from the file explorer and it becomes a link.

@@ -437,3 +437,29 @@ open. The number is then wrong in a way nothing announces.
   may prefer its numbers to move only while somebody is looking. The watcher checks it at every
   step rather than at registration, so turning it off takes effect at once.
 
+## 29. A file is merged into a table by a key, and nothing is deleted by default
+
+**Design:** §14 covers importing a file as a new table or into the grid at the active cell. Paste
+over a table was the only way to refresh one, and it loses the cells the file does not carry.
+
+**Built:** `src/feature/merge.ts` — a plan, then an apply — behind a dialog that states the
+consequences in numbers.
+
+- **Matching is by a value, not by position.** A key column of the table is matched against the same
+  column of the file (by header name, or by position if asked), so a sorted or padded export is not
+  a requirement.
+- **Columns are matched by header name by default.** An export that reordered its columns still
+  updates the right cells; an export with a new column adds it when asked, and is ignored otherwise.
+- **Removing is opt-in**, because a row missing from an export is usually news — a discontinued
+  product, a cancelled order — not an instruction to delete it. When it is asked for, the rows go
+  through `deleteRows` plus `adjustFormulaRefs`, so a formula elsewhere keeps pointing at the right
+  cells and the row heights follow their rows.
+- **A repeated key is reported, not merged.** Two rows with one key would make the merge ambiguous;
+  the first is updated and the dialog says how many were left alone.
+- **The plan carries its own `removeMissing`.** The first version read the flag from the options in
+  `planMerge` and forgot it in `applyMerge`, and a test with the option off deleted rows. A plan that
+  can be applied without knowing what it was planned for is a loaded gun.
+- **Nothing is written until Merge is pressed**, and the dialog shows updated / added / removed /
+  new columns with every change of a setting. The merge is one undo step in the grid.
+- **A file with no header, no data or no key column is refused with the reason**, not merged badly.
+

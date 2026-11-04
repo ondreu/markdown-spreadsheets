@@ -1553,6 +1553,7 @@ export function computeColumn(model: GridModel, target: number, expr: string, op
 	return result;
 }
 
-function headerKey(raw: string): string {
+/** A header as it is matched: emphasis stripped, no case, single spaces. Shared with the merge. */
+export function headerKey(raw: string): string {
 	return peelInline(stripFormula(raw)).inner.trim().toLowerCase();
 }
