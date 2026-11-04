@@ -14,6 +14,7 @@ import {
 	stripFormula,
 	toExcelFormula,
 	totalsRow,
+	translateFormula,
 	withLayersOf,
 } from "../src/feature/formula";
 
@@ -539,5 +540,28 @@ describe("new functions in the other paths", () => {
 		expect(result.errors).toHaveLength(1);
 		expect(result.errors[0]).toMatchObject({ row: 2, col: 1, code: "#VALUE!" });
 		expect(result.errors[0].message).toContain("number");
+	});
+});
+
+describe("translateFormula", () => {
+	it("moves relative references and leaves anchored ones", () => {
+		expect(translateFormula("A2+B2", 1, 0)).toBe("A3+B3");
+		expect(translateFormula("$A$2+B2", 1, 1)).toBe("$A$2+C3");
+		expect(translateFormula("$A2+A$2", 1, 1)).toBe("$A3+B$2");
+		expect(translateFormula("SUM(B2:C2)", 2, 0)).toBe("SUM(B4:C4)");
+	});
+
+	it("keeps text, functions and separators exactly as written", () => {
+		expect(translateFormula('IF(B2>1,"B2 is big",AVG(B2:C2))', 1, 0)).toBe('IF(B3>1,"B2 is big",AVG(B3:C3))');
+	});
+
+	it("turns a reference that would leave the sheet into #REF!", () => {
+		expect(translateFormula("A2+B10", -5, 0)).toBe("#REF!+B5");
+	});
+
+	it("moves what it can and comes back null only when the text is not tokenizable", () => {
+		// A half-typed formula has no meaning yet; its references still move.
+		expect(translateFormula("A2+", 1, 0)).toBe("A3+");
+		expect(translateFormula('A2+"x', 1, 0)).toBeNull();
 	});
 });

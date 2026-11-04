@@ -1,3 +1,4 @@
+import { parseFormulaCell } from "../src/feature/formula";
 import { describe, expect, it } from "vitest";
 import { getRaw, setRaw } from "../src/model/GridModel";
 import { parseTable } from "../src/model/parse";
@@ -281,6 +282,13 @@ describe("fillRange", () => {
 		fillRange(model, { r1: 1, c1: 0, r2: 1, c2: 0 }, { r1: 1, c1: 0, r2: 3, c2: 0 }, "down");
 		expect(getRaw(model, 2, 0)).toBe("7");
 		expect(getRaw(model, 3, 0)).toBe("7");
+	});
+
+	it("moves a formula's relative references, keeping anchored ones", () => {
+		const model = parseTable("| A | B | C |\n| --- | --- | --- |\n| 1 | 10 | %%=$B$1+A2%% |\n| 2 | 20 | |\n| 3 | 30 | |\n");
+		fillRange(model, { r1: 1, c1: 2, r2: 1, c2: 2 }, { r1: 1, c1: 2, r2: 3, c2: 2 }, "down");
+		expect(parseFormulaCell(getRaw(model, 2, 2))?.expr).toBe("$B$1+A3");
+		expect(parseFormulaCell(getRaw(model, 3, 2))?.expr).toBe("$B$1+A4");
 	});
 
 	it("repeats a text pattern", () => {

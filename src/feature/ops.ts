@@ -2,6 +2,7 @@ import { addrKey, parseAddrKey } from "../model/address";
 import { getRaw, recomputeUsedRange, setRaw, type Align, type GridModel } from "../model/GridModel";
 import { parseNumber, type NumberParseOptions } from "../model/numbers";
 import type { TableLayout } from "../store/Sidecar";
+import { buildFormulaCell, parseFormulaCell, translateFormula } from "./formula";
 import { detectSeries, type SeriesFn } from "./series";
 
 export interface Rect {
@@ -496,7 +497,18 @@ function applySeries(
 			value = series.at(stepsFromStart);
 		} else {
 			const idx = forward ? (offset - 1) % len : (len - (offset % len)) % len;
-			value = series.values[((idx % len) + len) % len];
+			const pick = ((idx % len) + len) % len;
+			value = series.values[pick];
+			// A formula is copied with its references moved, not repeated as a number: filling
+			// `=SUM(B2:C2)` down a column is the commonest thing anyone does with a formula.
+			const source = srcStart + pick;
+			const raw = vertical ? getRaw(model, source, fixed) : getRaw(model, fixed, source);
+			const formula = parseFormulaCell(raw);
+			if (formula !== null) {
+				const moved = i - source;
+				const expr = translateFormula(formula.expr, vertical ? moved : 0, vertical ? 0 : moved);
+				if (expr !== null) value = buildFormulaCell(formula.display, expr);
+			}
 		}
 		if (vertical) setRaw(model, i, fixed, value);
 		else setRaw(model, fixed, i, value);

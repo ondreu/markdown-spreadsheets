@@ -1310,6 +1310,26 @@ export function adjustFormulaRefs(model: GridModel, change: StructuralChange): v
 }
 
 /**
+ * Shifts the relative references of a formula by a row and column offset, leaving `$`-anchored
+ * ones where they are — what copy, paste and fill do in Excel. A reference that would land left of
+ * or above the sheet becomes `#REF!`, and an expression that cannot be read comes back as null so
+ * the caller can keep the original rather than write something wrong.
+ */
+export function translateFormula(expr: string, dRow: number, dCol: number): string | null {
+	if (dRow === 0 && dCol === 0) return expr;
+	return rewriteRefs(expr, (a, b) => {
+		const moved = (ref: RefParts): RefParts | null => {
+			const row = ref.absRow ? ref.row : ref.row + dRow;
+			const col = ref.absCol ? ref.col : ref.col + dCol;
+			return row < 0 || col < 0 ? null : { absCol: ref.absCol, col, absRow: ref.absRow, row };
+		};
+		const first = moved(a);
+		const last = moved(b);
+		return first === null || last === null ? null : [first, last];
+	});
+}
+
+/**
  * Replaces every reference and range in `expr` through `map`, leaving the rest of the text exactly
  * as written. `map` gets both endpoints (the same one twice for a single cell) and returns the new
  * endpoints, or null for `#REF!`. Returns null when the expression cannot be tokenized.
