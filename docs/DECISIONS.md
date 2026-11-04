@@ -359,3 +359,27 @@ survive the trip through the note.
   run cannot cause a cycle — the sort is over references, not over evaluation.
 - **`TRUE` and `FALSE` work with and without parentheses**, as in Excel.
 
+## 26. A formula is written by pointing at the cells
+
+**Design:** §5 and §9 describe the editor as a text field over the cell, with the grid out of the
+way while it is open.
+
+**Built:** when the text starts with `=` — not `==`, which is Obsidian's highlight — a mousedown on
+a grid cell writes that cell's reference at the caret instead of committing the edit, and dragging
+writes `B2:C4`.
+
+- **`preventDefault` on mousedown is the whole trick.** It is the blur that commits the editor, so
+  a pick that let the browser move focus would commit a half-typed formula. The editor therefore
+  keeps focus and the caret stays where the reference was written.
+- **A reference immediately before the caret is replaced, not appended.** Clicking B2 when the
+  caret sits after `B3` changes `B3` into `B2`, which is what the click means.
+- **Typing ends the pick.** An `input` event clears it, so the next click starts a new reference
+  rather than rewriting the last one.
+- **The pick is shown as a dashed outline, not as a selection.** Moving the real selection while an
+  editor is open would fire `onSelectionChange` for a cell nobody selected and pull the ribbon and
+  the formula bar along with it. `is-point-preview` is a class on the cells, like the fill preview.
+- **Only in the grid, not the formula bar.** The formula bar lives in `GridView` and owns its own
+  focus; pointing from there is a second piece of work, not a variant of this one.
+- **Not on touch.** There is no hover and no mousedown; a tap that picked a cell would fight the
+  tap that edits one.
+
