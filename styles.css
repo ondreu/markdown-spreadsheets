@@ -1274,6 +1274,16 @@
 
 /* -------------------------------------------------- suggestions under the editor */
 
+/* The merge dialog's consequence line: what will happen, in numbers. */
+.mds-modal-summary {
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+}
+
+.mds-modal-summary.is-error {
+	color: var(--text-error);
+}
+
 .mds-suggest {
 	position: absolute;
 	left: var(--mds-suggest-x, 0);

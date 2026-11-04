@@ -401,3 +401,15 @@ the background (decision 28): debounced `vault.on("modify")`, only a note contai
 table whose value really changed, never a note that is open in an editor or a grid, and one chunked
 sweep over recently edited notes after startup. Six unit tests against a fake vault pin those rules;
 nothing in the watcher touches the view, so there is nothing for the browser harness to drive.
+
+## Round eleven: merging a file into a table by a key
+
+A price list or stock export that comes back with the same rows and a few new ones had no path
+except paste-over, which loses the columns the export does not carry. `src/feature/merge.ts` plans a
+merge (key column, header-name column alignment, new columns, opt-in deletion) and applies it; the
+dialog states the outcome in numbers before anything is written (decision 29). Nine unit tests,
+including a note-shaped one that asserts the merged table still serializes to a valid rectangle.
+
+The dialog itself is not covered by the browser harness: its `Modal` shim has no `titleEl` or
+`contentEl`, so opening it there renders nothing. The ribbon button and the command are present and
+checked; the dialog is a manual item on the X13 list.
