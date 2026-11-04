@@ -230,6 +230,7 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 			this.app.vault,
 			() => this.sidecar.settings,
 			(path) => this.isNoteBusy(path),
+			(message) => new Notice(message),
 		);
 		this.registerEvent(
 			this.app.vault.on("modify", (file) => {

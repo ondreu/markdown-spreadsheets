@@ -142,7 +142,7 @@ function wrapCode(s: string): string {
 
 /* --------------------------------------------------------------- tokenizer */
 
-type TokenType = "num" | "str" | "ref" | "name" | "func" | "bracket" | "error" | "op" | "lparen" | "rparen" | "sep" | "colon";
+type TokenType = "num" | "str" | "ref" | "name" | "func" | "bracket" | "error" | "op" | "lparen" | "rparen" | "sep" | "colon" | "bang";
 
 interface Token {
 	type: TokenType;
@@ -188,6 +188,9 @@ function tokenize(src: string): Token[] {
 			let after = i + word.length;
 			while (after < src.length && /\s/.test(src[after])) after++;
 			if (src[after] === "(" && !word.includes("$")) push("func", word);
+			// `Table2!B3`: a word followed by `!` names a table, even though it looks like a cell
+			// reference — `Table2` would otherwise parse as column TABLE, row 2.
+			else if (src[after] === "!") push("name", word);
 			else if (REF_RE.test(word)) push("ref", word);
 			else if (/^[A-Za-z]+$/.test(word)) push("name", word);
 			else throw new FormulaError("#ERROR!", `Not a reference: ${word}`);
@@ -236,6 +239,7 @@ function tokenize(src: string): Token[] {
 		// `;` is the argument separator in comma-decimal locales of Excel.
 		else if (ch === "," || ch === ";") push("sep", ch);
 		else if (ch === ":") push("colon", ch);
+		else if (ch === "!") push("bang", ch);
 		else throw new FormulaError("#ERROR!", `Unexpected "${ch}"`);
 	}
 	return out;
@@ -276,6 +280,9 @@ type Node =
 	| { kind: "str"; value: string }
 	| { kind: "ref"; row: number; col: number }
 	| { kind: "range"; r1: number; c1: number; r2: number; c2: number }
+	/** `Table2!B3` — a cell of another table in the same note, counted from the top. */
+	| { kind: "xref"; table: number; row: number; col: number }
+	| { kind: "xrange"; table: number; r1: number; c1: number; r2: number; c2: number }
 	/** A column of the current row — only in `computeColumn` expressions. */
 	| { kind: "col"; col: number }
 	| { kind: "err"; code: FormulaErrorCode }
@@ -504,6 +511,9 @@ class Parser {
 				// `TRUE` and `FALSE` are constants in Excel, with or without the parentheses.
 				const constant = tok.type === "name" ? tok.text.toUpperCase() : "";
 				if (constant === "TRUE" || constant === "FALSE") return { kind: "call", fn: constant, args: [] };
+				// `Table2!B3` reaches into another table of the same note, which is the only way to
+				// say "that table over there" without storing a name anywhere.
+				if (tok.type === "name" && this.peek()?.type === "bang") return this.crossReference(tok);
 				const col = this.columns === null ? -1 : this.columns(tok.text, tok.type === "bracket");
 				if (col < 0) throw new FormulaError("#NAME?", `Unknown name: ${tok.text}`);
 				return { kind: "col", col };
@@ -518,6 +528,29 @@ class Parser {
 			default:
 				throw new FormulaError("#ERROR!", `Unexpected "${tok.text}"`);
 		}
+	}
+
+	/** `Name!B3` or `Name!B3:C7`; anything but `Table<number>` is refused with a reason. */
+	private crossReference(tok: Token): Node {
+		const table = tableIndexOf(tok.text);
+		if (table < 0) throw new FormulaError("#NAME?", `"${tok.text}" is not a table name — use Table1, Table2, …`);
+		this.next(); // the `!`
+		const first = this.next();
+		if (first.type !== "ref") throw new FormulaError("#ERROR!", `Expected a cell after "${tok.text}!"`);
+		const a = parseRef(first.text);
+		if (this.peek()?.type !== "colon") return { kind: "xref", table, row: a.row, col: a.col };
+		this.next();
+		const endTok = this.next();
+		if (endTok.type !== "ref") throw new FormulaError("#ERROR!", `Expected a cell after "${tok.text}!${first.text}:"`);
+		const b = parseRef(endTok.text);
+		return {
+			kind: "xrange",
+			table,
+			r1: Math.min(a.row, b.row),
+			c1: Math.min(a.col, b.col),
+			r2: Math.max(a.row, b.row),
+			c2: Math.max(a.col, b.col),
+		};
 	}
 
 	private call(tok: Token): Node {
@@ -539,6 +572,14 @@ class Parser {
 		}
 		return { kind: "call", fn: spec.fn, args };
 	}
+}
+
+/** `Table3` is the third table of the note, counted the way a reader counts them. -1 for anything else. */
+function tableIndexOf(word: string): number {
+	const m = /^Table(\d+)$/i.exec(word);
+	if (m === null) return -1;
+	const n = Number.parseInt(m[1], 10);
+	return n >= 1 ? n - 1 : -1;
 }
 
 function errorCodeOf(text: string): FormulaErrorCode {
@@ -564,7 +605,7 @@ type CellValue =
 	/** `message` explains the error to the user; it never reaches the note. */
 	| { t: "err"; code: FormulaErrorCode; message?: string };
 
-interface CellSource {
+export interface CellSource {
 	value(row: number, col: number): CellValue;
 	/** Rows and columns that can hold anything; a range is clipped to them. */
 	rows: number;
@@ -577,11 +618,22 @@ interface EvalContext {
 	row: number;
 	/** How text is read as a number, for criteria such as `">1 200"`. */
 	numberOpts?: NumberParseOptions;
+	/** The other tables of the note, by position: `Table2!B3` reads `tables[1]`. */
+	tables?: ReadonlyArray<CellSource | null>;
 }
 
 function refValue(ctx: EvalContext, row: number, col: number): CellValue {
 	if (row < 0 || col < 0) throw new FormulaError("#REF!", "Reference to a cell that does not exist");
 	return ctx.source.value(row, col);
+}
+
+/** One of the note's other tables, or a `#REF!` that says which number was missing. */
+function tableSource(ctx: EvalContext, table: number): CellSource {
+	const source = ctx.tables?.[table];
+	if (source === undefined || source === null) {
+		throw new FormulaError("#REF!", `This note has no Table ${table + 1}`);
+	}
+	return source;
 }
 
 function classify(raw: string, numberOpts?: NumberParseOptions): CellValue {
@@ -723,7 +775,12 @@ function evalValue(node: Node, ctx: EvalContext): CellValue {
 			return refValue(ctx, node.row, node.col);
 		case "col":
 			return refValue(ctx, ctx.row, node.col);
+		case "xref": {
+			if (node.row < 0 || node.col < 0) throw new FormulaError("#REF!", "Reference to a cell that does not exist");
+			return tableSource(ctx, node.table).value(node.row, node.col);
+		}
 		case "range":
+		case "xrange":
 			throw new FormulaError("#VALUE!", "A range can only be used inside a function");
 		case "neg":
 			return { t: "num", n: -toNumber(evalValue(node.arg, ctx)) };
@@ -799,6 +856,17 @@ function collect(args: Node[], ctx: EvalContext, tolerateErrors: boolean): Colle
 			for (let r = arg.r1; r <= r2; r++) {
 				for (let c = arg.c1; c <= c2; c++) take(ctx.source.value(r, c));
 			}
+		} else if (arg.kind === "xrange") {
+			if (arg.r1 < 0 || arg.c1 < 0) throw new FormulaError("#REF!", "Reference to a cell that does not exist");
+			const source = tableSource(ctx, arg.table);
+			const r2 = Math.min(arg.r2, source.rows - 1);
+			const c2 = Math.min(arg.c2, source.cols - 1);
+			for (let r = arg.r1; r <= r2; r++) {
+				for (let c = arg.c1; c <= c2; c++) take(source.value(r, c));
+			}
+		} else if (arg.kind === "xref") {
+			if (arg.row < 0 || arg.col < 0) throw new FormulaError("#REF!", "Reference to a cell that does not exist");
+			take(tableSource(ctx, arg.table).value(arg.row, arg.col));
 		} else if (arg.kind === "ref") {
 			take(refValue(ctx, arg.row, arg.col));
 		} else if (arg.kind === "col") {
@@ -815,7 +883,7 @@ function collect(args: Node[], ctx: EvalContext, tolerateErrors: boolean): Colle
 function logicalOperands(args: Node[], ctx: EvalContext): boolean[] {
 	const out: boolean[] = [];
 	for (const arg of args) {
-		if (arg.kind === "range" || arg.kind === "ref" || arg.kind === "col") {
+		if (arg.kind === "range" || arg.kind === "ref" || arg.kind === "col" || arg.kind === "xrange" || arg.kind === "xref") {
 			for (const v of valuesOf(arg, ctx)) {
 				if (v.t === "num") out.push(v.n !== 0);
 				else if (v.t === "bool") out.push(v.b);
@@ -828,6 +896,23 @@ function logicalOperands(args: Node[], ctx: EvalContext): boolean[] {
 	return out;
 }
 
+/** A model as a formula source, so a workbook pass can read every table of a note. */
+export function sourceOf(model: GridModel, numberOpts?: NumberParseOptions): CellSource {
+	let rows = model.usedRange.rows;
+	let cols = model.usedRange.cols;
+	for (const [key, cell] of model.cells) {
+		const { row, col } = parseAddrKey(key);
+		rows = Math.max(rows, row + 1);
+		cols = Math.max(cols, col + 1);
+		void cell;
+	}
+	return {
+		rows,
+		cols,
+		value: (row, col) => classify(getRaw(model, row, col), numberOpts),
+	};
+}
+
 interface Rect {
 	r1: number;
 	c1: number;
@@ -835,26 +920,43 @@ interface Rect {
 	c2: number;
 }
 
-/** A range argument, clipped to what the table can hold; a single reference is a 1×1 range. */
-function rectOf(node: Node, ctx: EvalContext): Rect {
+/** A range and the table it lives in — the same table, unless the formula names another one. */
+interface RectRef {
+	rect: Rect;
+	source: CellSource;
+}
+
+/** A range argument, clipped to what its table can hold; a single reference is a 1×1 range. */
+function rectOf(node: Node, ctx: EvalContext): RectRef {
+	const clip = (r1: number, c1: number, r2: number, c2: number, source: CellSource): RectRef => ({
+		rect: {
+			r1,
+			c1,
+			r2: Math.min(r2, Math.max(source.rows - 1, r1)),
+			c2: Math.min(c2, Math.max(source.cols - 1, c1)),
+		},
+		source,
+	});
 	if (node.kind === "range") {
 		if (node.r1 < 0 || node.c1 < 0) throw new FormulaError("#REF!", "Reference to a cell that does not exist");
-		return {
-			r1: node.r1,
-			c1: node.c1,
-			r2: Math.min(node.r2, Math.max(ctx.source.rows - 1, node.r1)),
-			c2: Math.min(node.c2, Math.max(ctx.source.cols - 1, node.c1)),
-		};
+		return clip(node.r1, node.c1, node.r2, node.c2, ctx.source);
 	}
-	if (node.kind === "ref") return { r1: node.row, c1: node.col, r2: node.row, c2: node.col };
-	if (node.kind === "col") return { r1: ctx.row, c1: node.col, r2: ctx.row, c2: node.col };
+	if (node.kind === "xrange") {
+		if (node.r1 < 0 || node.c1 < 0) throw new FormulaError("#REF!", "Reference to a cell that does not exist");
+		return clip(node.r1, node.c1, node.r2, node.c2, tableSource(ctx, node.table));
+	}
+	if (node.kind === "ref") return { rect: { r1: node.row, c1: node.col, r2: node.row, c2: node.col }, source: ctx.source };
+	if (node.kind === "xref") {
+		return { rect: { r1: node.row, c1: node.col, r2: node.row, c2: node.col }, source: tableSource(ctx, node.table) };
+	}
+	if (node.kind === "col") return { rect: { r1: ctx.row, c1: node.col, r2: ctx.row, c2: node.col }, source: ctx.source };
 	throw new FormulaError("#VALUE!", "A range is expected here");
 }
 
 function* valuesOf(node: Node, ctx: EvalContext): Generator<CellValue> {
-	const rect = rectOf(node, ctx);
+	const { rect, source } = rectOf(node, ctx);
 	for (let r = rect.r1; r <= rect.r2; r++) {
-		for (let c = rect.c1; c <= rect.c2; c++) yield ctx.source.value(r, c);
+		for (let c = rect.c1; c <= rect.c2; c++) yield source.value(r, c);
 	}
 }
 
@@ -935,16 +1037,17 @@ function conditionalAggregate(fn: FunctionName, args: Node[], ctx: EvalContext):
 	if (plural && args.length % 2 !== remainder) {
 		throw new FormulaError("#VALUE!", `${fn} needs a value range and a condition for every range`);
 	}
-	const pairs: Array<{ rect: Rect; test: (v: CellValue) => boolean }> = [];
-	let sums: Rect | null = null;
+	const pairs: Array<{ rect: Rect; source: CellSource; test: (v: CellValue) => boolean }> = [];
+	let sums: RectRef | null = null;
 	if (plural) {
 		if (!counting) sums = rectOf(args[0], ctx);
 		for (let i = counting ? 0 : 1; i + 1 < args.length; i += 2) {
-			pairs.push({ rect: rectOf(args[i], ctx), test: predicateFor(evalValue(args[i + 1], ctx), ctx.numberOpts) });
+			const pair = rectOf(args[i], ctx);
+			pairs.push({ ...pair, test: predicateFor(evalValue(args[i + 1], ctx), ctx.numberOpts) });
 		}
 	} else {
 		const criteria = rectOf(args[0], ctx);
-		pairs.push({ rect: criteria, test: predicateFor(evalValue(args[1], ctx), ctx.numberOpts) });
+		pairs.push({ ...criteria, test: predicateFor(evalValue(args[1], ctx), ctx.numberOpts) });
 		// Without a third argument Excel sums the criteria range itself.
 		if (!counting) sums = args.length > 2 ? rectOf(args[2], ctx) : criteria;
 	}
@@ -955,18 +1058,18 @@ function conditionalAggregate(fn: FunctionName, args: Node[], ctx: EvalContext):
 	const nums: number[] = [];
 	for (let dr = 0; dr < rows; dr++) {
 		for (let dc = 0; dc < cols; dc++) {
-			const hit = pairs.every(({ rect, test }) => {
+			const hit = pairs.every(({ rect, source, test }) => {
 				const r = rect.r1 + dr;
 				const c = rect.c1 + dc;
-				return test(r <= rect.r2 && c <= rect.c2 ? ctx.source.value(r, c) : { t: "empty" });
+				return test(r <= rect.r2 && c <= rect.c2 ? source.value(r, c) : { t: "empty" });
 			});
 			if (!hit) continue;
 			matched++;
 			if (sums === null) continue;
-			const r = sums.r1 + dr;
-			const c = sums.c1 + dc;
-			if (r > sums.r2 || c > sums.c2) continue;
-			const v = ctx.source.value(r, c);
+			const r = sums.rect.r1 + dr;
+			const c = sums.rect.c1 + dc;
+			if (r > sums.rect.r2 || c > sums.rect.c2) continue;
+			const v = sums.source.value(r, c);
 			if (v.t === "num") nums.push(v.n);
 			else if (v.t === "err") throw new FormulaError(v.code, v.message ?? `A referenced cell shows ${v.code}`);
 		}
@@ -1100,6 +1203,8 @@ export interface RecalcOptions {
 	numberOpts?: NumberParseOptions;
 	/** Turns a computed value into the cell's display text. */
 	format: (value: number) => string;
+	/** The note's other tables, by position, so `Table2!B3` can be read. */
+	tables?: ReadonlyArray<CellSource | null>;
 }
 
 export interface FormulaIssue {
@@ -1183,7 +1288,7 @@ export function recalculate(model: GridModel, opts: RecalcOptions): RecalcResult
 	const queue = all.filter((e) => pending.get(e.key) === 0);
 	for (let qi = 0; qi < queue.length; qi++) {
 		const entry = queue[qi];
-		computed.set(entry.key, evaluateEntry(entry, source, opts.numberOpts));
+		computed.set(entry.key, evaluateEntry(entry, source, opts));
 		for (const dependent of dependents.get(entry.key) ?? []) {
 			const left = (pending.get(dependent) ?? 0) - 1;
 			pending.set(dependent, left);
@@ -1228,13 +1333,13 @@ export function recalculate(model: GridModel, opts: RecalcOptions): RecalcResult
 	return result;
 }
 
-function evaluateEntry(entry: FormulaEntry, source: CellSource, numberOpts?: NumberParseOptions): CellValue {
+function evaluateEntry(entry: FormulaEntry, source: CellSource, opts: RecalcOptions): CellValue {
 	if (entry.ast === null) {
 		const problem = entry.parseError ?? new FormulaError("#ERROR!", "The formula cannot be read");
 		return { t: "err", code: problem.code, message: problem.message };
 	}
 	try {
-		return evalValue(entry.ast, { source, row: entry.row, numberOpts });
+		return evalValue(entry.ast, { source, row: entry.row, numberOpts: opts.numberOpts, tables: opts.tables });
 	} catch (e) {
 		const problem = asFormulaError(e);
 		return { t: "err", code: problem.code, message: problem.message };
@@ -1259,6 +1364,10 @@ function formulaDeps(node: Node, formulas: FormulaEntry[]): Set<CellAddr> {
 				for (const f of formulas) {
 					if (f.row >= n.r1 && f.row <= n.r2 && f.col >= n.c1 && f.col <= n.c2) out.add(f.key);
 				}
+				break;
+			// Another table's cells are ordered by the workbook, not by this table's sort.
+			case "xref":
+			case "xrange":
 				break;
 			case "neg":
 				visit(n.arg);
@@ -1385,6 +1494,8 @@ function rewriteRefs(expr: string, map: (a: RefParts, b: RefParts) => [RefParts,
 	for (let i = 0; i < tokens.length; i++) {
 		const tok = tokens[i];
 		if (tok.type !== "ref") continue;
+		// `Table2!B3` is a cell of another table: moving rows around here does not move it.
+		if (i > 0 && tokens[i - 1].type === "bang") continue;
 		const isRange = tokens[i + 1]?.type === "colon" && tokens[i + 2]?.type === "ref";
 		const endTok = isRange ? tokens[i + 2] : tok;
 		const a = parseRef(tok.text);
@@ -1412,6 +1523,8 @@ export function toExcelFormula(expr: string): string | null {
 	} catch {
 		return null;
 	}
+	// `Table2!B3` has no Excel equivalent: a workbook reference needs a sheet name we do not have.
+	if (tokens.some((tok) => tok.type === "bang")) return null;
 	return tokens
 		.map((tok) => {
 			switch (tok.type) {

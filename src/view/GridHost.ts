@@ -82,6 +82,12 @@ export interface GridHostCallbacks {
 	/** The in-cell editor's text changed, so the formula bar can mirror it. */
 	onEditorInput?(value: string): void;
 	/**
+	 * Recalculates the model with the note's other tables in scope. Returns how many cells changed.
+	 * The view owns the note, so it is the one that can build a workbook; without this the host
+	 * calculates its own table alone.
+	 */
+	onRecalculate?(model: GridModel): number;
+	/**
 	 * A model change is about to happen. Pending input held outside the grid — the formula bar —
 	 * has to land first, in the cell it was typed for, before rows move under it.
 	 */
@@ -362,6 +368,17 @@ export class GridHost {
 	/* ------------------------------------------------------------- formulas */
 
 	/** How a computed value is written: whole numbers without decimals, others to the table's places. */
+	/** The cell formatter, for a view that has to calculate other tables of the note too. */
+	formatValueFor(value: number): string {
+		return this.formatValue(value);
+	}
+
+	/** Recalculates through the view when it can build a workbook, alone otherwise. */
+	private recalc(model: GridModel): number {
+		if (this.ctx.callbacks.onRecalculate) return this.ctx.callbacks.onRecalculate(model);
+		return recalculate(model, { numberOpts: this.numberOpts(), format: this.formatValue }).changed.length;
+	}
+
 	private formatValue = (value: number): string =>
 		Number.isInteger(value)
 			? formatNumber(value, 0, this.ctx.settings.numberLocale)
@@ -379,12 +396,12 @@ export class GridHost {
 	recalculateOnOpen(): void {
 		if (!this.hasFormulas()) return;
 		const probe = cloneModel(this.model);
-		const result = recalculate(probe, { numberOpts: this.numberOpts(), format: this.formatValue });
-		if (result.changed.length === 0) return;
+		const changed = this.recalc(probe);
+		if (changed === 0) return;
 		this.mutate("Recalculate formulas", () => {
-			recalculate(this.model, { numberOpts: this.numberOpts(), format: this.formatValue });
+			this.recalc(this.model);
 		});
-		this.ctx.callbacks.onNotice(`Recalculated ${result.changed.length} ${result.changed.length === 1 ? "formula" : "formulas"} whose values were out of date.`);
+		this.ctx.callbacks.onNotice(`Recalculated ${changed} ${changed === 1 ? "formula" : "formulas"} whose values were out of date.`);
 	}
 
 	/** Visual hint for a fresh restore: the cells that differ from what was there before. */
@@ -1353,8 +1370,7 @@ export class GridHost {
 		fn();
 		let mode = repaint;
 		if (this.hasFormulas()) {
-			const result = recalculate(this.model, { numberOpts: this.numberOpts(), format: this.formatValue });
-			if (result.changed.length > 0) mode = "all";
+			if (this.recalc(this.model) > 0) mode = "all";
 		}
 		recomputeUsedRange(this.model);
 		for (const el of this.changedEls) el.removeClass("is-changed");

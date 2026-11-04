@@ -485,3 +485,30 @@ puts them.
   explicitly — Obsidian's `button` rule fixes a 30 px height and centred text, which turns a tab
   into a pill.
 
+## 31. A note is a workbook; its tables are numbered from the top
+
+**Design:** nothing. The first seven releases treat a table as the unit, and a note with several of
+them as several unrelated tables.
+
+**Built:** `Table2!B3` and `Table2!C2:C9` read another table of the same note, and
+`recalculateWorkbook` runs the tables in document order until nothing changes (decision: four passes,
+which settles any realistic chain).
+
+- **A number, not a name.** The alternative was the heading above the table, and it fails the way this
+  vault actually looks: many tables have no heading, and several share one. A number always exists and
+  can never be ambiguous. The cost is that inserting a table renumbers the ones below it, which is the
+  deal accepted in exchange.
+- **The plugin follows what it can see.** `FormulaWatcher` remembers the tables of each note (headers
+  and height, in memory, nothing stored) and, when one appears or disappears above another, rewrites
+  `TableN!` in that note's formulas through `shiftTableRefs`. A note open in an editor is not rewritten
+  — that would race the caret — so the plugin says what happened and where.
+- **Nothing is written into the note but the numbers.** A reference is text inside the formula comment,
+  so a note opened elsewhere still reads `37 140` and, beside it, `Table2!B3` as prose.
+- **A reference to a missing table is `#REF!` with the number in the message**, and `Budget!B2` — a
+  name that is not a table number — is `#NAME?` that says to use `Table1, Table2, …`.
+- **Cross-table dependencies are ordered by the workbook, not by the cell sort**, because the sort is
+  per table. Inside one table a cycle still shows `#CYCLE!`; a cycle that runs through two tables
+  settles on whatever the last pass wrote, and that limit is written down rather than hidden.
+- **The XLSX export carries the value only.** `Table2!B3` has no Excel equivalent: a sheet-qualified
+  reference needs a sheet name the note does not have.
+
