@@ -108,7 +108,8 @@ export class GridView extends ItemView {
 	hoverPopover: HoverPopover | null = null;
 	/** The region text as the note last had it, for the save preview. */
 	private noteRegionText = "";
-	private tableSwitchEl!: HTMLSelectElement;
+	/** The tabs under the grid: one per table in the note, as a spreadsheet has sheets. */
+	private sheetsEl!: HTMLElement;
 	/** The cell the formula bar is editing, set on the first keystroke there. */
 	private formulaTarget: { row: number; col: number } | null = null;
 
@@ -174,6 +175,10 @@ export class GridView extends ItemView {
 		this.buildFormulaBar();
 		this.bannerEl = this.contentEl.createDiv({ cls: "mds-banner mds-hidden" });
 		this.bodyEl = this.contentEl.createDiv({ cls: "mds-body" });
+		this.sheetsEl = this.contentEl.createDiv({
+			cls: "mds-sheets mds-hidden",
+			attr: { role: "tablist", "aria-label": "Tables in this note" },
+		});
 		if (this.touch) this.touchBar.mount(this.contentEl);
 		this.statusBar.mount(
 			this.contentEl,
@@ -315,7 +320,7 @@ export class GridView extends ItemView {
 		host?.recalculateOnOpen();
 		this.refreshRibbon();
 		this.refreshStatus();
-		void this.refreshTableSwitch();
+		void this.refreshSheets();
 
 		const ragged = raggedRows(region.text);
 		if (ragged.length > 0) {
@@ -694,8 +699,6 @@ export class GridView extends ItemView {
 
 	private buildFormulaBar(): void {
 		const bar = this.contentEl.createDiv({ cls: "mds-formulabar" });
-		this.tableSwitchEl = bar.createEl("select", { cls: "dropdown mds-table-switch mds-hidden", attr: { "aria-label": "Switch to another table of this note" } });
-		this.tableSwitchEl.addEventListener("change", () => void this.switchTable(Number.parseInt(this.tableSwitchEl.value, 10)));
 		this.formulaAddressEl = bar.createDiv({ cls: "mds-formula-address", text: "A1" });
 		setIconSafe(bar.createDiv({ cls: "mds-formula-icon", attr: { "aria-hidden": "true" } }), "formula");
 		this.formulaInputEl = bar.createEl("input", {
@@ -755,18 +758,39 @@ export class GridView extends ItemView {
 		this.formulaInputEl.value = this.host.editTextAt(active.row, active.col);
 	}
 
-	/** The other tables of this note, to jump between them without going back to the note. */
-	private async refreshTableSwitch(): Promise<void> {
-		const select = this.tableSwitchEl;
-		if (!this.file || !select) return;
+	/**
+	 * The tabs under the grid: the note's other tables, as a spreadsheet has sheets.
+	 *
+	 * The label is the table's own first headers, which is what a person recognises it by — a
+	 * "Table 2" says nothing. The index stays in the tooltip, because it is what the references and
+	 * the picker use.
+	 */
+	private async refreshSheets(): Promise<void> {
+		const el = this.sheetsEl;
+		if (!el || !this.file) return;
 		const tables = scanTables(await this.app.vault.cachedRead(this.file));
-		select.empty();
-		select.toggleClass("mds-hidden", tables.length < 2);
+		el.empty();
+		el.toggleClass("mds-hidden", tables.length < 2);
 		for (const region of tables) {
-			const head = region.headerCells.slice(0, 3).map((h) => plainText(h)).join(", ");
-			select.createEl("option", { text: `Table ${region.index + 1}: ${head}`, attr: { value: String(region.index) } });
+			const head = region.headerCells
+				.slice(0, 2)
+				.map((h) => plainText(h).trim())
+				.filter((h) => h !== "")
+				.join(", ");
+			const active = this.anchor?.tableIndex === region.index;
+			const tab = el.createEl("button", {
+				cls: "mds-sheet",
+				attr: {
+					type: "button",
+					role: "tab",
+					"aria-selected": String(active),
+					title: `Table ${region.index + 1}${head === "" ? "" : `: ${head}`}`,
+				},
+			});
+			tab.toggleClass("is-active", active);
+			tab.createSpan({ cls: "mds-sheet-name", text: head === "" ? `Table ${region.index + 1}` : head });
+			tab.addEventListener("click", () => void this.switchTable(region.index));
 		}
-		if (this.anchor) select.value = String(this.anchor.tableIndex);
 	}
 
 	private async switchTable(index: number): Promise<void> {
@@ -776,13 +800,14 @@ export class GridView extends ItemView {
 		if (this.dirty) await this.save(true);
 		if (this.dirty) {
 			new Notice("Save or discard the changes to this table first.");
-			if (this.tableSwitchEl) this.tableSwitchEl.value = String(this.anchor.tableIndex);
+			void this.refreshSheets();
 			return;
 		}
 		this.host?.captureView();
 		this.persistLayout();
 		const region = scanTables(await this.app.vault.cachedRead(this.file))[index];
 		if (region) await this.adoptRegion(region, 0);
+		void this.refreshSheets();
 	}
 
 	/* ---------------------------------------------------------------- status */

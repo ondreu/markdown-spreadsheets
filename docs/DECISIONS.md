@@ -463,3 +463,25 @@ consequences in numbers.
   new columns with every change of a setting. The merge is one undo step in the grid.
 - **A file with no header, no data or no key column is refused with the reason**, not merged badly.
 
+## 30. The tables of a note are tabs under the grid
+
+**Design:** §11 puts a picker and a switch into the formula bar, and the first release shipped the
+switch as a `<select>` there — a dropdown labelled "Table 2: Item, Owner, Due".
+
+**Built:** the dropdown is gone; the tables are tabs at the bottom of the view, where a spreadsheet
+puts them.
+
+- **The label is the table's own first headers.** "Table 2" identifies a table only to whoever
+  counted the tables; `Item, Qty` is what the person recognises. The index survives in the tooltip,
+  because that is what the anchor and the picker use.
+- **Nothing is stored.** The strip is rebuilt from the note every time it is needed — `scanTables`
+  on the current text. There is no list of tab names, no order to keep in sync, and deleting a table
+  in the note removes its tab. That is the whole point of a note-first design.
+- **One table means no strip.** A single-table note should not pay for a feature it cannot use.
+- **Switching is the existing path.** A tab calls `switchTable`, which is what the dropdown called:
+  commit, save or refuse, then adopt the region. The only change is who asks.
+- **Buttons, not a native tab widget.** They are real `<button role="tab">` elements with an
+  `aria-selected` state, so the strip reads to a screen reader, and their geometry is reset
+  explicitly — Obsidian's `button` rule fixes a 30 px height and centred text, which turns a tab
+  into a pill.
+

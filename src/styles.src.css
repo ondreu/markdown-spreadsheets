@@ -1273,6 +1273,47 @@
 
 /* -------------------------------------------------- suggestions under the editor */
 
+/* The tables of the note, as tabs under the grid — a spreadsheet's sheets. */
+.mds-sheets {
+	display: flex;
+	flex: 0 0 auto;
+	gap: 2px;
+	padding: 0 10px;
+	overflow-x: auto;
+	border-top: 1px solid var(--background-modifier-border);
+	background-color: var(--background-secondary);
+	scrollbar-width: thin;
+}
+
+.mds-sheet {
+	height: auto;
+	min-height: 0;
+	flex: 0 0 auto;
+	padding: 8px 14px;
+	border: none;
+	border-bottom: 2px solid transparent;
+	border-radius: 0;
+	background: transparent;
+	box-shadow: none;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	white-space: nowrap;
+	text-align: left;
+	cursor: pointer;
+}
+
+.mds-sheet:hover {
+	color: var(--text-normal);
+	background-color: var(--background-modifier-hover);
+}
+
+.mds-sheet.is-active {
+	color: var(--text-normal);
+	font-weight: var(--font-medium);
+	border-bottom-color: var(--interactive-accent);
+	background-color: var(--background-primary);
+}
+
 /* The merge dialog's consequence line: what will happen, in numbers. */
 .mds-modal-summary {
 	font-size: var(--font-ui-small);
@@ -1461,14 +1502,6 @@
 
 /* ------------------------------------------------------- small extras */
 
-.mds-table-switch {
-	flex: 0 1 220px;
-	min-width: 0;
-	max-width: 220px;
-	height: 26px;
-	font-size: var(--font-ui-smaller);
-}
-
 .mds-status-aggregate {
 	display: inline-flex;
 	gap: 12px;
@@ -1596,10 +1629,6 @@
 
 .mds-touch .mds-formula-icon {
 	display: none;
-}
-
-.mds-touch .mds-table-switch {
-	max-width: 35%;
 }
 
 .mds-touch .mds-statusbar {

@@ -413,3 +413,15 @@ including a note-shaped one that asserts the merged table still serializes to a 
 The dialog itself is not covered by the browser harness: its `Modal` shim has no `titleEl` or
 `contentEl`, so opening it there renders nothing. The ribbon button and the command are present and
 checked; the dialog is a manual item on the X13 list.
+
+## Round twelve: the tables as tabs
+
+The formula bar's `<select>` is gone; the note's tables are tabs under the grid, labelled by each
+table's own first headers (decision 30). Nothing is stored: the strip is rebuilt from the note by
+`scanTables`, so a table added or deleted in the source appears or disappears without a migration,
+and a single-table note shows no strip.
+
+Seven checks in headless Chromium against the real `GridView`: no strip for one table, one tab per
+table, labels from the headers, the open table active, a click switching the grid (and the active
+tab with it). The screenshot harness gained `setNote`, because the shim's vault always read one note
+and a tab strip needs two tables to exist at all.
