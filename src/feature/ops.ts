@@ -216,7 +216,7 @@ export function moveCol(model: GridModel, layout: TableLayout, from: number, to:
 
 /* -------------------------------------------------------------------- format */
 
-export type InlineFormat = "bold" | "italic" | "code" | "strikethrough";
+export type InlineFormat = "bold" | "italic" | "code" | "strikethrough" | "highlight";
 
 /** The delimiters each format is written with. The first one is the default for adding it. */
 const FORMAT_TOKENS: Record<InlineFormat, readonly string[]> = {
@@ -224,10 +224,11 @@ const FORMAT_TOKENS: Record<InlineFormat, readonly string[]> = {
 	italic: ["*", "_"],
 	code: ["`"],
 	strikethrough: ["~~"],
+	highlight: ["=="],
 };
 
 /** Longest first, so `**` is never read as two italics. Code is handled on its own. */
-const PEEL_ORDER = ["~~", "**", "__", "*", "_"] as const;
+const PEEL_ORDER = ["==", "~~", "**", "__", "*", "_"] as const;
 
 export interface InlineLayers {
 	/** Outermost first. A code layer is recorded as a single backtick whatever its fence. */
@@ -325,6 +326,7 @@ function backtickRuns(s: string): number[] {
 function innerAllows(inner: string, token: string): boolean {
 	const ch = token[0];
 	if (ch === "~") return !inner.includes("~~");
+	if (ch === "=") return !inner.includes("==");
 	let i = 0;
 	while (i < inner.length) {
 		if (inner[i] !== ch) {

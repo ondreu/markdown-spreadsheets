@@ -7,6 +7,7 @@ import type { ScoredRegion } from "../file/AnchorResolver";
 import type { BackupEntry, BackupSource } from "../store/Sidecar";
 import { CALC_FUNCTIONS, applyFunction, type Aggregate, type CalcFunction } from "../feature/QuickCalc";
 import { formatResult } from "../feature/QuickCalc";
+import { type ConditionalFormat, type ConditionalOp, type ConditionalRule } from "../feature/conditional";
 import type { CsvOptions } from "../feature/exportCsv";
 import type { FindOptions } from "../feature/ops";
 import type { ColumnFilter } from "../feature/transform";
@@ -725,3 +726,120 @@ export class DiffModal extends Modal {
 		this.contentEl.empty();
 	}
 }
+
+/**
+ * Conditional formatting for the selection (decision 37).
+ *
+ * One rule at a time, because that is what a comment in a cell can say: an operator, a value and one
+ * of the five Markdown formats. The range is the selection the dialog was opened on, shown so it is
+ * clear what the comment will govern — a range in the first cell, nothing for a single cell.
+ */
+export class ConditionalFormatModal extends Modal {
+	private op: ConditionalOp = ">";
+	private value = "";
+	private format: ConditionalFormat = "bold";
+
+	constructor(
+		app: App,
+		private readonly opts: {
+			/** `F2:F9`, or `F2` for one cell — the range the comment will govern. */
+			rangeLabel: string;
+			/** Rules already covering the selection, for the "remove" button and the preview. */
+			existing: ConditionalRule[];
+			onApply(rule: Omit<ConditionalRule, "row" | "col">): void;
+			onClear(): void;
+		},
+	) {
+		super(app);
+		const first = opts.existing[0];
+		if (first !== undefined) {
+			this.op = first.op;
+			this.value = first.value;
+			this.format = first.format;
+		}
+	}
+
+	override onOpen(): void {
+		this.titleEl.setText("Conditional formatting");
+		new Setting(this.contentEl)
+			.setName("Range")
+			.setDesc(`The selection this rule covers: ${this.opts.rangeLabel}. The rule itself is a comment in its first cell.`);
+
+		new Setting(this.contentEl).setName("Condition").addDropdown((d) => {
+			for (const op of [">", ">=", "<", "<=", "=", "<>", "contains"] as ConditionalOp[]) {
+				d.addOption(op, OP_LABELS[op]);
+			}
+			d.setValue(this.op).onChange((value) => {
+				this.op = value as ConditionalOp;
+			});
+		});
+
+		new Setting(this.contentEl)
+			.setName("Value")
+			.setDesc("A number for the comparisons, text for = <> and contains.")
+			.addText((t) =>
+				t
+					.setPlaceholder("1000")
+					.setValue(this.value)
+					.onChange((value) => {
+						this.value = value;
+					}),
+			);
+
+		new Setting(this.contentEl).setName("Format").addDropdown((d) => {
+			for (const format of ["bold", "italic", "strike", "code", "highlight"] as ConditionalFormat[]) {
+				d.addOption(format, FORMAT_LABELS[format]);
+			}
+			d.setValue(this.format).onChange((value) => {
+				this.format = value as ConditionalFormat;
+			});
+		});
+
+		if (this.opts.existing.length > 0) {
+			new Setting(this.contentEl)
+				.setName("Rules on this selection")
+				.setDesc(this.opts.existing.map((rule) => `${rule.op} ${rule.value} → ${FORMAT_LABELS[rule.format]}`).join(", "))
+				.addButton((b) =>
+					b.setButtonText("Remove").onClick(() => {
+						this.close();
+						this.opts.onClear();
+					}),
+				);
+		}
+
+		new Setting(this.contentEl)
+			.addButton((b) =>
+				b
+					.setButtonText("Apply")
+					.setCta()
+					.onClick(() => {
+						if (this.value.trim() === "" && this.op !== "=" && this.op !== "<>") return;
+						this.close();
+						this.opts.onApply({ r1: 0, c1: 0, r2: 0, c2: 0, op: this.op, value: this.value.trim(), format: this.format });
+					}),
+			)
+			.addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()));
+	}
+
+	override onClose(): void {
+		this.contentEl.empty();
+	}
+}
+
+const OP_LABELS: Record<ConditionalOp, string> = {
+	">": "is greater than",
+	">=": "is at least",
+	"<": "is less than",
+	"<=": "is at most",
+	"=": "equals",
+	"<>": "is not",
+	contains: "contains",
+};
+
+const FORMAT_LABELS: Record<ConditionalFormat, string> = {
+	bold: "Bold",
+	italic: "Italic",
+	strike: "Strikethrough",
+	code: "Code",
+	highlight: "Highlight",
+};

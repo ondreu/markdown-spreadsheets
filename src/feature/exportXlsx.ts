@@ -1,4 +1,5 @@
 import { colName } from "../model/address";
+import { allRules, type ConditionalFormat, type ConditionalRule } from "./conditional";
 import { getRaw, type Align, type GridModel } from "../model/GridModel";
 import { parseNumber, type NumberParseOptions } from "../model/numbers";
 import type { TableLayout } from "../store/Sidecar";
@@ -17,6 +18,8 @@ export interface XlsxOptions {
 	numberOpts?: NumberParseOptions;
 	layout?: TableLayout;
 	defaultColWidth: number;
+	/** Carry the note's conditional formatting into the workbook. Off with the feature switch. */
+	conditional?: boolean;
 }
 
 /** One tab of the exported workbook: a table of the note, and the name the note gives it. */
@@ -39,6 +42,7 @@ export const DEFAULT_XLSX_OPTIONS: Omit<XlsxOptions, "sheetName"> = {
 	detectNumbers: true,
 	styleHeader: true,
 	defaultColWidth: 120,
+	conditional: true,
 };
 
 const XML_HEADER = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
@@ -95,7 +99,7 @@ function alignmentIndex(align: Align): number {
  * cell formats cover everything: three alignments × bold/regular × wrap/no-wrap. D1 rules out
  * colours and merges, which is what keeps this table small enough to enumerate.
  */
-function stylesXml(): string {
+function stylesXml(dxfs: readonly ConditionalFormat[] = []): string {
 	const alignments = ["general", "center", "right"];
 	const xfs: string[] = [];
 	for (const wrap of [0, 1]) {
@@ -112,7 +116,50 @@ function stylesXml(): string {
 			}
 		}
 	}
-	return `${XML_HEADER}<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="${xfs.length}">${xfs.join("")}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
+	return `${XML_HEADER}<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="${xfs.length}">${xfs.join("")}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>${dxfsXml(dxfs)}</styleSheet>`;
+}
+
+/**
+ * A differential format per conditional-format kind, the way Excel stores "make it bold when".
+ *
+ * `dxfs` holds only the difference from the cell's own format, which is why a bold rule is one empty
+ * `<b/>` and nothing else: whatever the cell already looks like is kept.
+ */
+function dxfXml(format: ConditionalFormat): string {
+	switch (format) {
+		case "bold":
+			return "<dxf><font><b/></font></dxf>";
+		case "italic":
+			return "<dxf><font><i/></font></dxf>";
+		case "strike":
+			return "<dxf><font><strike/></font></dxf>";
+		// Code has no differential flag: the nearest thing Excel can express is the monospace face.
+		case "code":
+			return '<dxf><font><name val="Consolas"/></font></dxf>';
+		default:
+			return '<dxf><fill><patternFill patternType="solid"><bgColor rgb="FFFFFF00"/></patternFill></fill></dxf>';
+	}
+}
+
+function dxfsXml(dxfs: readonly ConditionalFormat[]): string {
+	if (dxfs.length === 0) return "";
+	return `<dxfs count="${dxfs.length}">${dxfs.map(dxfXml).join("")}</dxfs>`;
+}
+
+/** The Excel expression a rule becomes, written relative to the range's first cell. */
+export function ruleFormula(rule: Pick<ConditionalRule, "r1" | "c1" | "op" | "value">): string {
+	const ref = `${colName(rule.c1)}${rule.r1 + 1}`;
+	const quoted = `"${rule.value.replace(/"/g, '""')}"`;
+	switch (rule.op) {
+		case "contains":
+			return `ISNUMBER(SEARCH(${quoted},${ref}))`;
+		case "=":
+			return `${ref}=${quoted}`;
+		case "<>":
+			return `${ref}<>${quoted}`;
+		default:
+			return `${ref}${rule.op}${rule.value}`;
+	}
 }
 
 export function styleIndex(align: Align, bold: boolean, wrap: boolean): number {
@@ -144,6 +191,7 @@ function sheetXml(
 	sheet: XlsxSheet,
 	options: XlsxOptions,
 	sheets: ReadonlyMap<string, string>,
+	dxfIds: ReadonlyMap<ConditionalFormat, number>,
 ): { xml: string; hasFormula: boolean } {
 	const model = sheet.model;
 	const rows = Math.max(model.usedRange.rows, 1);
@@ -198,8 +246,26 @@ function sheetXml(
 			? `<pane xSplit="${frozenCols}" ySplit="${frozenRows}" topLeftCell="${colName(frozenCols)}${frozenRows + 1}" activePane="bottomRight" state="frozen"/>`
 			: "";
 
+	// The rules travel as Excel's own conditional formatting, so they keep working in the file
+	// instead of arriving as the formatting they happened to produce today.
+	const cf: string[] = [];
+	if (options.conditional !== false) {
+		let priority = 0;
+		for (const rule of allRules(model)) {
+			const dxfId = dxfIds.get(rule.format);
+			if (dxfId === undefined) continue;
+			priority++;
+			const first = `${colName(rule.c1)}${rule.r1 + 1}`;
+			const last = `${colName(rule.c2)}${rule.r2 + 1}`;
+			const sqref = first === last ? first : `${first}:${last}`;
+			cf.push(
+				`<conditionalFormatting sqref="${sqref}"><cfRule type="expression" dxfId="${dxfId}" priority="${priority}"><formula>${xmlEscape(ruleFormula(rule))}</formula></cfRule></conditionalFormatting>`,
+			);
+		}
+	}
+
 	const dimension = `A1:${colName(cols - 1)}${rows}`;
-	const xml = `${XML_HEADER}<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="${dimension}"/><sheetViews><sheetView workbookViewId="0">${pane}</sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/><cols>${colDefs.join("")}</cols><sheetData>${body.join("")}</sheetData></worksheet>`;
+	const xml = `${XML_HEADER}<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="${dimension}"/><sheetViews><sheetView workbookViewId="0">${pane}</sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/><cols>${colDefs.join("")}</cols><sheetData>${body.join("")}</sheetData>${cf.join("")}</worksheet>`;
 	return { xml, hasFormula };
 }
 
@@ -249,7 +315,14 @@ export function buildWorkbookXlsx(
 	sheets.forEach((sheet, index) => {
 		if (sheet.ref !== undefined) sheetOf.set(sheet.ref.toLowerCase(), names[index]);
 	});
-	const parts = sheets.map((sheet, index) => sheetXml({ ...sheet }, { ...options, sheetName: names[index], layout: undefined }, sheetOf));
+	const dxfFormats: ConditionalFormat[] = [];
+	if (options.conditional !== false) {
+		for (const sheet of sheets) for (const rule of allRules(sheet.model)) if (!dxfFormats.includes(rule.format)) dxfFormats.push(rule.format);
+	}
+	const dxfIds = new Map<ConditionalFormat, number>(dxfFormats.map((format, index) => [format, index]));
+	const parts = sheets.map((sheet, index) =>
+		sheetXml({ ...sheet }, { ...options, sheetName: names[index], layout: undefined }, sheetOf, dxfIds),
+	);
 	// Only with formulas, so a formula-free export stays byte-identical to what it always was.
 	const calcPr = parts.some((part) => part.hasFormula) ? '<calcPr fullCalcOnLoad="1"/>' : "";
 
@@ -286,7 +359,7 @@ export function buildWorkbookXlsx(
 			path: "xl/_rels/workbook.xml.rels",
 			text: `${XML_HEADER}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheetRels}<Relationship Id="rId${names.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
 		},
-		{ path: "xl/styles.xml", text: stylesXml() },
+		{ path: "xl/styles.xml", text: stylesXml(dxfFormats) },
 	];
 	names.forEach((_name, i) => files.push({ path: `xl/worksheets/sheet${i + 1}.xml`, text: parts[i].xml }));
 

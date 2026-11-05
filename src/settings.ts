@@ -13,6 +13,16 @@ export type StatusStat = "sum" | "average" | "count" | "counta" | "min" | "max";
 /** The touch layout: on the mobile app by default, or forced either way (decision 24). */
 export type MobileLayout = "auto" | "on" | "off";
 
+/**
+ * What the plugin offers, as one switch (decision 38).
+ *
+ * `markdown` is a table editor and nothing else — no formulas, no conditional formatting; the
+ * visualisations (pivot, statistics, charts) stay, because they only read. `formulas` adds the
+ * formula layer. `all` adds conditional formatting on top. The switch hides UI; it never rewrites
+ * a note, so `%%=…%%` and `%%cf…%%` comments sit there untouched and come back with the feature.
+ */
+export type FeatureLevel = "markdown" | "formulas" | "all";
+
 export interface MarkdownSpreadsheetsSettings {
 	/** §13.2: autosave is the Excel-like default; manual suits a git-tracked vault. */
 	saveMode: SaveMode;
@@ -72,6 +82,8 @@ export interface MarkdownSpreadsheetsSettings {
 	autofitOnFirstOpen: boolean;
 	/** Touch gestures, the action bar and finger-sized controls. */
 	mobileLayout: MobileLayout;
+	/** Which layers the UI offers: plain tables, formulas, or everything (decision 38). */
+	features: FeatureLevel;
 }
 
 export const DEFAULT_SETTINGS: MarkdownSpreadsheetsSettings = {
@@ -108,7 +120,18 @@ export const DEFAULT_SETTINGS: MarkdownSpreadsheetsSettings = {
 	maxBackups: 10,
 	autofitOnFirstOpen: true,
 	mobileLayout: "auto",
+	features: "all",
 };
+
+/** Formulas are on unless the switch says plain Markdown only. */
+export function formulasEnabled(settings: MarkdownSpreadsheetsSettings): boolean {
+	return settings.features !== "markdown";
+}
+
+/** Conditional formatting, the newest layer, needs `all`. */
+export function conditionalEnabled(settings: MarkdownSpreadsheetsSettings): boolean {
+	return settings.features === "all";
+}
 
 /** Whether a view uses the touch layout, given the setting and whether this is the mobile app. */
 export function resolveTouchLayout(setting: MobileLayout, isMobileApp: boolean): boolean {

@@ -16,6 +16,26 @@ export class MarkdownSpreadsheetsSettingTab extends PluginSettingTab {
 		const settings = this.plugin.sidecar.settings;
 		const commit = () => void this.plugin.sidecar.saveNow();
 
+		new Setting(containerEl).setName("What the plugin offers").setHeading();
+
+		new Setting(containerEl)
+			.setName("Features")
+			.setDesc(
+				"A kill switch for the layers above plain Markdown. Nothing is removed from a note: with formulas hidden, `%%=…%%` stays exactly where it is and comes back when you switch back. Visualisations (pivot, statistics) are always available — they only read.",
+			)
+			.addDropdown((d) =>
+				d
+					.addOption("markdown", "Markdown only — no formulas, no conditional formatting")
+					.addOption("formulas", "Markdown and formulas")
+					.addOption("all", "Everything — formulas and conditional formatting")
+					.setValue(settings.features)
+					.onChange((value) => {
+						settings.features = value === "markdown" ? "markdown" : value === "formulas" ? "formulas" : "all";
+						commit();
+						this.plugin.refreshOpenGrids();
+					}),
+			);
+
 		new Setting(containerEl).setName("Saving").setHeading();
 
 		new Setting(containerEl)

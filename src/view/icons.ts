@@ -37,6 +37,8 @@ export const ICONS = {
 	italic: ["italic"],
 	code: ["code"],
 	strike: ["strikethrough"],
+	highlight: ["highlighter", "pen-tool", "pencil"],
+	conditional: ["paintbrush", "palette", "pipette"],
 	wrap: ["text-wrap", "wrap-text"],
 	raw: ["file-code-corner", "file-code-2", "file-code", "code-xml", "code"],
 	rendered: ["eye"],
