@@ -509,8 +509,9 @@ which settles any realistic chain).
 - **Cross-table dependencies are ordered by the workbook, not by the cell sort**, because the sort is
   per table. Inside one table a cycle still shows `#CYCLE!`; a cycle that runs through two tables
   settles on whatever the last pass wrote, and that limit is written down rather than hidden.
-- **The XLSX export carries the value only.** `Table2!B3` has no Excel equivalent: a sheet-qualified
-  reference needs a sheet name the note does not have.
+- **The XLSX export of one table carries the value only.** `Table2!B3` has no Excel equivalent there:
+  a sheet-qualified reference needs a sheet the file does not have. Exporting the whole note fixes
+  that — decision 36.
 
 ## 32. The pivot was a panel
 
@@ -610,3 +611,45 @@ formula is typed — had neither the function list nor pointing.
   region would be the kind of parallel writer §13.1 exists to prevent.
 - **A non-formula draft still commits on a switch.** Only `=…` is carried across tables; plain text
   belongs in its cell and lands there, as before.
+
+## 36. The Excel export is a workbook, and it opens on plain text
+
+**Design:** §14 covers exporting the open table, and decision 31 already let a note be a workbook of
+numbered tables. The two met only in the grid: `Table2!B3` was live on screen and dead in the file.
+
+**Built:** two changes in the export dialog, both about what a person gets rather than what the note
+stores.
+
+- **Plain text is the default cell content.** Markdown is the note's format, not a spreadsheet's:
+  `**1 250**`, `[[Project|the project]]` and `` `code` `` land in Excel as what the grid shows. `Raw
+  Markdown` stays one dropdown away for the round trip back.
+- **"All tables of the note" makes one sheet per table.** The option appears only when the note has
+  more than one table, and it starts on, because a note with several tables is a workbook already.
+- **A sheet is named for a person, a reference for the note.** The heading above the table is the
+  name — that is what the person calls it — then its own first headers, which is how the sheet tabs
+  under the grid are labelled, and `Table3` only for a table with neither. Formulas still say
+  `Table3`, because a note can only store what it can see (decision 31), so the export keeps a map
+  from the number to the name rather than reusing the number as the name.
+- **Two sheets never share a name.** Excel compares them case-insensitively and refuses a duplicate,
+  and headings repeat: the same heading over two tables, or two long headings that clean up to the
+  same 31 characters. A name is cleaned of `[]:*?/\`, bounded, and given a counter — `Budget 2` —
+  and the reference map is built from the *final* names, so a formula can never point at a sheet that
+  was renamed to resolve a clash.
+- **A cross-table formula becomes a real cross-sheet formula.** `Table2!B3` is exported as
+  `'Budget'!B3`, quoted the way Excel quotes sheet names, with the cached value beside it and
+  `fullCalcOnLoad`, so the workbook is correct in a viewer that never recalculates and live in one
+  that does.
+- **A reference to a table that is not in the file stays its value.** One sheet cannot point at
+  another sheet that is not there, and a `<f>` aimed at a missing sheet makes Excel refuse the whole
+  workbook — so the display value is written instead, which is what decision 31's single-table export
+  already did.
+- **The open table is exported from the grid, the rest from the note.** Unsaved edits are what the
+  person is looking at; the sibling tables are read as the note has them, which is also the only
+  version that exists for them.
+- **Sheet names are made safe and unique.** Excel rejects `[]:*?/\`, cuts past 31 characters and
+  refuses a case-insensitive duplicate, so a name is cleaned, bounded, and given a counter when it
+  collides — `Table1 2`. The exported names are the same set the formula translation is checked
+  against, so a reference can never be written to a sheet that was renamed away.
+- **What it does not do.** Per-table column widths, row heights and frozen panes carry over for the
+  open table only: they live in the sidecar under a key that names the table, and the sibling tables
+  are not open. The workbook is a snapshot of a note, not a second place to edit it.

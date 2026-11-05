@@ -19,8 +19,23 @@ export interface XlsxOptions {
 	defaultColWidth: number;
 }
 
+/** One tab of the exported workbook: a table of the note, and the name the note gives it. */
+export interface XlsxSheet {
+	/** The tab's name: the heading above the table, its headers, or `Table3` as a last resort. */
+	name: string;
+	model: GridModel;
+	/** Column widths, row heights and frozen panes, when the note has them stored. */
+	layout?: TableLayout;
+	/**
+	 * The `Table2` a formula uses for this table, when it differs from `name`. The sheet is named for
+	 * a person, the formula for a number, so a cross-table reference is looked up through this.
+	 */
+	ref?: string;
+}
+
 export const DEFAULT_XLSX_OPTIONS: Omit<XlsxOptions, "sheetName"> = {
-	content: "raw",
+	// A spreadsheet user wants the text a cell shows, not `**1 250**` or `[[Project|the project]]`.
+	content: "plain",
 	detectNumbers: true,
 	styleHeader: true,
 	defaultColWidth: 120,
@@ -110,18 +125,30 @@ export function styleIndex(align: Align, bold: boolean, wrap: boolean): number {
  * or not number detection is on — its value is a number by construction. A display that is not a
  * number (an error code) is written without `<v>`, and `fullCalcOnLoad` makes Excel compute it.
  */
-function formulaCellXml(ref: string, style: number, expr: string, text: string, numberOpts?: NumberParseOptions): string | null {
-	const formula = toExcelFormula(expr);
+function formulaCellXml(
+	ref: string,
+	style: number,
+	expr: string,
+	text: string,
+	sheets: ReadonlyMap<string, string>,
+	numberOpts?: NumberParseOptions,
+): string | null {
+	const formula = toExcelFormula(expr, sheets);
 	if (formula === null) return null;
 	const num = parseNumber(text, numberOpts);
 	const cached = num === null ? "" : `<v>${num}</v>`;
 	return `<c r="${ref}" s="${style}"><f>${xmlEscape(formula)}</f>${cached}</c>`;
 }
 
-function sheetXml(model: GridModel, options: XlsxOptions): { xml: string; hasFormula: boolean } {
+function sheetXml(
+	sheet: XlsxSheet,
+	options: XlsxOptions,
+	sheets: ReadonlyMap<string, string>,
+): { xml: string; hasFormula: boolean } {
+	const model = sheet.model;
 	const rows = Math.max(model.usedRange.rows, 1);
 	const cols = Math.max(model.usedRange.cols, 1);
-	const layout = options.layout;
+	const layout = sheet.layout;
 
 	const colDefs: string[] = [];
 	for (let c = 0; c < cols; c++) {
@@ -144,7 +171,7 @@ function sheetXml(model: GridModel, options: XlsxOptions): { xml: string; hasFor
 			const bold = options.styleHeader && r === 0;
 			const style = styleIndex(model.colAlign[c] ?? null, bold, layout?.wrapCols.includes(c) ?? false);
 			if (formula !== null) {
-				const xml = formulaCellXml(ref, style, formula.expr, text, options.numberOpts);
+				const xml = formulaCellXml(ref, style, formula.expr, text, sheets, options.numberOpts);
 				if (xml !== null) {
 					cells.push(xml);
 					hasFormula = true;
@@ -183,17 +210,69 @@ export function sanitizeSheetName(name: string): string {
 	return bounded === "" ? "Sheet1" : bounded;
 }
 
-export function buildXlsx(model: GridModel, options: XlsxOptions, at: Date): Uint8Array {
+/**
+ * Excel compares sheet names case-insensitively and refuses a duplicate, and a note can name two
+ * tables the same way once a long heading is cut at 31 characters. Each later duplicate gets a
+ * counter, the way Excel does when a name is taken.
+ */
+export function uniqueSheetNames(names: readonly string[]): string[] {
+	const used = new Set<string>();
+	return names.map((name) => {
+		const base = sanitizeSheetName(name);
+		let candidate = base;
+		for (let n = 2; used.has(candidate.toLowerCase()); n++) {
+			const suffix = ` ${n}`;
+			candidate = `${base.slice(0, 31 - suffix.length).trimEnd()}${suffix}`;
+		}
+		used.add(candidate.toLowerCase());
+		return candidate;
+	});
+}
+
+/**
+ * A workbook from the tables of one note, one sheet per table.
+ *
+ * A sheet is named the way a person names a table — the heading above it, else its headers, else
+ * `Table3` — while formulas still say `Table3!B2`, because that is the only name a note can store
+ * (decision 31). The two are joined here: `ref` is the number the note uses, the sanitized `name` is
+ * what Excel shows, and every formula is translated through that map. A reference to a table that is
+ * not in the file is left as text, since a `<f>` aimed at a missing sheet breaks the workbook.
+ */
+export function buildWorkbookXlsx(
+	sheets: readonly XlsxSheet[],
+	options: Omit<XlsxOptions, "sheetName" | "layout">,
+	at: Date,
+): Uint8Array {
 	const encoder = new TextEncoder();
-	const sheet = sanitizeSheetName(options.sheetName);
-	const sheetPart = sheetXml(model, options);
+	const names = uniqueSheetNames(sheets.map((sheet) => sheet.name));
+	const sheetOf = new Map<string, string>();
+	sheets.forEach((sheet, index) => {
+		if (sheet.ref !== undefined) sheetOf.set(sheet.ref.toLowerCase(), names[index]);
+	});
+	const parts = sheets.map((sheet, index) => sheetXml({ ...sheet }, { ...options, sheetName: names[index], layout: undefined }, sheetOf));
 	// Only with formulas, so a formula-free export stays byte-identical to what it always was.
-	const calcPr = sheetPart.hasFormula ? '<calcPr fullCalcOnLoad="1"/>' : "";
+	const calcPr = parts.some((part) => part.hasFormula) ? '<calcPr fullCalcOnLoad="1"/>' : "";
+
+	const sheetTypes = names
+		.map(
+			(_name, i) =>
+				`<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`,
+		)
+		.join("");
+	const sheetEntries = names
+		.map((name, i) => `<sheet name="${xmlEscape(name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`)
+		.join("");
+	const sheetRels = names
+		.map(
+			(_name, i) =>
+				`<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`,
+		)
+		.join("");
 
 	const files: Array<{ path: string; text: string }> = [
 		{
 			path: "[Content_Types].xml",
-			text: `${XML_HEADER}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`,
+			text: `${XML_HEADER}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${sheetTypes}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`,
 		},
 		{
 			path: "_rels/.rels",
@@ -201,23 +280,40 @@ export function buildXlsx(model: GridModel, options: XlsxOptions, at: Date): Uin
 		},
 		{
 			path: "xl/workbook.xml",
-			text: `${XML_HEADER}<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${xmlEscape(sheet)}" sheetId="1" r:id="rId1"/></sheets>${calcPr}</workbook>`,
+			text: `${XML_HEADER}<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheetEntries}</sheets>${calcPr}</workbook>`,
 		},
 		{
 			path: "xl/_rels/workbook.xml.rels",
-			text: `${XML_HEADER}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
+			text: `${XML_HEADER}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheetRels}<Relationship Id="rId${names.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
 		},
 		{ path: "xl/styles.xml", text: stylesXml() },
-		{ path: "xl/worksheets/sheet1.xml", text: sheetPart.xml },
 	];
+	names.forEach((_name, i) => files.push({ path: `xl/worksheets/sheet${i + 1}.xml`, text: parts[i].xml }));
 
 	const entries: ZipEntry[] = files.map((f) => ({ path: f.path, data: encoder.encode(f.text) }));
 	return buildZip(entries, at);
 }
 
+export function buildXlsx(model: GridModel, options: XlsxOptions, at: Date): Uint8Array {
+	const { layout, ...rest } = options;
+	return buildWorkbookXlsx([{ name: options.sheetName, model, layout }], rest, at);
+}
+
 /** Ready for `Vault.createBinary`. */
 export function xlsxBuffer(model: GridModel, options: XlsxOptions, at: Date): ArrayBuffer {
 	const bytes = buildXlsx(model, options, at);
+	const out = new ArrayBuffer(bytes.byteLength);
+	new Uint8Array(out).set(bytes);
+	return out;
+}
+
+/** Ready for `Vault.createBinary`, from every table of a note. */
+export function workbookBuffer(
+	sheets: readonly XlsxSheet[],
+	options: Omit<XlsxOptions, "sheetName" | "layout">,
+	at: Date,
+): ArrayBuffer {
+	const bytes = buildWorkbookXlsx(sheets, options, at);
 	const out = new ArrayBuffer(bytes.byteLength);
 	new Uint8Array(out).set(bytes);
 	return out;

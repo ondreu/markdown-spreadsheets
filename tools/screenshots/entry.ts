@@ -21,6 +21,7 @@ let text = NOTE;
 const files = ["Alice", "Bohdan", "Carla", "Dmitri", "Eva", "Projects/Budget 2026", "Meetings/Kick-off"].map((n) =>
 	Object.assign(new TFile(), { path: `${n}.md`, name: `${n}.md`, basename: n.split("/").pop(), extension: "md", parent: { path: n.includes("/") ? n.split("/")[0] : "/", isRoot: () => !n.includes("/") }, stat: { mtime: 0 } }),
 );
+const binaries = new Map<string, ArrayBuffer>();
 const app: any = {
 	scope: {},
 	vault: {
@@ -30,6 +31,17 @@ const app: any = {
 		on: () => ({}),
 		getFiles: () => files,
 		getMarkdownFiles: () => files,
+		// What an export writes: kept so a check can read the bytes back out of the page.
+		createBinary: async (path: string, data: ArrayBuffer) => {
+			binaries.set(path, data);
+			(window as any).lastBinary = { path, data };
+		},
+		create: async (path: string, data: string) => {
+			binaries.set(path, new TextEncoder().encode(data).buffer as ArrayBuffer);
+			(window as any).lastBinary = { path, data };
+		},
+		getFolderByPath: () => ({ path: "/" }),
+		createFolder: async () => {},
 	},
 	metadataCache: { fileToLinktext: (f: any) => f.basename, getFileCache: () => ({ tags: [{ tag: "#office" }, { tag: "#move" }] }) },
 	workspace: { trigger: () => {}, getLeaf: () => ({}), openLinkText: async (t: string) => { (window as any).openedLink = t; } },

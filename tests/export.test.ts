@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseTable } from "../src/model/parse";
 import { buildCsv, csvField, plainText } from "../src/feature/exportCsv";
 import { fromMarkdownTable, fromTsv, toTsv } from "../src/feature/clipboard";
-import { buildXlsx, sanitizeSheetName, styleIndex, xmlEscape } from "../src/feature/exportXlsx";
+import { buildWorkbookXlsx, buildXlsx, DEFAULT_XLSX_OPTIONS, sanitizeSheetName, styleIndex, uniqueSheetNames, xmlEscape } from "../src/feature/exportXlsx";
 import { crc32 } from "../src/feature/zip";
 
 const AT = new Date(Date.UTC(2026, 6, 28, 12, 0, 0));
@@ -330,5 +330,113 @@ describe("formula cells in exports", () => {
 			AT,
 		);
 		expect(unzip(bytes)).not.toContain("calcPr");
+	});
+});
+
+/** The archive is stored, not deflated, so every XML part can be read back as text. */
+function zipParts(data: Uint8Array): Map<string, string> {
+	const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+	const decoder = new TextDecoder();
+	const out = new Map<string, string>();
+	let at = 0;
+	while (at + 4 <= data.length && view.getUint32(at, true) === 0x04034b50) {
+		const size = view.getUint32(at + 18, true);
+		const nameLen = view.getUint16(at + 26, true);
+		const extraLen = view.getUint16(at + 28, true);
+		const name = decoder.decode(data.subarray(at + 30, at + 30 + nameLen));
+		out.set(name, decoder.decode(data.subarray(at + 30 + nameLen + extraLen, at + 30 + nameLen + extraLen + size)));
+		at += 30 + nameLen + extraLen + size;
+	}
+	return out;
+}
+
+describe("the workbook export (every table of a note)", () => {
+	const first = parseTable("| Item | Qty |\n| --- | ---: |\n| Bolt | 2 |\n");
+	const second = parseTable("| Total |\n| --- |\n| 2 %%=SUM(Table1!B2:B2)%% |\n");
+	const options = { content: "plain", detectNumbers: true, styleHeader: true, defaultColWidth: 120 } as const;
+	// Sheets are named for a person and referenced by number, so the two names differ on purpose.
+	const bytes = buildWorkbookXlsx(
+		[
+			{ name: "Budget", model: first, ref: "Table1" },
+			{ name: "Summary", model: second, ref: "Table2" },
+		],
+		options,
+		AT,
+	);
+	const parts = zipParts(bytes);
+
+	it("defaults the cell content to plain text, which is what a spreadsheet shows", () => {
+		expect(DEFAULT_XLSX_OPTIONS.content).toBe("plain");
+	});
+
+	it("writes one worksheet part per table and declares each one", () => {
+		expect([...parts.keys()]).toEqual([
+			"[Content_Types].xml",
+			"_rels/.rels",
+			"xl/workbook.xml",
+			"xl/_rels/workbook.xml.rels",
+			"xl/styles.xml",
+			"xl/worksheets/sheet1.xml",
+			"xl/worksheets/sheet2.xml",
+		]);
+		const types = parts.get("[Content_Types].xml") ?? "";
+		expect(types).toContain('PartName="/xl/worksheets/sheet1.xml"');
+		expect(types).toContain('PartName="/xl/worksheets/sheet2.xml"');
+	});
+
+	it("names the sheets after the tables and points each one at its own part", () => {
+		const workbook = parts.get("xl/workbook.xml") ?? "";
+		expect(workbook).toContain('<sheet name="Budget" sheetId="1" r:id="rId1"/>');
+		expect(workbook).toContain('<sheet name="Summary" sheetId="2" r:id="rId2"/>');
+		const rels = parts.get("xl/_rels/workbook.xml.rels") ?? "";
+		expect(rels).toContain('Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"');
+		// Styles keep the last id, whatever the number of sheets.
+		expect(rels).toContain('Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles"');
+	});
+
+	it("translates Table1!B2 through the number to the sheet the table got", () => {
+		const sheet = parts.get("xl/worksheets/sheet2.xml") ?? "";
+		// The quote is `&apos;` in the XML body; Excel wants the reference quoted.
+		expect(sheet).toContain("<f>SUM(&apos;Budget&apos;!B2:B2)</f><v>2</v>");
+		expect(parts.get("xl/workbook.xml") ?? "").toContain('<calcPr fullCalcOnLoad="1"/>');
+	});
+
+	it("reads each table's own cells into its own sheet", () => {
+		expect(parts.get("xl/worksheets/sheet1.xml") ?? "").toContain("Bolt");
+		expect(parts.get("xl/worksheets/sheet2.xml") ?? "").not.toContain("Bolt");
+	});
+
+	it("keeps a reference to a table that is not in the file as its value", () => {
+		const single = buildXlsx(
+			second,
+			{ sheetName: "Summary", content: "plain", detectNumbers: true, styleHeader: true, defaultColWidth: 120 },
+			AT,
+		);
+		const sheet = zipParts(single).get("xl/worksheets/sheet1.xml") ?? "";
+		expect(sheet).not.toContain("<f>");
+		expect(sheet).toContain('<c r="A2" s="0"><v>2</v></c>');
+	});
+
+	it("points a reference at the renamed sheet when two tables share a heading", () => {
+		const shared = zipParts(
+			buildWorkbookXlsx(
+				[
+					{ name: "Budget", model: first, ref: "Table1" },
+					{ name: "Budget", model: second, ref: "Table2" },
+				],
+				options,
+				AT,
+			),
+		);
+		expect(shared.get("xl/workbook.xml") ?? "").toContain('<sheet name="Budget 2" sheetId="2"');
+		// Table2 is the second sheet, so its name is the renamed one, not the heading it came from.
+		expect(shared.get("xl/worksheets/sheet2.xml") ?? "").toContain("&apos;Budget&apos;!B2:B2");
+	});
+
+	it("makes duplicate and over-long sheet names unique, the way Excel would", () => {
+		expect(uniqueSheetNames(["Table1", "Table1", "TABLE1"])).toEqual(["Table1", "Table1 2", "TABLE1 3"]);
+		expect(uniqueSheetNames(["x".repeat(40), "x".repeat(40)])).toEqual(["x".repeat(31), `${"x".repeat(29)} 2`]);
+		// Two headings can clean up to the same name; Excel compares them case-insensitively.
+		expect(uniqueSheetNames(["Q1/Q2", "Q1:Q2", "q1 q2"])).toEqual(["Q1 Q2", "Q1 Q2 2", "q1 q2 3"]);
 	});
 });

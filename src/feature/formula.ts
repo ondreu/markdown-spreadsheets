@@ -1540,8 +1540,15 @@ function rewriteRefs(expr: string, map: (a: RefParts, b: RefParts) => [RefParts,
 /**
  * The expression in Excel's syntax, or null when it does not parse — a malformed `<f>` makes Excel
  * reject the whole file, so an unreadable formula is exported as its value only.
+ *
+ * `sheets` is what a workbook export knows and a single-sheet one does not: which sheet each table
+ * became, keyed by the lowercase `Table1`, `Table2`, … the note's formulas use. With it, `Table2!B3`
+ * becomes `'Budget'!B3` — the sheet is named after the heading above the table, not after the
+ * number, so the name has to be looked up rather than reused. Without the sheet, or when a formula
+ * points at a table that is not in the file, it stays text: a `<f>` aimed at a missing sheet makes
+ * Excel refuse the whole workbook.
  */
-export function toExcelFormula(expr: string): string | null {
+export function toExcelFormula(expr: string, sheets?: ReadonlyMap<string, string>): string | null {
 	let tokens: Token[];
 	try {
 		tokens = tokenize(expr);
@@ -1549,10 +1556,21 @@ export function toExcelFormula(expr: string): string | null {
 	} catch {
 		return null;
 	}
-	// `Table2!B3` has no Excel equivalent: a workbook reference needs a sheet name we do not have.
-	if (tokens.some((tok) => tok.type === "bang")) return null;
+	/** Token index of a table name → the sheet name Excel will have for it. */
+	const sheetAt = new Map<number, string>();
+	for (let i = 0; i < tokens.length; i++) {
+		if (tokens[i].type !== "bang") continue;
+		const before = tokens[i - 1];
+		const sheet = before !== undefined && before.type === "name" ? sheets?.get(before.text.toLowerCase()) : undefined;
+		if (sheet === undefined) return null;
+		sheetAt.set(i - 1, sheet);
+	}
 	return tokens
-		.map((tok) => {
+		.map((tok, index) => {
+			const sheet = sheetAt.get(index);
+			// Always quoted: `'Budget'!B3` is what Excel writes itself, and it stays valid whatever
+			// characters a sheet name ends up with.
+			if (sheet !== undefined) return `'${sheet.replace(/'/g, "''")}'`;
 			switch (tok.type) {
 				case "func":
 					return FUNCTIONS[tok.text.toUpperCase()]?.fn ?? tok.text.toUpperCase();
