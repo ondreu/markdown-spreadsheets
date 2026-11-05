@@ -280,6 +280,13 @@ Vitest) are MIT-licensed and not bundled into `main.js`. The design credits
 `@tgrosinger/md-advanced-tables` and `ganesshkumar/obsidian-table-editor` (both MIT) as prior art;
 see `docs/DECISIONS.md` for why neither became a dependency.
 
+## Support
+
+Markdown Spreadsheets is free and open source. If it saves you some time, you can buy me a
+coffee — it genuinely helps keep the updates coming.
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/B7K822EW68)
+
 ## Licence
 
 MIT — see `LICENSE`.
