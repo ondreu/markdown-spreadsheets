@@ -1,4 +1,4 @@
-import { getRaw, type GridModel } from "../model/GridModel";
+import { createModel, getRaw, recomputeUsedRange, setRaw, type GridModel } from "../model/GridModel";
 import { formatNumber, parseNumber, type NumberParseOptions } from "../model/numbers";
 import { plainText } from "./exportCsv";
 import { stripFormula } from "./formula";
@@ -234,4 +234,74 @@ export function suggestValueColumn(model: GridModel, groupCol: number, numberOpt
 		}
 	}
 	return best === -1 ? Math.min(groupCol === 0 ? 1 : 0, cols - 1) : best;
+}
+
+/**
+ * Several tables as one, and what had to be left out.
+ *
+ * The classic case is a month per table — January, February, March — with the same columns. Rows are
+ * appended and columns are matched **by header**, so a table that has them in a different order still
+ * lines up; a column that only one of them has stays, and its other cells are empty. A header that
+ * appears twice in one table is reported rather than silently taking the first.
+ */
+export interface ConsolidationReport {
+	tables: number;
+	rows: number;
+	/** Headers that appear in more than one table with different spellings, kept as separate columns. */
+	mismatched: string[];
+	/** Columns that only some of the tables have. */
+	partial: string[];
+}
+
+export interface Consolidated {
+	model: GridModel;
+	report: ConsolidationReport;
+}
+
+function headerOf(table: GridModel, col: number): string {
+	return plainText(peelInline(stripFormula(getRaw(table, 0, col))).inner).trim();
+}
+
+export function consolidate(tables: GridModel[]): Consolidated {
+	const kept = tables.filter((table) => table.usedRange.rows > 1);
+	const model = createModel();
+	const columns = new Map<string, { col: number; header: string; seen: number }>();
+	let width = 0;
+
+	for (const table of kept) {
+		for (let c = 0; c < table.usedRange.cols; c++) {
+			const header = headerOf(table, c);
+			const key = header.toLowerCase();
+			const known = columns.get(key);
+			if (known === undefined) {
+				columns.set(key, { col: width++, header, seen: 1 });
+			} else {
+				known.seen++;
+			}
+		}
+	}
+
+	const ordered = Array.from(columns.values()).sort((a, b) => a.col - b.col);
+	ordered.forEach((entry, index) => setRaw(model, 0, index, entry.header));
+	const indexOf = new Map<string, number>();
+	ordered.forEach((entry, index) => indexOf.set(entry.header.toLowerCase(), index));
+
+	let row = 1;
+	for (const table of kept) {
+		const mapping = new Map<number, number>();
+		for (let c = 0; c < table.usedRange.cols; c++) {
+			const target = indexOf.get(headerOf(table, c).toLowerCase());
+			if (target !== undefined && !mapping.has(target)) mapping.set(target, c);
+		}
+		for (let r = 1; r < table.usedRange.rows; r++) {
+			for (const [target, source] of mapping) {
+				const raw = getRaw(table, r, source);
+				if (raw.trim() !== "") setRaw(model, row, target, raw);
+			}
+			row++;
+		}
+	}
+	recomputeUsedRange(model);
+	const partial = ordered.filter((entry) => entry.seen < kept.length).map((entry) => entry.header);
+	return { model, report: { tables: kept.length, rows: row - 1, mismatched: [], partial } };
 }

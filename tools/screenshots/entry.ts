@@ -1,4 +1,5 @@
 import { GridView } from "../../src/view/GridView";
+import { PivotView } from "../../src/view/PivotView";
 import { Sidecar } from "../../src/store/Sidecar";
 import { TFile } from "obsidian";
 
@@ -51,5 +52,17 @@ const plugin: any = { loadData: async () => store.data, saveData: async (d: unkn
 		text = next;
 	};
 	(window as any).reloadTable = () => (view as any).openTable(file.path);
+	// The pivot is a leaf of its own; the harness mounts it in place of the grid.
+	(window as any).openPivotView = async (tableIndex = 0) => {
+		const mount = document.getElementById("view");
+		if (!mount) return false;
+		mount.innerHTML = "";
+		const leaf: any = { app, view: null };
+		const pivot = new PivotView(leaf, plugin);
+		leaf.view = pivot;
+		await pivot.setState({ path: file.path, tableIndex }, {} as any);
+		await pivot.onOpen();
+		return true;
+	};
 	(window as any).ready = true;
 })();

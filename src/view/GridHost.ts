@@ -107,6 +107,12 @@ export interface GridHostCallbacks {
 }
 
 export interface GridHostContext {
+	/**
+	 * A grid that shows a result rather than a note: the pivot view. Edits are refused at the single
+	 * funnel (`mutate`) and the editor never opens, so nothing can be typed into a model that has no
+	 * file behind it.
+	 */
+	readOnly?: boolean;
 	app: App;
 	/** The view, never the plugin — `no-plugin-as-component` (§15.2, §5). */
 	component: Component;
@@ -1031,7 +1037,7 @@ export class GridHost {
 	 * Enter commits, and a pasted line break becomes a space.
 	 */
 	beginEdit(initial?: string): void {
-		if (this.editing) return;
+		if (this.editing || this.ctx.readOnly) return;
 		this.setRangeMode(false);
 		const { row, col } = this.selection.active;
 		const el = this.cellEl(row, col);
@@ -1364,6 +1370,7 @@ export class GridHost {
 	 * Formula cells are recalculated inside the same step, so undo restores values and inputs together.
 	 */
 	mutate(label: string, fn: () => void, repaint: "cell" | "all" = "all"): void {
+		if (this.ctx.readOnly) return;
 		if (this.editing) this.commitEdit(0, 0, false);
 		this.ctx.callbacks.onBeforeMutate?.();
 		this.undo.push(label, this.model, this.layout);

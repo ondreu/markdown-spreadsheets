@@ -512,7 +512,7 @@ which settles any realistic chain).
 - **The XLSX export carries the value only.** `Table2!B3` has no Excel equivalent: a sheet-qualified
   reference needs a sheet name the note does not have.
 
-## 32. The pivot is a panel, and the table it can write is a snapshot
+## 32. The pivot was a panel
 
 **Design:** §12 covers quick calculations and the status bar. Grouping rows was not in scope.
 
@@ -536,4 +536,28 @@ writes the result into the grid as a plain Markdown table.
   preview, because a sum that quietly ignores cells is worse than one that says it did.
 - **Same shape on a phone.** The dialog is full width at 390 px, the table scrolls if it must, and
   the three buttons wrap instead of hyphenating.
+
+## 33. The pivot is a temporary, read-only view of the note's tables
+
+**Design:** decision 32 shipped a dialog with a live preview and an *Insert as a table* button.
+
+**Built:** the dialog is gone. A pivot is a leaf of its own — a real grid, read-only, belonging to no
+note — opened from the table it reads, and closed when it is no longer wanted.
+
+- **Several tables, not a part of one.** A note here is a workbook, and the case that matters is a
+  month per table (or a site per table): rows are appended and columns matched **by header**, so a
+  table whose columns are in another order still lines up. A column only some tables have stays and
+  is reported, never silently dropped.
+- **Read-only at the single funnel.** `GridHost` takes `readOnly`, which returns from `mutate()` and
+  refuses `beginEdit()`. There is no second path into the model, so "temporary view" is enforced in
+  the same place every other change goes through.
+- **No note, no metadata, nothing to regenerate.** The view is built from the note every time it
+  opens; the table numbers are the note's own order; closing it leaves nothing. That is why there is
+  no *Insert as a table* any more — a snapshot in the note would be a copy nothing can refresh, and
+  the point of this view is that it is always current.
+- **Opening on something meaningful.** The first table is preselected and the group/value columns come
+  from `suggestGroupColumn`/`suggestValueColumn` — text with a handful of repeated values for
+  grouping, the column with the most numbers for the value.
+- **A split, not a tab, unless it is a phone.** Half the value is seeing the source next to the
+  result; a 390 px screen has no room for that, so there it takes the whole leaf.
 

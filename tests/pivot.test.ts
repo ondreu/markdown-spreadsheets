@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getRaw, recomputeUsedRange, setRaw } from "../src/model/GridModel";
 import { parseTable } from "../src/model/parse";
-import { pivot, pivotFormat, pivotValues, type PivotOptions } from "../src/feature/pivot";
+import { consolidate, pivot, pivotFormat, pivotValues, type PivotOptions } from "../src/feature/pivot";
 
 const model = (): ReturnType<typeof parseTable> =>
 	parseTable(
@@ -84,5 +84,35 @@ describe("pivot", () => {
 		recomputeUsedRange(m);
 		expect(pivot(m, opts({ groupCol: 0, valueCol: 1 })).headers.value).toContain("Sum of");
 		expect(getRaw(m, 0, 0)).toBe("Kind");
+	});
+});
+
+describe("consolidate", () => {
+	const january = parseTable("| Item | Kind | Qty |\n| --- | --- | ---: |\n| Desks | Furniture | 2 |\n| Lamps | Light | 1 |\n");
+	const february = parseTable("| Kind | Item | Qty | Note |\n| --- | --- | ---: | --- |\n| Furniture | Chairs | 5 | back order |\n");
+
+	it("appends the rows and matches the columns by header", () => {
+		const { model: merged, report } = consolidate([january, february]);
+		expect(report.tables).toBe(2);
+		expect(report.rows).toBe(3);
+		expect([0, 1, 2, 3].map((c) => merged.cells.get(`0:${c}`)?.raw)).toEqual(["Item", "Kind", "Qty", "Note"]);
+		// February has Kind first; its values still land under the right header.
+		expect(merged.cells.get("3:1")?.raw).toBe("Furniture");
+		expect(merged.cells.get("3:0")?.raw).toBe("Chairs");
+		expect(report.partial).toEqual(["Note"]);
+	});
+
+	it("feeds the pivot: the sum is over both tables", () => {
+		const { model: merged } = consolidate([january, february]);
+		const result = pivot(merged, { groupCol: 1, valueCol: 2, aggregate: "sum", sort: "value" });
+		expect(result.groups.map((g) => [g.label, g.value])).toEqual([
+			["Furniture", 7],
+			["Light", 1],
+		]);
+	});
+
+	it("ignores a table with no data rows", () => {
+		const empty = parseTable("| Item | Kind | Qty |\n| --- | --- | --- |\n");
+		expect(consolidate([january, empty]).report.tables).toBe(1);
 	});
 });
