@@ -475,3 +475,34 @@ Light 3, Cable 1, total 10 — the rows add up. Two bugs were found by that rend
 kept drawing into a detached node after the bar was rebuilt, and the caption counted the total row as
 a group.
 
+
+## Round seventeen: formulas across tables
+
+Three reports, all about typing a formula: the bracket, the other table, and the bar.
+
+1. **Enter did not close the bracket.** `=SUM(` + a pointed range left `=SUM(D3:D6` and Enter
+   committed that; the cell then read `#ERROR!`. `closeUnbalanced` in `src/feature/formula.ts`
+   closes what is still open, in the cell editor and in the bar alike (decision 35).
+2. **Switching a sheet cancelled the formula.** `switchTable` committed the editor and reloaded the
+   model, so the draft was gone. It now moves to the formula bar and stays there while the other
+   table is shown; a click in that table writes `Table2!B2:B4` into it, and Enter lands the formula
+   back in the table it was typed in.
+3. **No suggestions in the formula bar.** The bar now has the same `CellSuggest` the cell editor
+   has — functions, `[[` notes, `#` tags, column values — and it sees Enter first, so Enter picks a
+   suggestion instead of committing a half-typed formula.
+
+Pointing from the bar is new for both tables, not just for siblings: a formula typed in the bar can
+now point at a cell of its own table, which it could not before.
+
+`tools/screenshots/checks-formula.cjs` drives all of it in headless Chromium against the real
+`GridView` (a second table through `setNote`): eleven checks, **2/11 on the code before this round**
+and 11/11 after. Five unit tests pin `closeUnbalanced`; the suite is 423.
+
+### Not verified in Obsidian
+
+- The suggestion popup hangs off `.mds-formulabar`, which only now has `position: relative`. It
+  should sit under the bar, over the grid; a popped-out window is where the `--mds-suggest-x/y`
+  arithmetic would show if it were wrong.
+- Clicking a tab mid-formula relies on `preventDefault` on `mousedown` keeping focus in the bar. If
+  the mobile app's tap synthesis blurs anyway, the draft is committed on the switch instead of
+  carried — the same as before this round, so nothing is lost, but the feature does not appear.

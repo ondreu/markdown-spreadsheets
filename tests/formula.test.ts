@@ -6,6 +6,7 @@ import {
 	FORMULA_FUNCTIONS,
 	adjustFormulaRefs,
 	buildFormulaCell,
+	closeUnbalanced,
 	computeColumn,
 	editTextOf,
 	isFormulaCell,
@@ -586,5 +587,33 @@ describe("function suggestions", () => {
 
 	it("leads with the functions a table actually uses", () => {
 		expect(FORMULA_FUNCTIONS.slice(0, 3).map((f) => f.name)).toEqual(["SUM", "IF", "AVERAGE"]);
+	});
+});
+
+describe("closeUnbalanced", () => {
+	it("closes what pointing a range into a function leaves open", () => {
+		expect(closeUnbalanced("=SUM(B2:B5")).toBe("=SUM(B2:B5)");
+		expect(closeUnbalanced("=SUM(")).toBe("=SUM()");
+		expect(closeUnbalanced("=IF(A2>1,SUM(B2:B5")).toBe("=IF(A2>1,SUM(B2:B5))");
+	});
+
+	it("leaves a balanced formula, and a formula with too many closers, alone", () => {
+		expect(closeUnbalanced("=SUM(B2:B5)")).toBe("=SUM(B2:B5)");
+		expect(closeUnbalanced("=A2+B2")).toBe("=A2+B2");
+		expect(closeUnbalanced("=SUM(B2:B5))")).toBe("=SUM(B2:B5))");
+	});
+
+	it("does not count brackets inside a string", () => {
+		expect(closeUnbalanced('=IF(A2="(","x","y")')).toBe('=IF(A2="(","x","y")');
+		expect(closeUnbalanced('=A2&"("')).toBe('=A2&"("');
+	});
+
+	it("does not touch text that is not a formula", () => {
+		expect(closeUnbalanced("Total (draft")).toBe("Total (draft");
+		expect(closeUnbalanced("==highlight (")).toBe("==highlight (");
+	});
+
+	it("keeps trailing spaces outside the bracket it adds", () => {
+		expect(closeUnbalanced("=SUM(B2:B5 ")).toBe("=SUM(B2:B5 )");
 	});
 });

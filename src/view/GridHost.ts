@@ -30,7 +30,7 @@ import {
 import { UndoStack } from "../feature/undo";
 import { DEFAULT_GESTURE, GestureTracker } from "../feature/gesture";
 import { plainText } from "../feature/exportCsv";
-import { adjustFormulaRefs, editTextOf, isFormulaCell, rawFromEdit, recalculate, stripFormula } from "../feature/formula";
+import { adjustFormulaRefs, closeUnbalanced, editTextOf, isFormulaCell, rawFromEdit, recalculate, stripFormula } from "../feature/formula";
 import {
 	applyTextTransform,
 	distinctColumnValues,
@@ -66,6 +66,22 @@ export interface Selection {
 	rect: Rect;
 	/** The cell that receives typing; always inside `rect`. */
 	active: { row: number; col: number };
+}
+
+/**
+ * A formula being typed outside the grid — in the formula bar — that a click in the grid should
+ * point at, exactly as a click points at a cell for the in-cell editor.
+ *
+ * The bar owns the text, the caret and the table the formula belongs to; the grid only knows which
+ * cell the pointer is over, so the reference is handed back through `replace`.
+ */
+export interface ReferenceSink {
+	value(): string;
+	selection(): { start: number; end: number };
+	/** Writes `text` over `[start, end)` and leaves the caret after it. */
+	replace(start: number, end: number, text: string): void;
+	/** `Table2!` when the formula lives in another table of the note, otherwise "". */
+	prefix(): string;
 }
 
 export type { ColumnFilter } from "../feature/transform";
@@ -222,6 +238,8 @@ export class GridHost {
 	private pointing: { start: number; end: number; anchor: { row: number; col: number } } | null = null;
 	private pointDrag = false;
 	private pointEls: HTMLElement[] = [];
+	/** A formula held by the formula bar: while it is set, a click in the grid points at a cell. */
+	private refSink: ReferenceSink | null = null;
 	private readonly gesture = new GestureTracker();
 	private longPressTimer: number | null = null;
 	/**
@@ -322,6 +340,20 @@ export class GridHost {
 
 	isEditing(): boolean {
 		return this.editing !== null;
+	}
+
+	/**
+	 * The formula the formula bar is holding, if any. While it is set, a click in the grid writes a
+	 * reference into that formula instead of moving the selection — the bar keeps the caret, as in
+	 * Excel, so a formula can point at cells without the person typing their addresses.
+	 */
+	setReferenceSink(sink: ReferenceSink | null): void {
+		if (sink === null && this.refSink !== null) {
+			this.clearPointPreview();
+			this.pointing = null;
+			this.pointDrag = false;
+		}
+		this.refSink = sink;
 	}
 
 	getRenderMode(): RenderMode {
@@ -1111,8 +1143,12 @@ export class GridHost {
 		input.setCssProps({ "--mds-editor-h": `${Math.max(cell.clientHeight, input.scrollHeight)}px` });
 	}
 
-	/** True when the open editor holds a formula, so a click in the grid picks a reference. */
+	/**
+	 * True when a formula is being typed — in the cell editor or in the formula bar — so a click in
+	 * the grid picks a reference rather than moving the selection.
+	 */
 	private pointMode(): boolean {
+		if (this.refSink !== null) return this.refSink.value().trimStart().startsWith("=");
 		const editing = this.editing;
 		return editing !== null && editing.input.value.trimStart().startsWith("=");
 	}
@@ -1125,32 +1161,55 @@ export class GridHost {
 	}
 
 	/**
+	 * The text a picked reference goes into: the open cell editor, or the formula bar. Both expose
+	 * the same three things, so the pick itself does not care which one is holding the formula.
+	 */
+	private referenceEditor(): ReferenceSink | null {
+		const editing = this.editing;
+		if (editing !== null) {
+			const input = editing.input;
+			return {
+				value: () => input.value,
+				selection: () => ({ start: input.selectionStart ?? input.value.length, end: input.selectionEnd ?? input.value.length }),
+				prefix: () => "",
+				replace: (start, end, text) => {
+					input.value = input.value.slice(0, start) + text + input.value.slice(end);
+					const caret = start + text.length;
+					input.setSelectionRange(caret, caret);
+					this.sizeEditor();
+					editing.suggest?.update();
+					this.ctx.callbacks.onEditorInput?.(input.value);
+				},
+			};
+		}
+		return this.refSink;
+	}
+
+	/**
 	 * Writes the reference of one cell — or, after a drag, of a range — into the formula at the
 	 * caret. A reference already there is replaced rather than doubled, the way Excel picks the
-	 * cell the caret just left, and the selection outline stays out of the way: the editor keeps
+	 * cell the caret just left, and the selection outline stays out of the way: the formula keeps
 	 * focus and the pick is shown as a dashed outline instead.
+	 *
+	 * A formula held by the formula bar can point at a cell of another table, and then the
+	 * reference needs the table in front of it (`Table2!B3`) — that is what `prefix` supplies.
 	 */
 	private pickReference(row: number, col: number): void {
-		const editing = this.editing;
-		if (editing === null) return;
-		const input = editing.input;
-		const value = input.value;
+		const target = this.referenceEditor();
+		if (target === null) return;
+		const value = target.value();
 		const anchor = this.pointing?.anchor ?? { row, col };
-		const text = this.referenceText(anchor, { row, col });
-		let start = this.pointing?.start ?? input.selectionStart ?? value.length;
-		const end = this.pointing?.end ?? input.selectionEnd ?? start;
+		const text = target.prefix() + this.referenceText(anchor, { row, col });
+		let start = this.pointing?.start ?? target.selection().start;
+		const end = this.pointing?.end ?? target.selection().end;
 		if (this.pointing === null) {
 			// A reference directly before the caret is what this click is changing.
-			const tail = /(\$?[A-Za-z]{1,3}\$?\d+)(:\$?[A-Za-z]{1,3}\$?\d+)?$/.exec(value.slice(0, start));
+			const tail = /(?:(?:Table\d+!)?\$?[A-Za-z]{1,3}\$?\d+)(?::(?:Table\d+!)?\$?[A-Za-z]{1,3}\$?\d+)?$/i.exec(value.slice(0, start));
 			if (tail !== null) start -= tail[0].length;
 		}
-		input.value = value.slice(0, start) + text + value.slice(end);
+		target.replace(start, end, text);
 		const caret = start + text.length;
-		input.setSelectionRange(caret, caret);
 		this.pointing = { start, end: caret, anchor };
-		this.sizeEditor();
-		editing.suggest?.update();
-		this.ctx.callbacks.onEditorInput?.(input.value);
 		this.previewPoint({ r1: Math.min(anchor.row, row), c1: Math.min(anchor.col, col), r2: Math.max(anchor.row, row), c2: Math.max(anchor.col, col) });
 	}
 
@@ -1288,7 +1347,7 @@ export class GridHost {
 		const hadFocus = editing.input.ownerDocument.activeElement === editing.input;
 		this.editing = null;
 		this.releaseEditor();
-		const text = editing.input.value.replace(/\r?\n/g, " ");
+		const text = closeUnbalanced(editing.input.value.replace(/\r?\n/g, " "));
 		// A formula cell is edited as `=EXPR`; turning that back into the stored form keeps the
 		// value's emphasis. Untouched text means an untouched cell.
 		const next = text === editTextOf(editing.original) ? editing.original : rawFromEdit(editing.original, text);
@@ -1333,6 +1392,31 @@ export class GridHost {
 		this.ctx.callbacks.onSelectionChange(this.selection);
 	}
 
+	/**
+	 * Takes a half-typed formula out of the cell editor without writing it.
+	 *
+	 * The grid is about to show another table of the note, and the cell being edited is not in it.
+	 * Committing would end the formula; discarding would lose it. The text goes back to the caller,
+	 * which keeps it in the formula bar, where the caret can still point at cells.
+	 */
+	detachFormulaEdit(): { row: number; col: number; text: string; caret: number } | null {
+		const editing = this.editing;
+		if (editing === null) return null;
+		const text = editing.input.value;
+		if (!text.trimStart().startsWith("=")) return null;
+		const caret = editing.input.selectionStart ?? text.length;
+		this.editing = null;
+		// Listeners first: a blur that arrives while the editor leaves the DOM must not commit.
+		this.releaseEditor();
+		const el = this.cellEl(editing.row, editing.col);
+		if (el) {
+			el.removeClass("is-editing");
+			this.paintCell(el, editing.row, editing.col);
+			if (this.renderMode === "rendered") void this.renderCell(el, editing.row, editing.col);
+		}
+		return { row: editing.row, col: editing.col, text, caret };
+	}
+
 	/** What the formula bar shows for a cell: `=EXPR` for a formula, else the raw Markdown. */
 	editTextAt(row: number, col: number): string {
 		return editTextOf(getRaw(this.model, row, col));
@@ -1350,7 +1434,9 @@ export class GridHost {
 	 */
 	setValueAt(row: number, col: number, value: string): void {
 		const original = getRaw(this.model, row, col);
-		const text = value.replace(/\r?\n/g, " ");
+		// Enter closes what the formula still has open: pointing a range into `=SUM(` leaves the
+		// bracket for the person to type, and nobody does.
+		const text = closeUnbalanced(value.replace(/\r?\n/g, " "));
 		if (text === editTextOf(original)) return;
 		const next = rawFromEdit(original, text);
 		if (next === original) return;
