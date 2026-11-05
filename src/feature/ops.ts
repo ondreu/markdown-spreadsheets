@@ -2,7 +2,7 @@ import { addrKey, parseAddrKey } from "../model/address";
 import { getRaw, recomputeUsedRange, setRaw, type Align, type GridModel } from "../model/GridModel";
 import { parseNumber, type NumberParseOptions } from "../model/numbers";
 import type { TableLayout } from "../store/Sidecar";
-import { buildFormulaCell, parseFormulaCell, translateFormula } from "./formula";
+import { buildFormulaCell, parseFormulaCell, stripFormula, translateFormula } from "./formula";
 import { detectSeries, type SeriesFn } from "./series";
 
 export interface Rect {
@@ -275,10 +275,16 @@ export function peelInline(raw: string): InlineLayers {
 	return { layers, inner: s };
 }
 
-/** The formats a cell carries as a whole, for the ribbon's pressed state. */
+/**
+ * The formats a cell carries as a whole, for the ribbon's pressed state.
+ *
+ * The formula comment is not part of what is emphasised: `**1 200** %%=SUM(B2:B3)%%` is bold, and
+ * reading the raw text alone would say it is not — which left the Bold button unpressed and made
+ * Ctrl+B add a second wrapper instead of taking the first one off.
+ */
 export function inlineFormatsOf(raw: string): Set<InlineFormat> {
 	const out = new Set<InlineFormat>();
-	for (const token of peelInline(raw).layers) {
+	for (const token of peelInline(stripFormula(raw)).layers) {
 		for (const format of Object.keys(FORMAT_TOKENS) as InlineFormat[]) {
 			if (FORMAT_TOKENS[format].includes(token)) out.add(format);
 		}
@@ -369,8 +375,17 @@ function hasFormat(peeled: InlineLayers, format: InlineFormat): boolean {
 	return peeled.layers.some((t) => FORMAT_TOKENS[format].includes(t));
 }
 
-/** Adds `format` around a cell, choosing the delimiter that reads back as that format. */
+/**
+ * Adds `format` around a cell, choosing the delimiter that reads back as that format.
+ *
+ * A formula cell is emphasised through its display, never around the comment: `**1 200** %%=…%%`, not
+ * `**1 200 %%=…%%**`. The second form is what a wrapper around the whole cell produced, and it hides
+ * the comment from `parseFormulaCell`, which needs it at the end — a formula that slowly stopped
+ * recalculating because someone pressed Bold.
+ */
 export function addInlineFormat(raw: string, format: InlineFormat): string {
+	const formula = parseFormulaCell(raw);
+	if (formula !== null) return buildFormulaCell(addInlineFormat(formula.display, format), formula.expr);
 	const peeled = peelInline(raw);
 	if (hasFormat(peeled, format)) return raw;
 	if (format === "code") {
@@ -387,6 +402,11 @@ export function addInlineFormat(raw: string, format: InlineFormat): string {
 
 /** Removes the outermost layer of `format`, keeping every other layer as it was. */
 export function removeInlineFormat(raw: string, format: InlineFormat): string {
+	const formula = parseFormulaCell(raw);
+	if (formula !== null) {
+		const display = removeInlineFormat(formula.display, format);
+		return display === formula.display ? raw : buildFormulaCell(display, formula.expr);
+	}
 	const peeled = peelInline(raw);
 	const index = peeled.layers.findIndex((t) => FORMAT_TOKENS[format].includes(t));
 	if (index === -1) return raw;
@@ -406,7 +426,7 @@ export function applyInlineFormat(model: GridModel, rect: Rect, format: InlineFo
 		}
 	}
 	if (cells.length === 0) return;
-	const allHave = cells.every((c) => hasFormat(peelInline(c.raw), format));
+	const allHave = cells.every((c) => hasFormat(peelInline(stripFormula(c.raw)), format));
 	for (const cell of cells) {
 		const next = allHave ? removeInlineFormat(cell.raw, format) : addInlineFormat(cell.raw, format);
 		setRaw(model, cell.row, cell.col, next);

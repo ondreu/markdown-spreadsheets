@@ -19,6 +19,7 @@ import {
 	translateFormula,
 	withLayersOf,
 } from "../src/feature/formula";
+import { addInlineFormat, removeInlineFormat } from "../src/feature/ops";
 
 function grid(rows: string[][]): GridModel {
 	const model = createModel();
@@ -310,6 +311,44 @@ describe("adjustFormulaRefs", () => {
 		expect(getRaw(m, 1, 1)).toBe("**5** %%=sum( #REF! )%%");
 		recalculate(m, plain);
 		expect(getRaw(m, 1, 1)).toBe("**#REF!** %%=sum( #REF! )%%");
+	});
+});
+
+describe("emphasising a formula cell", () => {
+	it("wraps the display and leaves the comment last", () => {
+		const cell = "1 200 %%=SUM(B2:B3)%%";
+		expect(addInlineFormat(cell, "bold")).toBe("**1 200** %%=SUM(B2:B3)%%");
+		expect(addInlineFormat(cell, "highlight")).toBe("==1 200== %%=SUM(B2:B3)%%");
+		// The comment stays parsable, so the value still recalculates after the button was pressed.
+		expect(parseFormulaCell(addInlineFormat(cell, "bold"))?.expr).toBe("SUM(B2:B3)");
+		expect(removeInlineFormat("**1 200** %%=SUM(B2:B3)%%", "bold")).toBe("1 200 %%=SUM(B2:B3)%%");
+	});
+
+	it("reads back the broken shape an older version wrote, and normalises it", () => {
+		const broken = "**1 200 %%=SUM(B2:B3)%%**";
+		expect(parseFormulaCell(broken)?.display).toBe("**1 200**");
+		expect(addInlineFormat(broken, "italic")).toBe("***1 200*** %%=SUM(B2:B3)%%");
+	});
+});
+
+describe("a formula comment wrapped in emphasis", () => {
+	it("is still a formula, with the wrapper put back on the display", () => {
+		expect(parseFormulaCell("**1 200 %%=SUM(B2:B3)%%**")).toEqual({ display: "**1 200**", expr: "SUM(B2:B3)" });
+		expect(stripFormula("==37 140 %%=SUM(F2:F8)%%==")).toBe("==37 140==");
+		expect(editTextOf("~~5 %%=1+4%%~~")).toBe("=1+4");
+	});
+
+	it("leaves a cell that is only emphasis alone", () => {
+		expect(parseFormulaCell("**Done**")).toBeNull();
+		expect(parseFormulaCell("**a %% b**")).toBeNull();
+	});
+
+	it("recalculates a wrapped total and normalises the cell on the next write", () => {
+		const model = parseTable("| Item | Qty |\n| --- | ---: |\n| a | 2 |\n| b | 3 |\n| **Total** | **5 %%=SUM(B2:B3)%%** |\n");
+		setRaw(model, 3, 1, "**9 %%=SUM(B2:B3)%%**");
+		const result = recalculate(model, { ...plain });
+		expect(result.changed.length).toBeGreaterThan(0);
+		expect(getRaw(model, 3, 1)).toBe("**5** %%=SUM(B2:B3)%%");
 	});
 });
 

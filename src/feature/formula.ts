@@ -48,7 +48,19 @@ export class FormulaError extends Error {
  * tail as a formula would rewrite something the user sees.
  */
 export function parseFormulaCell(raw: string): FormulaCell | null {
-	const s = raw.trimEnd();
+	let s = raw.trimEnd();
+	// Bolding a cell in the note's own editor is easy to do *around* the comment: `**1 200 %%=…%%**`.
+	// The comment still ends the visible text, just not the string, and treating that as prose left a
+	// formula that silently never recalculated. The wrapper is peeled and put back on the display, so
+	// the cell reads as a formula everywhere and the next write normalises it.
+	let wrapper = "";
+	for (const token of ["**", "__", "~~", "==", "*", "_"]) {
+		if (s.length > token.length * 2 && s.startsWith(token) && s.endsWith(token)) {
+			wrapper = token;
+			s = s.slice(token.length, s.length - token.length).trimEnd();
+			break;
+		}
+	}
 	if (s.length < 6 || !s.endsWith("%%")) return null;
 	const open = s.lastIndexOf("%%=", s.length - 3);
 	if (open === -1 || open + 3 > s.length - 2) return null;
@@ -56,7 +68,9 @@ export function parseFormulaCell(raw: string): FormulaCell | null {
 	if (expr === "" || expr.includes("%%")) return null;
 	const before = s.slice(0, open);
 	if (countMarkers(before) % 2 !== 0) return null;
-	return { display: withoutRuleComments(before).trim(), expr };
+	const display = withoutRuleComments(before).trim();
+	if (display === "") return { display: wrapper === "" ? "" : `${wrapper}${wrapper}`, expr };
+	return { display: wrapper === "" ? display : `${wrapper}${display}${wrapper}`, expr };
 }
 
 /**
