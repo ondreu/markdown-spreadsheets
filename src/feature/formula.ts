@@ -112,6 +112,32 @@ export function rawFromEdit(previousRaw: string, text: string): string {
 }
 
 /**
+ * Closes the parentheses a half-typed formula still has open, the way Enter does in Excel.
+ *
+ * Pointing a range into `=SUM(` leaves `=SUM(B2:B5`, and nothing comes of it until the bracket is
+ * closed — which is a keystroke nobody types, because the spreadsheet normally types it for you.
+ * Quotes are honoured, so `=IF(A1="(","x","y")` is left alone; text that is not a formula, that
+ * already balances, or that has more closers than openers comes back unchanged.
+ */
+export function closeUnbalanced(text: string): string {
+	const trimmed = text.trim();
+	if (!trimmed.startsWith("=") || trimmed.startsWith("==")) return text;
+	let depth = 0;
+	let quoted = false;
+	for (const ch of trimmed) {
+		if (ch === '"') {
+			quoted = !quoted;
+			continue;
+		}
+		if (quoted) continue;
+		if (ch === "(") depth++;
+		else if (ch === ")") depth--;
+	}
+	if (depth <= 0) return text;
+	return text + ")".repeat(depth);
+}
+
+/**
  * Wraps `inner` in the emphasis layers that wrap the whole of `previous`.
  *
  * Used wherever a value is replaced but its formatting should survive: `**12**` recomputed to 15

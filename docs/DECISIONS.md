@@ -580,3 +580,33 @@ over — applied to the in-memory model before the pivot runs.
 - **The bar is a row of selects, not a dialog.** The lookup is one visible row — `Lookup / match /
   with / bring` — because a second modal would be the third way of doing the same thing.
 
+
+## 35. A formula typed in one table may point at another
+
+**Design:** decision 26 makes a click in the grid write a reference into the formula being typed;
+decision 31 makes `Table2!B3` read another table of the note. The two did not meet. A formula typed
+in the cell editor died the moment a sheet tab was clicked, and the formula bar — the other place a
+formula is typed — had neither the function list nor pointing.
+
+**Built:** the draft, the bracket and the reference.
+
+- **Enter closes what the formula still has open** (`closeUnbalanced`). Pointing a range into
+  `=SUM(` leaves `=SUM(B2:B5`, and the bracket is not a keystroke anybody types. Quotes are honoured,
+  a balanced formula and a text that is not a formula come back unchanged.
+- **The bar carries the same suggestion list as the cell editor**, with one difference: an empty
+  query lists nothing. Browsing every function is fine under a cell, but in the bar the list hangs
+  over the first rows of the grid — which is exactly where the first reference gets pointed. `=SU`
+  still offers `SUM`; `=SUM(` offers nothing, and the next click is the grid's.
+- **A formula survives a sheet switch.** `GridHost.detachFormulaEdit` takes it out of the cell
+  editor without writing it, and the bar holds it. A tab click does not blur the bar (`preventDefault`
+  on `mousedown`), because the blur is what used to commit.
+- **Pointing works from the bar**, not only from the cell editor: the grid reports the clicked cell
+  through a `ReferenceSink`, and the bar's sink writes `Table2!B2:B4` when the formula belongs to
+  another table. The prefix names the table of the **clicked** cell, not the one holding the formula
+  — pointing in Table 2 from a formula in Table 1 reads `Table2!`, which is what the note needs.
+- **The draft lands in the table it was typed in.** Enter, Tab, a blur, or a switch to that table all
+  write it there. When the grid is showing a sibling, that means switching back first: the grid has
+  one write path and it is the model on screen, and a second one that reached into another table's
+  region would be the kind of parallel writer §13.1 exists to prevent.
+- **A non-formula draft still commits on a switch.** Only `=…` is carried across tables; plain text
+  belongs in its cell and lands there, as before.

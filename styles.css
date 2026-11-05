@@ -295,6 +295,8 @@
 	padding: 4px 8px;
 	border-bottom: 1px solid var(--background-modifier-border);
 	background-color: var(--background-primary);
+	/* The suggestion list hangs off this bar, as it hangs off the grid host under a cell. */
+	position: relative;
 }
 
 .mds-formula-address {

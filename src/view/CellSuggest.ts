@@ -23,6 +23,12 @@ export interface SuggestSource {
 	sourcePath: string;
 	/** Distinct values of the edited column, most frequent first. */
 	columnValues(): string[];
+	/**
+	 * Whether an empty query lists every function. True in the cell editor, where the list is a way
+	 * to browse; false in the formula bar, where it would cover the cells the person is about to
+	 * point at — after `=SUM(` nothing has been typed, and the next click belongs to the grid.
+	 */
+	browseAll?: boolean;
 }
 
 const MAX_ITEMS = 40;
@@ -65,6 +71,11 @@ export class CellSuggest {
 
 	isOpen(): boolean {
 		return !this.el.hasClass("mds-hidden");
+	}
+
+	/** The note a `[[` suggestion links from; the view can be pointed at another one. */
+	setSourcePath(path: string): void {
+		this.source.sourcePath = path;
 	}
 
 	destroy(): void {
@@ -159,8 +170,11 @@ export class CellSuggest {
 		const from = caret - query.length;
 		// With nothing typed, a name only makes sense where a value starts: after `=`, `(`, `,`
 		// or an operator. After a digit or a reference it is an argument being completed, not a
-		// function about to be named.
-		if (query === "" && from > 0 && !/[=(,;+\-*/^&<>]/.test(before[from - 1])) return null;
+		// function about to be named. Where browsing is off, an empty query lists nothing at all.
+		if (query === "") {
+			if (this.source.browseAll === false) return null;
+			if (from > 0 && !/[=(,;+\-*/^&<>]/.test(before[from - 1])) return null;
+		}
 		const lower = query.toLowerCase();
 		const starts = FORMULA_FUNCTIONS.filter((f) => f.name.toLowerCase().startsWith(lower));
 		const inside =

@@ -22,13 +22,14 @@ import { defaultLayout, type TableLayout } from "../store/Sidecar";
 import { aggregate, applyFunction, formatResult, summaryLine, type CalcFunction } from "../feature/QuickCalc";
 import { csvBytes, plainText, type CsvOptions } from "../feature/exportCsv";
 import { toHtmlTable, toJson } from "../feature/exportExtra";
-import { computeColumn, recalculate, totalsRow } from "../feature/formula";
+import { closeUnbalanced, computeColumn, recalculate, totalsRow } from "../feature/formula";
 import { readTableFile } from "../feature/tableFile";
 import { applyMerge, planMerge } from "../feature/merge";
 import { VIEW_TYPE_PIVOT } from "./PivotView";
 import { recalculateWorkbook } from "../feature/workbook";
 import {
 	columnStats,
+	distinctColumnValues,
 	duplicateHeaders,
 	formatNumbers,
 	mergeColumns,
@@ -47,8 +48,9 @@ import { fillRange, findAll, normalizeRect, rectCols, rectRows, replaceAll, type
 import type MarkdownSpreadsheetsPlugin from "../main";
 import { asElement, asNode } from "./dom";
 import { MAX_COL_WIDTH, MAX_ROW_HEIGHT, MIN_COL_WIDTH, MIN_ROW_HEIGHT, VIEW_TYPE_GRID } from "./constants";
-import { GridHost, type Selection } from "./GridHost";
+import { GridHost, type ReferenceSink, type Selection } from "./GridHost";
 import { formatNow } from "./GridHost";
+import { CellSuggest } from "./CellSuggest";
 import { iconName, setIconSafe, type IconKey } from "./icons";
 import { ColumnsModal, ColumnStatsModal, ComputeColumnModal, GoToModal, ImportModal, MergeModal, MultiSortModal, NumberFormatModal, TextPromptModal, TotalsModal } from "./toolModals";
 import { Menu } from "obsidian";
@@ -120,8 +122,40 @@ export class GridView extends ItemView {
 	 */
 	private siblingTables: GridModel[] = [];
 	private siblingIndex = -1;
-	/** The cell the formula bar is editing, set on the first keystroke there. */
-	private formulaTarget: { row: number; col: number } | null = null;
+	/**
+	 * The cell the formula bar is editing, set on the first keystroke there.
+	 *
+	 * The table is part of it. A formula typed in the bar can point at another table of the note —
+	 * the grid shows that table for the duration — and the text still belongs to this one, so the
+	 * two numbers are not enough to write it back.
+	 */
+	private formulaTarget: { row: number; col: number; tableIndex: number } | null = null;
+	/** Suggestions under the formula bar: the same list the cell editor has. */
+	private barSuggest: CellSuggest | null = null;
+	/** Where a click in the grid writes a reference while the bar holds a formula. */
+	private readonly barSink: ReferenceSink = {
+		value: () => this.formulaInputEl.value,
+		selection: () => ({
+			start: this.formulaInputEl.selectionStart ?? this.formulaInputEl.value.length,
+			end: this.formulaInputEl.selectionEnd ?? this.formulaInputEl.value.length,
+		}),
+		// A formula typed in this table reads its own cells by plain address; one typed elsewhere
+		// needs the table in front of the address, as `Table2!B3` does in the note. The table named
+		// is the one the clicked cell is in — the grid on screen — not the one holding the formula.
+		prefix: () => {
+			const target = this.formulaTarget;
+			const here = this.anchor?.tableIndex ?? -1;
+			if (target === null || here < 0 || target.tableIndex === here) return "";
+			return `Table${here + 1}!`;
+		},
+		replace: (start, end, text) => {
+			const value = this.formulaInputEl.value;
+			this.formulaInputEl.value = value.slice(0, start) + text + value.slice(end);
+			const caret = start + text.length;
+			this.formulaInputEl.setSelectionRange(caret, caret);
+			this.barSuggest?.update();
+		},
+	};
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -235,7 +269,7 @@ export class GridView extends ItemView {
 	override async onClose(): Promise<void> {
 		// Land an open edit first: committing marks the grid dirty and would re-arm the timer.
 		this.host?.commitEdit(0, 0, false);
-		this.commitFormula();
+		await this.commitFormula();
 		if (this.saveTimer !== null) {
 			window.clearTimeout(this.saveTimer);
 			this.saveTimer = null;
@@ -251,6 +285,7 @@ export class GridView extends ItemView {
 		this.host?.captureView();
 		this.persistLayout();
 		this.host?.destroy();
+		this.barSuggest?.destroy();
 		this.host = null;
 		this.plugin.clearStatusBar();
 	}
@@ -264,6 +299,10 @@ export class GridView extends ItemView {
 			return;
 		}
 		this.file = file;
+		this.barSuggest?.setSourcePath(file.path);
+		// Another note: whatever the bar was holding belonged to the old one.
+		this.formulaTarget = null;
+		this.host?.setReferenceSink(null);
 		const text = await this.app.vault.cachedRead(file);
 		const candidateAnchor: Anchor = anchor ?? {
 			path,
@@ -362,7 +401,7 @@ export class GridView extends ItemView {
 						// Freeze, wrap and sizes show their state in the ribbon.
 						this.refreshRibbon();
 					},
-					onBeforeMutate: () => this.commitFormula(),
+					onBeforeMutate: () => this.commitLocalFormula(),
 					onSelectionChange: (selection) => this.onSelectionChange(selection),
 					onNotice: (message) => new Notice(message),
 					onCalcPlaced: () => this.refreshRibbon(),
@@ -400,7 +439,10 @@ export class GridView extends ItemView {
 		);
 		host.mount(this.bodyEl);
 		this.host = host;
-		host.focus();
+		if (this.formulaTarget === null) host.focus();
+		// A formula draft is being held in the bar: it keeps the caret, and a click in the table now
+		// shown points at a cell for it.
+		else host.setReferenceSink(this.barSink);
 	}
 
 	/* ----------------------------------------------------- block ID (§7/L3) */
@@ -670,6 +712,7 @@ export class GridView extends ItemView {
 		// Reloading is a decision to take the note's version; pending formula-bar text belonged to
 		// the old grid and must not be written into the new one at whatever cell it now points to.
 		this.formulaTarget = null;
+		this.host.setReferenceSink(null);
 		this.host.replaceData(parseTable(region.text), this.plugin.sidecar.getLayout(this.layoutKey), keepSelection);
 		this.host.undo.clear();
 		this.dirty = false;
@@ -719,33 +762,72 @@ export class GridView extends ItemView {
 			cls: "mds-formula-input",
 			attr: { type: "text", placeholder: "Cell contents as Markdown, or a formula starting with =", spellcheck: "false" },
 		});
-		this.formulaInputEl.addEventListener("input", () => {
+		// The same list the cell editor has — function names inside a formula, `[[` notes, `#` tags,
+		// the values already used in the column — attached to the bar, where a formula is typed just
+		// as often as in the cell.
+		this.barSuggest = new CellSuggest(bar, this.formulaInputEl, {
+			app: this.app,
+			sourcePath: this.file?.path ?? "",
+			// No browse-everything list here: it would hang over the first rows of the grid, which
+			// is exactly where a formula typed in the bar points its first reference.
+			browseAll: false,
+			columnValues: () => {
+				const host = this.host;
+				if (!host) return [];
+				const { row, col } = host.getSelection().active;
+				return distinctColumnValues(host.getModel(), col, row);
+			},
+		});
+		/** The first keystroke here claims the cell the text belongs to, and the table it is in. */
+		const claimTarget = () => {
 			if (!this.host || this.formulaTarget !== null) return;
 			const { row, col } = this.host.getSelection().active;
-			this.formulaTarget = { row, col };
+			this.formulaTarget = { row, col, tableIndex: this.anchor?.tableIndex ?? 0 };
+		};
+		this.formulaInputEl.addEventListener("input", () => {
+			claimTarget();
+			this.barSuggest?.update();
+			// A formula in the bar is pointed at the grid exactly as one in the cell editor is.
+			this.host?.setReferenceSink(this.formulaInputEl.value.trimStart().startsWith("=") ? this.barSink : null);
 		});
-		this.formulaInputEl.addEventListener("focus", () => this.host?.commitEdit(0, 0, false));
+		this.formulaInputEl.addEventListener("focus", () => {
+			this.host?.commitEdit(0, 0, false);
+			if (this.formulaTarget !== null && this.formulaInputEl.value.trimStart().startsWith("=")) this.host?.setReferenceSink(this.barSink);
+		});
 		this.formulaInputEl.addEventListener("keydown", (evt) => {
 			evt.stopPropagation();
 			if (evt.isComposing) return;
+			// The list gets the key first, as it does in the cell editor: Enter picks a suggestion
+			// instead of committing a half-typed formula.
+			const picked = this.barSuggest?.handleKey(evt) ?? false;
+			if (picked !== false) {
+				evt.preventDefault();
+				if (picked === "commit") void this.finishFormula(evt.key === "Tab" ? 0 : 1, evt.key === "Tab" ? 1 : 0);
+				return;
+			}
 			if (evt.key === "Enter") {
 				evt.preventDefault();
-				this.commitFormula();
-				this.host?.focus();
-				this.host?.moveActive(evt.shiftKey ? -1 : 1, 0);
+				void this.finishFormula(evt.shiftKey ? -1 : 1, 0);
 			} else if (evt.key === "Tab") {
 				evt.preventDefault();
-				this.commitFormula();
-				this.host?.focus();
-				this.host?.moveActive(0, evt.shiftKey ? -1 : 1);
+				void this.finishFormula(0, evt.shiftKey ? -1 : 1);
 			} else if (evt.key === "Escape") {
 				evt.preventDefault();
 				this.formulaTarget = null;
+				this.host?.setReferenceSink(null);
 				this.syncFormulaBar();
 				this.host?.focus();
 			}
 		});
-		this.formulaInputEl.addEventListener("blur", () => this.commitFormula());
+		this.formulaInputEl.addEventListener("blur", () => void this.commitFormula());
+	}
+
+	/** Enter or Tab in the formula bar: land the text, then move as the grid would. */
+	private async finishFormula(dRow: number, dCol: number): Promise<void> {
+		const landedHere = await this.commitFormula();
+		if (!landedHere) return;
+		this.host?.focus();
+		this.host?.moveActive(dRow, dCol);
 	}
 
 	/**
@@ -754,21 +836,63 @@ export class GridView extends ItemView {
 	 * It used to write into whichever cell was active at blur time. Clicking another cell moves the
 	 * selection before the blur, and the selection change had already overwritten the input with
 	 * the new cell's content — so the typed text was silently dropped.
+	 *
+	 * The cell can live in another table: the bar holds the draft while the grid shows a sibling, so
+	 * a formula can point at `Table2!`, and the text lands in the table it was typed in. Returns
+	 * false when that landing needed the other table, because the grid is showing it now.
 	 */
-	private commitFormula(): void {
+	private async commitFormula(): Promise<boolean> {
 		const target = this.formulaTarget;
-		if (!target || !this.host) return;
+		if (target === null || this.host === null) return true;
 		this.formulaTarget = null;
-		this.host.setValueAt(target.row, target.col, this.formulaInputEl.value);
+		this.host.setReferenceSink(null);
+		const text = closeUnbalanced(this.formulaInputEl.value);
+		if (target.tableIndex === (this.anchor?.tableIndex ?? -1)) {
+			this.host.setValueAt(target.row, target.col, text);
+			return true;
+		}
+		// The cell is in another table of the note, and showing that table is the only write path
+		// the grid has: the draft goes with the switch and lands there.
+		await this.switchTable(target.tableIndex, { row: target.row, col: target.col, text });
+		return false;
+	}
+
+	/** Lands the bar's text only when it belongs to the table on screen; a mutation cannot move it. */
+	private commitLocalFormula(): void {
+		if (this.formulaTarget === null || this.formulaTarget.tableIndex !== (this.anchor?.tableIndex ?? -1)) return;
+		void this.commitFormula();
+	}
+
+	/**
+	 * Moves a formula being typed into the formula bar without committing it. Returns false when
+	 * nothing is being typed, so the caller can commit whatever else the editor holds.
+	 */
+	private liftFormulaDraft(): boolean {
+		const host = this.host;
+		if (host === null) return false;
+		if (this.formulaTarget !== null) return this.formulaInputEl.value.trimStart().startsWith("=");
+		const draft = host.detachFormulaEdit();
+		if (draft === null) return false;
+		this.formulaTarget = { row: draft.row, col: draft.col, tableIndex: this.anchor?.tableIndex ?? 0 };
+		this.formulaInputEl.value = draft.text;
+		this.formulaInputEl.focus();
+		this.formulaInputEl.setSelectionRange(draft.caret, draft.caret);
+		host.setReferenceSink(this.barSink);
+		this.barSuggest?.update();
+		return true;
 	}
 
 	private syncFormulaBar(): void {
 		if (!this.host) return;
-		// A pending formula-bar edit belongs to the cell it started on; land it before showing the next.
-		if (this.formulaTarget !== null) this.commitFormula();
+		const here = this.anchor?.tableIndex ?? -1;
+		// A pending formula-bar edit belongs to the cell it started on; land it before showing the
+		// next. A draft for another table stays put: pointing at a sibling moves the selection too.
+		if (this.formulaTarget !== null && this.formulaTarget.tableIndex === here) void this.commitFormula();
 		const { active } = this.host.getSelection();
 		this.formulaAddressEl.setText(this.host.activeLabel());
 		if (this.host.isEditing()) return;
+		// The bar is holding a draft of its own; the cell under the selection is not what it shows.
+		if (this.formulaTarget !== null) return;
 		this.formulaInputEl.value = this.host.editTextAt(active.row, active.col);
 	}
 
@@ -839,14 +963,37 @@ export class GridView extends ItemView {
 			});
 			tab.toggleClass("is-active", active);
 			tab.createSpan({ cls: "mds-sheet-name", text: head === "" ? `Table ${region.index + 1}` : head });
+			// Focus stays where it is: a tab click that blurred the formula bar would commit the
+			// formula the switch is meant to keep. The click itself still arrives.
+			tab.addEventListener("mousedown", (evt) => evt.preventDefault());
 			tab.addEventListener("click", () => void this.switchTable(region.index));
 		}
 	}
 
-	private async switchTable(index: number): Promise<void> {
+	/**
+	 * Switches the grid to another table of the note.
+	 *
+	 * A formula being typed survives the switch. It belongs to the table it was typed in, so it
+	 * moves to the formula bar — where it stays readable — and the table now shown can be pointed
+	 * at, the reference getting the table in front of it. Switching *to* the draft's own table is
+	 * the one case where it lands instead, because that is where it belongs.
+	 */
+	private async switchTable(index: number, land?: { row: number; col: number; text: string }): Promise<void> {
 		if (!this.file || !this.anchor || index === this.anchor.tableIndex) return;
-		this.host?.commitEdit(0, 0, false);
-		this.commitFormula();
+		const target = this.formulaTarget;
+		if (target !== null && target.tableIndex === index) {
+			this.formulaTarget = null;
+			this.host?.setReferenceSink(null);
+			land ??= { row: target.row, col: target.col, text: closeUnbalanced(this.formulaInputEl.value) };
+		} else if (target !== null) {
+			// A draft for the table being left. A formula stays — it may be pointed at the table now
+			// shown — but anything else is text that belongs in its cell, so it lands here.
+			if (!this.formulaInputEl.value.trimStart().startsWith("=")) await this.commitFormula();
+		} else {
+			// An in-cell edit that is not a formula is committed, as it always was.
+			this.liftFormulaDraft();
+			if (this.formulaTarget === null) this.host?.commitEdit(0, 0, false);
+		}
 		if (this.dirty) await this.save(true);
 		if (this.dirty) {
 			new Notice("Save or discard the changes to this table first.");
@@ -857,6 +1004,7 @@ export class GridView extends ItemView {
 		this.persistLayout();
 		const region = scanTables(await this.app.vault.cachedRead(this.file))[index];
 		if (region) await this.adoptRegion(region, 0);
+		if (land) this.host?.setValueAt(land.row, land.col, land.text);
 		void this.refreshSheets();
 	}
 
@@ -984,7 +1132,7 @@ export class GridView extends ItemView {
 			if (active !== null && !this.contentEl.contains(active)) return true;
 			evt.preventDefault();
 			this.host.commitEdit(0, 0, false);
-			this.commitFormula();
+			this.commitLocalFormula();
 			void this.save(true);
 			return false;
 		});
@@ -1083,7 +1231,7 @@ export class GridView extends ItemView {
 			// a ribbon click — so every action sees it, and it lands in the cell it was typed for.
 			onClick: () => {
 				this.host?.commitEdit(0, 0, false);
-				this.commitFormula();
+				this.commitLocalFormula();
 				onClick();
 			},
 			...(extra?.tooltip === undefined ? {} : { tooltip: extra.tooltip }),
