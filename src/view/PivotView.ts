@@ -2,7 +2,15 @@ import { ItemView, Notice, type WorkspaceLeaf } from "obsidian";
 import { createModel, recomputeUsedRange, setRaw, type GridModel } from "../model/GridModel";
 import { parseTable } from "../model/parse";
 import { formatNumber } from "../model/numbers";
-import { consolidate, pivot, suggestGroupColumn, suggestValueColumn, type PivotAggregate, type PivotOptions } from "../feature/pivot";
+import {
+	consolidate,
+	pivot,
+	suggestGroupColumn,
+	suggestValueColumn,
+	withLookup,
+	type PivotAggregate,
+	type PivotOptions,
+} from "../feature/pivot";
 import { scanTables } from "../file/scanTables";
 import type MarkdownSpreadsheetsPlugin from "../main";
 import { GridHost } from "./GridHost";
@@ -41,6 +49,11 @@ export class PivotView extends ItemView {
 	private models: GridModel[] = [];
 	private selected: boolean[] = [];
 	private state: PivotOptions = { groupCol: 0, valueCol: 1, aggregate: "sum", sort: "value" };
+	/** A column brought over from another table, off until asked for. */
+	private lookup = { on: false, table: 0, keyCol: 0, tableKeyCol: 0, valueCol: 1 };
+	private lookupNoteEl: HTMLElement | null = null;
+	/** How many groups the last calculation produced, for the caption. */
+	private lastGroups = 0;
 	private host: GridHost | null = null;
 	private hostEl: HTMLElement | null = null;
 	private captionEl: HTMLElement | null = null;
@@ -99,6 +112,10 @@ export class PivotView extends ItemView {
 	}
 
 	private build(): void {
+		// The bar is rebuilt whenever the tables in play change, and it owns the element the grid is
+		// mounted in — so the old host has to go, or it keeps drawing into a detached node.
+		this.host?.destroy();
+		this.host = null;
 		this.contentEl.empty();
 		const bar = this.contentEl.createDiv({ cls: "mds-pivot-bar" });
 
@@ -154,6 +171,52 @@ export class PivotView extends ItemView {
 			this.refresh();
 		});
 
+		// A lookup is a second row of the bar, always visible: "None" is the default and the rest is
+		// one select each. Changing the donor re-reads the columns it offers, so the bar is rebuilt.
+		const lookupBar = this.contentEl.createDiv({ cls: "mds-pivot-bar mds-pivot-lookup" });
+		const donor = this.lookup.on ? Math.min(this.lookup.table, this.models.length - 1) : -1;
+		const provider = donor === -1 ? this.models[0] : this.models[donor];
+		const providerCols = Array.from({ length: Math.max(provider.usedRange.cols, 1) }, (_, c): [string, string] => [
+			String(c),
+			(provider.cells.get(`0:${c}`)?.raw ?? "").trim() || `Column ${c + 1}`,
+		]);
+		const lookupControls = lookupBar.createDiv({ cls: "mds-pivot-controls" });
+		const pick = (label: string, options: Array<[string, string]>, value: string, onChange: (value: string) => void): void => {
+			const wrap = lookupControls.createDiv({ cls: "mds-pivot-field" });
+			wrap.createEl("label", { text: label });
+			const el = wrap.createEl("select");
+			for (const [key, text] of options) {
+				const option = el.createEl("option", { text, attr: { value: key } });
+				if (key === value) option.selected = true;
+			}
+			el.addEventListener("change", () => {
+				onChange(el.value);
+				this.refresh();
+			});
+		};
+		pick(
+			"Lookup",
+			[["none", "None"], ...this.models.map((_, i): [string, string] => [String(i), `Table ${i + 1}`])],
+			donor === -1 ? "none" : String(donor),
+			(value) => {
+				this.lookup.on = value !== "none";
+				this.lookup.table = value === "none" ? 0 : Number.parseInt(value, 10);
+				this.lookup.tableKeyCol = 0;
+				this.lookup.valueCol = providerCols.length > 1 ? 1 : 0;
+				if (this.lookup.on) this.build();
+			},
+		);
+		pick("match", columns, String(Math.min(this.lookup.keyCol, Math.max(columns.length - 1, 0))), (value) => {
+			this.lookup.keyCol = Number.parseInt(value, 10);
+		});
+		pick("with", providerCols, String(Math.min(this.lookup.tableKeyCol, Math.max(providerCols.length - 1, 0))), (value) => {
+			this.lookup.tableKeyCol = Number.parseInt(value, 10);
+		});
+		pick("bring", providerCols, String(Math.min(this.lookup.valueCol, Math.max(providerCols.length - 1, 0))), (value) => {
+			this.lookup.valueCol = Number.parseInt(value, 10);
+		});
+		this.lookupNoteEl = lookupBar.createDiv({ cls: "mds-pivot-caption" });
+
 		this.captionEl = bar.createDiv({ cls: "mds-pivot-caption" });
 		bar.createDiv({
 			cls: "mds-pivot-note",
@@ -168,20 +231,51 @@ export class PivotView extends ItemView {
 	private currentColumns(): string[] {
 		const chosen = this.models.filter((_, i) => this.selected[i]);
 		if (chosen.length === 0) return [];
-		const source = chosen.length === 1 ? chosen[0] : consolidate(chosen).model;
+		const base = chosen.length === 1 ? chosen[0] : consolidate(chosen).model;
+		let source = base;
+		if (this.lookup.on && this.models.length > 1) {
+			const donor = this.models[Math.min(this.lookup.table, this.models.length - 1)];
+			const joined = withLookup(base, {
+				keyCol: Math.min(this.lookup.keyCol, Math.max(base.usedRange.cols - 1, 0)),
+				table: donor,
+				tableKeyCol: Math.min(this.lookup.tableKeyCol, Math.max(donor.usedRange.cols - 1, 0)),
+				tableValueCol: Math.min(this.lookup.valueCol, Math.max(donor.usedRange.cols - 1, 0)),
+			});
+			source = joined.model;
+			this.lookupNoteEl?.setText(`${joined.matched} matched${joined.unmatched > 0 ? `, ${joined.unmatched} without a key` : ""}${joined.duplicates > 0 ? `, ${joined.duplicates} repeated key` : ""}`);
+		}
 		const cols = Math.max(source.usedRange.cols, 1);
-		return Array.from({ length: cols }, (_, c) => (source.cells.get(`0:${c}`)?.raw ?? "").trim());
+		const names = Array.from({ length: cols }, (_, c) => (source.cells.get(`0:${c}`)?.raw ?? "").trim());
+		if (this.lookup.on && this.models.length > 1) {
+			const donor = this.models[Math.min(this.lookup.table, this.models.length - 1)];
+			const header = donor.cells.get(`0:${Math.min(this.lookup.valueCol, Math.max(donor.usedRange.cols - 1, 0))}`)?.raw ?? "Lookup";
+			names.push(`${header.trim()} (lookup)`);
+		}
+		return names;
 	}
 
 	/** The model the grid shows: the pivot of the selected tables, as values. */
 	private pivotModel(): GridModel | null {
 		const chosen = this.models.filter((_, i) => this.selected[i]);
 		if (chosen.length === 0) return null;
-		const source = chosen.length === 1 ? chosen[0] : consolidate(chosen).model;
+		const base = chosen.length === 1 ? chosen[0] : consolidate(chosen).model;
+		let source = base;
+		if (this.lookup.on && this.models.length > 1) {
+			const donor = this.models[Math.min(this.lookup.table, this.models.length - 1)];
+			const joined = withLookup(base, {
+				keyCol: Math.min(this.lookup.keyCol, Math.max(base.usedRange.cols - 1, 0)),
+				table: donor,
+				tableKeyCol: Math.min(this.lookup.tableKeyCol, Math.max(donor.usedRange.cols - 1, 0)),
+				tableValueCol: Math.min(this.lookup.valueCol, Math.max(donor.usedRange.cols - 1, 0)),
+			});
+			source = joined.model;
+			this.lookupNoteEl?.setText(`${joined.matched} matched${joined.unmatched > 0 ? `, ${joined.unmatched} without a key` : ""}${joined.duplicates > 0 ? `, ${joined.duplicates} repeated key` : ""}`);
+		}
 		const cols = Math.max(source.usedRange.cols, 1);
 		const group = Math.min(this.state.groupCol, cols - 1);
 		const value = Math.min(this.state.valueCol === group ? (group === 0 ? 1 : 0) : this.state.valueCol, cols - 1);
 		const result = pivot(source, { ...this.state, groupCol: group, valueCol: value }, this.plugin.sidecar.settings.decimalSeparator ? { decimalSeparator: this.plugin.sidecar.settings.decimalSeparator } : undefined);
+		this.lastGroups = result.groups.length;
 		const model = createModel();
 		setRaw(model, 0, 0, result.headers.label);
 		setRaw(model, 0, 1, result.headers.value);
@@ -216,8 +310,8 @@ export class PivotView extends ItemView {
 			this.hostEl.createEl("p", { cls: "mds-pivot-empty", text: "Pick at least one table." });
 			return;
 		}
-		const groups = Math.max(model.usedRange.rows - 1, 0);
-		this.captionEl?.setText(`${groups} ${groups === 1 ? "group" : "groups"} from ${this.selected.filter(Boolean).length} ${this.selected.filter(Boolean).length === 1 ? "table" : "tables"}`);
+		const tables = this.selected.filter(Boolean).length;
+		this.captionEl?.setText(`${this.lastGroups} ${this.lastGroups === 1 ? "group" : "groups"} from ${tables} ${tables === 1 ? "table" : "tables"}`);
 		if (this.host !== null) {
 			this.host.replaceData(model, defaultLayout(this.plugin.sidecar.settings));
 			return;
