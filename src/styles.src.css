@@ -1314,67 +1314,112 @@
 	background-color: var(--background-primary);
 }
 
-/* --------------------------------------------------------------- pivot panel */
+/* ------------------------------------------------------------------ pivot */
 
-.mds-pivot-modal {
-	width: min(620px, 92vw);
+.markdown-pivot-view {
+	padding: 0;
 }
 
-.mds-pivot {
-	margin: 6px 0 14px;
-}
-
-.mds-pivot-scroll {
-	overflow-x: auto;
-	border: 1px solid var(--background-modifier-border);
-	border-radius: var(--radius-m);
-}
-
-.mds-pivot-table {
-	width: 100%;
-	border-collapse: collapse;
-	font-size: var(--font-ui-small);
-}
-
-.mds-pivot-table th,
-.mds-pivot-table td {
-	padding: 6px 12px;
-	text-align: left;
-	white-space: nowrap;
-}
-
-.mds-pivot-table thead th {
-	position: sticky;
-	top: 0;
-	background-color: var(--background-secondary);
-	color: var(--text-muted);
-	font-weight: var(--font-medium);
+/* The bar above the result: which tables, and what to do with them. */
+.mds-pivot-bar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 16px;
+	flex: 0 0 auto;
+	padding: 8px 12px;
 	border-bottom: 1px solid var(--background-modifier-border);
-}
-
-.mds-pivot-table tbody th {
-	font-weight: var(--font-normal);
-}
-
-.mds-pivot-table tbody tr:nth-child(even) {
-	background-color: var(--background-primary-alt);
-}
-
-/* Numbers line up: tabular figures, right aligned, and a hair of tracking. */
-.mds-pivot-table .is-number {
-	text-align: right;
-	font-variant-numeric: tabular-nums;
-	font-feature-settings: "tnum" 1;
-}
-
-.mds-pivot-table tfoot th,
-.mds-pivot-table tfoot td {
-	border-top: 1px solid var(--background-modifier-border);
-	font-weight: var(--font-semibold);
 	background-color: var(--background-secondary);
+}
+
+.mds-pivot-sources {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+}
+
+.mds-pivot-label {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+/* A table in play is a chip, not a checkbox: one tap, and it shows its own headers. */
+.mds-pivot-source {
+	height: auto;
+	min-height: 0;
+	max-width: 220px;
+	padding: 4px 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 999px;
+	background: transparent;
+	box-shadow: none;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	cursor: pointer;
+}
+
+.mds-pivot-source:hover {
+	color: var(--text-normal);
+	border-color: var(--background-modifier-border-hover);
+}
+
+.mds-pivot-source.is-on {
+	color: var(--text-on-accent);
+	border-color: var(--interactive-accent);
+	background-color: var(--interactive-accent);
+}
+
+.mds-pivot-controls {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 12px;
+}
+
+.mds-pivot-field {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.mds-pivot-field select {
+	height: 26px;
+	font-size: var(--font-ui-smaller);
+}
+
+.mds-pivot-caption {
+	flex: 1 1 auto;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	text-align: right;
+}
+
+.mds-pivot-note {
+	flex: 0 0 auto;
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+}
+
+.mds-pivot-body {
+	flex: 1 1 auto;
+	min-height: 0;
+	display: flex;
+}
+
+.mds-pivot-body .mds-host {
+	flex: 1 1 auto;
+	min-width: 0;
 }
 
 .mds-pivot-empty {
+	margin: 18px 12px;
 	padding: 18px 12px;
 	border: 1px dashed var(--background-modifier-border);
 	border-radius: var(--radius-m);
@@ -1382,22 +1427,18 @@
 	font-size: var(--font-ui-small);
 }
 
-/* A phone: three buttons do not fit on one line, so they wrap instead of hyphenating. */
+/* A phone: the bar stacks, and the chips stay one line high. */
 @media (max-width: 480px) {
-	.mds-pivot-modal .setting-item-control {
-		flex-wrap: wrap;
-		justify-content: flex-start;
+	.mds-pivot-bar {
+		gap: 6px 8px;
+		padding: 6px 8px;
 	}
 
-	.mds-pivot-modal .setting-item-control button {
-		white-space: nowrap;
+	.mds-pivot-caption,
+	.mds-pivot-note {
+		text-align: left;
+		flex-basis: 100%;
 	}
-}
-
-.mds-pivot-caption {
-	margin: 0 0 6px;
-	color: var(--text-muted);
-	font-size: var(--font-ui-smaller);
 }
 
 /* The merge dialog's consequence line: what will happen, in numbers. */

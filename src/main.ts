@@ -16,6 +16,7 @@ import { MarkdownSpreadsheetsSettingTab } from "./view/SettingTab";
 import { Sidecar } from "./store/Sidecar";
 import { VIEW_TYPE_GRID } from "./view/constants";
 import { GridView, type GridViewState } from "./view/GridView";
+import { PivotView, VIEW_TYPE_PIVOT } from "./view/PivotView";
 import { TablePickerModal } from "./view/modals";
 import { GRID_COMMANDS } from "./view/gridCommands";
 import { ImportModal, InsertTableModal, TableIndexModal, type VaultTable } from "./view/toolModals";
@@ -38,6 +39,8 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 		await this.sidecar.load();
 
 		this.registerView(VIEW_TYPE_GRID, (leaf) => new GridView(leaf, this));
+		// A pivot is a leaf of its own: read-only, belongs to no note, disappears when closed.
+		this.registerView(VIEW_TYPE_PIVOT, (leaf) => new PivotView(leaf, this));
 		// Ctrl-hover on a link in a rendered cell shows Obsidian's page preview, as in a note.
 		this.registerHoverLinkSource(VIEW_TYPE_GRID, { display: "Markdown Spreadsheets", defaultMod: true });
 		this.addSettingTab(new MarkdownSpreadsheetsSettingTab(this.app, this));

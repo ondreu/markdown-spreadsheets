@@ -451,3 +451,15 @@ Both screenshots are in `docs/images` (`pivot-desktop.png`, `pivot-mobile.png`).
 the harness's Obsidian shim to grow real `Modal` and `Setting` implementations; until then every
 dialog rendered as an empty box, which is why the merge dialog had never been seen.
 
+## Round fifteen: the pivot as a read-only view
+
+Replaced the dialog from round fourteen with a leaf of its own (decision 33): a real grid with
+`readOnly` set, a bar of table chips and four settings, and an explicit line that nothing is written.
+Several tables of a note can be pivoted together — rows appended, columns matched by header
+(`consolidate`, three tests).
+
+`GridHost` gained `readOnly`, which short-circuits `mutate()` and `beginEdit()` — the whole model
+change path, so there is no back door. The harness mounts the view through `window.openPivotView`
+and renders it at 1200 px and 390 px; the desktop shot was checked against the numbers (Furniture 8,
+Light 4, Moving 2, total 14).
+

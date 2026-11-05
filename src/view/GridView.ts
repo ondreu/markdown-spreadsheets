@@ -25,8 +25,7 @@ import { toHtmlTable, toJson } from "../feature/exportExtra";
 import { computeColumn, recalculate, totalsRow } from "../feature/formula";
 import { readTableFile } from "../feature/tableFile";
 import { applyMerge, planMerge } from "../feature/merge";
-import { PivotModal } from "./PivotModal";
-import { suggestGroupColumn, suggestValueColumn } from "../feature/pivot";
+import { VIEW_TYPE_PIVOT } from "./PivotView";
 import { recalculateWorkbook } from "../feature/workbook";
 import {
 	columnStats,
@@ -1912,24 +1911,16 @@ export class GridView extends ItemView {
 		}).open();
 	}
 
-	/** The pivot panel: a live preview, written into the note only when asked. */
+	/**
+	 * The pivot as its own read-only view, beside the table it reads. A phone has no room for a
+	 * split, so there it takes a tab.
+	 */
 	private openPivot(): void {
-		const host = this.host;
-		if (!host) return;
-		const model = host.getModel();
-		const headers: string[] = [];
-		for (let c = 0; c < Math.max(model.usedRange.cols, 1); c++) headers.push(plainText(getRaw(model, 0, c)).trim());
-		new PivotModal(this.app, {
-			model,
-			headers,
-			suggestedGroupCol: suggestGroupColumn(model),
-			suggestedValueCol: suggestValueColumn(model, suggestGroupColumn(model)),
-			format: (value) => host.formatValueFor(value),
-			insert: (values) => host.pasteValues(values, "Insert pivot"),
-			copy: (text) => {
-				void navigator.clipboard.writeText(text).then(() => new Notice("Copied the pivot as a Markdown table."));
-			},
-		}).open();
+		const file = this.file;
+		if (!file) return;
+		const state = { path: file.path, tableIndex: this.anchor?.tableIndex ?? 0 };
+		const leaf = this.app.workspace.getLeaf(Platform.isPhone ? "tab" : "split");
+		void leaf.setViewState({ type: VIEW_TYPE_PIVOT, active: true, state: state });
 	}
 
 	/** Merge a file into this table by a key column, with the consequences shown first. */
