@@ -838,7 +838,13 @@ function evalValue(node: Node, ctx: EvalContext): CellValue {
 			return refValue(ctx, ctx.row, node.col);
 		case "xref": {
 			if (node.row < 0 || node.col < 0) throw new FormulaError("#REF!", "Reference to a cell that does not exist");
-			return tableSource(ctx, node.table).value(node.row, node.col);
+			const source = tableSource(ctx, node.table);
+			// Past the last row or column of that table there is no cell to read: a typo has to say so
+			// instead of quietly adding zero (which is how an off-by-one slipped through once).
+			if (node.row >= source.rows || node.col >= source.cols) {
+				throw new FormulaError("#REF!", `Table${node.table + 1} has no ${colName(node.col)}${node.row + 1} — it ends at ${colName(Math.max(source.cols - 1, 0))}${source.rows}`);
+			}
+			return source.value(node.row, node.col);
 		}
 		case "range":
 		case "xrange":
@@ -920,6 +926,10 @@ function collect(args: Node[], ctx: EvalContext, tolerateErrors: boolean): Colle
 		} else if (arg.kind === "xrange") {
 			if (arg.r1 < 0 || arg.c1 < 0) throw new FormulaError("#REF!", "Reference to a cell that does not exist");
 			const source = tableSource(ctx, arg.table);
+			if (arg.r1 >= source.rows || arg.c1 >= source.cols) {
+				throw new FormulaError("#REF!", `Table${arg.table + 1} has no ${colName(arg.c1)}${arg.r1 + 1} — it ends at ${colName(Math.max(source.cols - 1, 0))}${source.rows}`);
+			}
+			// Clipping at the end is deliberate: `Table1!B2:B99` over a short table reads what exists.
 			const r2 = Math.min(arg.r2, source.rows - 1);
 			const c2 = Math.min(arg.c2, source.cols - 1);
 			for (let r = arg.r1; r <= r2; r++) {
@@ -1743,6 +1753,45 @@ export function computeColumn(model: GridModel, target: number, expr: string, op
 	}
 	recomputeUsedRange(model);
 	return result;
+}
+
+/**
+ * Evaluates one expression as if it sat in `row` of a table — a conditional-format rule that tests a
+ * formula rather than a value (`if B2>1000`). Returns null when the expression cannot be read or
+ * evaluated: a rule that cannot judge a cell has to leave it alone rather than paint it wrong.
+ */
+export function testExpression(
+	expr: string,
+	model: GridModel,
+	row: number,
+	opts: { numberOpts?: NumberParseOptions; tables?: CellSource[] } = {},
+): boolean | null {
+	const text = (expr.trim().startsWith("=") ? expr.trim().slice(1) : expr.trim()).trim();
+	if (text === "") return null;
+	let ast: Node;
+	try {
+		ast = new Parser(tokenize(text), null).parse();
+	} catch {
+		return null;
+	}
+	const source: CellSource = sourceOf(model, opts.numberOpts);
+	try {
+		const value = evalValue(ast, { source, row, numberOpts: opts.numberOpts, tables: opts.tables });
+		switch (value.t) {
+			case "num":
+				return value.n !== 0;
+			case "bool":
+				return value.b;
+			case "text": {
+				const text = value.s.trim().toLowerCase();
+				return text !== "" && text !== "false" && text !== "0";
+			}
+			default:
+				return null;
+		}
+	} catch {
+		return null;
+	}
 }
 
 /** A header as it is matched: emphasis stripped, no case, single spaces. Shared with the merge. */

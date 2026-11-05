@@ -13,6 +13,7 @@ import {
 import { plainText } from "../src/feature/exportCsv";
 import { buildWorkbookXlsx, DEFAULT_XLSX_OPTIONS, ruleFormula } from "../src/feature/exportXlsx";
 import { buildFormulaCell } from "../src/feature/formula";
+import { recalculateWorkbook } from "../src/feature/workbook";
 import { parseTable } from "../src/model/parse";
 import { serializeTable } from "../src/model/serialize";
 import { getRaw, setRaw } from "../src/model/GridModel";
@@ -268,5 +269,82 @@ describe("conditional formatting in the workbook export", () => {
 		// The value is still a formula cell with its cached number.
 		expect(sheet).toContain("<f>1+4</f><v>5</v>");
 		expect(buildFormulaCell("5", "1+4")).toContain("%%=1+4%%");
+	});
+});
+
+describe("a rule whose condition is a formula", () => {
+	const table = () => parseTable("| Item | Amount |\n| --- | ---: |\n| a | 800 |\n| b | 1 200 |\n| c | 300 |\n");
+
+	it("reads a composed expression after `if`, quotes and all", () => {
+		expect(parseRuleBody('cf B2:B4 if AND(B2>1000;C2<>"x y") bold')).toMatchObject({
+			op: "if",
+			value: 'AND(B2>1000;C2<>"x y")',
+			format: "bold",
+		});
+	});
+
+	it("round-trips through the comment, and needs no range for one cell", () => {
+		expect(buildRuleComment({ r1: 1, c1: 1, r2: 3, c2: 1, op: "if", value: "SUM($B$2:B2)>1500", format: "highlight" })).toBe(
+			"%%cf B2:B4 if SUM($B$2:B2)>1500 highlight%%",
+		);
+		expect(buildRuleComment({ r1: 1, c1: 1, r2: 1, c2: 1, op: "if", value: "B2>10", format: "bold" })).toBe("%%cf if B2>10 bold%%");
+	});
+
+	it("is evaluated per cell, with the references shifted like Excel does", () => {
+		const model = table();
+		setRaw(model, 0, 1, "Amount %%cf B2:B4 if B2>1000 bold%%");
+		applyConditionalFormats(model, {});
+		expect(getRaw(model, 1, 1)).toBe("800");
+		expect(getRaw(model, 2, 1)).toBe("**1 200**");
+		expect(getRaw(model, 3, 1)).toBe("300");
+	});
+
+	it("keeps an absolute reference fixed across the range", () => {
+		const model = table();
+		// Running total: 800, 2 000, 2 300 — everything after the second row is above 1 500.
+		setRaw(model, 0, 1, "Amount %%cf B2:B4 if SUM($B$2:B2)>1500 bold%%");
+		applyConditionalFormats(model, {});
+		expect(getRaw(model, 1, 1)).toBe("800");
+		expect(getRaw(model, 2, 1)).toBe("**1 200**");
+		expect(getRaw(model, 3, 1)).toBe("**300**");
+	});
+
+	it("takes any function, including IF and a comparison against another column", () => {
+		const model = parseTable("| Item | Done | Amount |\n| --- | --- | ---: |\n| a | yes | 900 |\n| b | no | 1 200 |\n");
+		setRaw(model, 0, 2, "Amount %%cf C2:C3 if IF(B2=\"yes\";C2>0;C2>1000) highlight%%");
+		applyConditionalFormats(model, {});
+		expect(getRaw(model, 1, 2)).toBe("==900==");
+		expect(getRaw(model, 2, 2)).toBe("==1 200==");
+	});
+
+	it("leaves the cells alone when the expression cannot be evaluated", () => {
+		const model = table();
+		setRaw(model, 1, 1, "**800**");
+		setRaw(model, 0, 1, "Amount %%cf B2:B4 if NOSUCHFN(B2) bold%%");
+		expect(applyConditionalFormats(model, {})).toEqual([]);
+		expect(getRaw(model, 1, 1)).toBe("**800**");
+	});
+
+	it("becomes the Excel expression, separators and all", () => {
+		expect(ruleFormula({ r1: 1, c1: 1, op: "if", value: 'AND(B2>1000;C2<>"x")' })).toBe('AND(B2>1000,C2<>"x")');
+		// A rule Excel cannot express is dropped from the file instead of breaking it.
+		expect(ruleFormula({ r1: 1, c1: 1, op: "if", value: "B2 +" })).toBeNull();
+	});
+});
+
+describe("a cross-table reference past the end of its table", () => {
+	const source = parseTable("| A |\n| --- |\n| 1 |\n");
+
+	it("is #REF! instead of a silent zero", () => {
+		const model = parseTable("| T |\n| --- |\n| 0 %%=Table1!A9%% |\n");
+		const result = recalculateWorkbook([source, model], { numberOpts: {}, format: (v) => String(v) });
+		expect(result.errors.some((issue) => issue.code === "#REF!")).toBe(true);
+		expect(getRaw(model, 1, 0)).toContain("#REF!");
+	});
+
+	it("still reads what exists when a range runs past the end", () => {
+		const model = parseTable("| T |\n| --- |\n| 0 %%=SUM(Table1!A1:A99)%% |\n");
+		recalculateWorkbook([source, model], { numberOpts: {}, format: (v) => String(v) });
+		expect(getRaw(model, 1, 0)).toBe("1 %%=SUM(Table1!A1:A99)%%");
 	});
 });

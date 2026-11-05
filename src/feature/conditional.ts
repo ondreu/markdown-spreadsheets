@@ -1,6 +1,7 @@
 import { colIndex, colName, parseAddrKey } from "../model/address";
 import { getRaw, setRaw, type GridModel } from "../model/GridModel";
 import { parseNumber, type NumberParseOptions } from "../model/numbers";
+import { testExpression, translateFormula, type CellSource } from "./formula";
 import { addInlineFormat, peelInline, removeInlineFormat, type InlineFormat } from "./ops";
 
 /**
@@ -24,7 +25,12 @@ import { addInlineFormat, peelInline, removeInlineFormat, type InlineFormat } fr
 export type ConditionalFormat = "bold" | "italic" | "strike" | "code" | "highlight";
 
 /** `=` and `<>` compare text case-insensitively; the ordering operators need numbers. */
-export type ConditionalOp = ">" | ">=" | "<" | "<=" | "=" | "<>" | "contains";
+/**
+ * `if` is not a comparison: the value that follows is a whole Excel expression (`IF`, `SUM`, `AND`,
+ * `$B$2:B2`), evaluated per cell with the range's first cell as the origin — Excel's "use a formula
+ * to determine which cells to format".
+ */
+export type ConditionalOp = ">" | ">=" | "<" | "<=" | "=" | "<>" | "contains" | "if";
 
 export interface ConditionalRule {
 	/** Model coordinates, not labels: row 0 is the header row. */
@@ -41,6 +47,8 @@ export interface ConditionalRule {
 }
 
 const OPS: readonly ConditionalOp[] = [">", ">=", "<", "<=", "=", "<>", "contains"];
+/** The two words that introduce an expression instead of a comparison. */
+const FORMULA_OPS = /^(if|formula|expr)$/i;
 
 const FORMAT_ALIASES: Record<string, ConditionalFormat> = {
 	bold: "bold",
@@ -143,11 +151,13 @@ function tokenize(s: string): string[] {
  * person typed by hand would be worse than ignoring it.
  */
 export function parseRuleBody(body: string): { range: { r1: number; c1: number; r2: number; c2: number } | null; op: ConditionalOp; value: string; format: ConditionalFormat } | null {
-	const tokens = tokenize(body.replace(/^cf\s+/i, ""));
+	let rest = body.replace(/^cf\s+/i, "").trim();
+	if (rest === "") return null;
 	let range: { r1: number; c1: number; r2: number; c2: number } | null = null;
-	const first = tokens[0];
-	if (first !== undefined && !OPS.includes(first as ConditionalOp)) {
-		const m = RANGE_RE.exec(first);
+	const first = /^(\S+)\s+/.exec(rest);
+	const head = first?.[1] ?? rest;
+	if (!OPS.includes(head as ConditionalOp) && !FORMULA_OPS.test(head)) {
+		const m = RANGE_RE.exec(head);
 		if (m === null) return null;
 		const c1 = colIndex(m[1]);
 		const r1 = Number.parseInt(m[2], 10) - 1;
@@ -155,8 +165,20 @@ export function parseRuleBody(body: string): { range: { r1: number; c1: number; 
 		const r2 = m[4] === undefined ? r1 : Number.parseInt(m[4], 10) - 1;
 		if (c1 < 0 || c2 < 0 || r1 < 0 || r2 < 0) return null;
 		range = { r1: Math.min(r1, r2), c1: Math.min(c1, c2), r2: Math.max(r1, r2), c2: Math.max(c1, c2) };
-		tokens.shift();
+		rest = rest.slice(first?.[0].length ?? head.length).trim();
 	}
+	if (FORMULA_OPS.test(rest.split(/\s+/)[0] ?? "")) {
+		// Everything between the word and the last token is the expression, spaces and quotes
+		// included: `if AND(B2>1000;C2<>"a b") bold`.
+		const tail = rest.replace(/^\S+\s+/, "");
+		const fmt = /(\S+)\s*$/.exec(tail);
+		if (fmt === null) return null;
+		const expr = tail.slice(0, fmt.index).trim();
+		const format = FORMAT_ALIASES[fmt[1].toLowerCase()];
+		if (format === undefined || expr === "" || expr.includes("%%")) return null;
+		return { range, op: "if", value: expr, format };
+	}
+	const tokens = tokenize(rest);
 	const op = tokens.shift() as ConditionalOp | undefined;
 	if (op === undefined || !OPS.includes(op)) return null;
 	const formatToken = tokens.pop();
@@ -204,6 +226,7 @@ export function hasRules(model: GridModel): boolean {
 export function buildRuleComment(rule: Omit<ConditionalRule, "row" | "col">): string {
 	const anchorIsCell = rule.r1 === rule.r2 && rule.c1 === rule.c2;
 	const range = anchorIsCell ? "" : `${colName(rule.c1)}${rule.r1 + 1}:${colName(rule.c2)}${rule.r2 + 1} `;
+	if (rule.op === "if") return `%%cf ${range}if ${rule.value} ${rule.format}%%`;
 	const value = rule.value === "" ? "" : /\s/.test(rule.value) ? `"${rule.value}" ` : `${rule.value} `;
 	return `%%cf ${range}${rule.op} ${value}${rule.format}%%`;
 }
@@ -222,14 +245,21 @@ function numeric(rule: ConditionalRule, value: string, numberOpts?: NumberParseO
  * operators that compare text are always applicable.
  */
 export function ruleApplies(rule: ConditionalRule, display: string, numberOpts?: NumberParseOptions): boolean {
+	if (rule.op === "if") return true;
 	if (rule.op === "=" || rule.op === "<>" || rule.op === "contains") return true;
 	const text = peelInline(display).inner.trim();
 	if (text === "") return false;
 	return parseNumber(text, numberOpts) !== null && parseNumber(rule.value, numberOpts) !== null;
 }
 
-/** Whether the cell's displayed value satisfies the rule. */
+/**
+ * Whether the cell's displayed value satisfies the rule.
+ *
+ * The `if` operator is not answered here: its expression has to be evaluated against the table, in
+ * the cell it lands on, which `applyConditionalFormats` does.
+ */
 export function ruleMatches(rule: ConditionalRule, display: string, numberOpts?: NumberParseOptions): boolean {
+	if (rule.op === "if") return false;
 	const text = peelInline(display).inner.trim();
 	switch (rule.op) {
 		case "contains":
@@ -271,7 +301,11 @@ export function ruleMatches(rule: ConditionalRule, display: string, numberOpts?:
  * A cell whose comment holds a rule is left with its comment intact — the display is rewritten and
  * the comments are put back in the order they were found.
  */
-export function applyConditionalFormats(model: GridModel, numberOpts?: NumberParseOptions): Array<{ row: number; col: number }> {
+export function applyConditionalFormats(
+	model: GridModel,
+	numberOpts?: NumberParseOptions,
+	tables?: CellSource[],
+): Array<{ row: number; col: number }> {
 	const changed: Array<{ row: number; col: number }> = [];
 	if (!hasRules(model)) return changed;
 	const rules = allRules(model);
@@ -287,9 +321,21 @@ export function applyConditionalFormats(model: GridModel, numberOpts?: NumberPar
 				if (raw.trim() === "" && !(rule.op === "=" && rule.value.trim() === "")) continue;
 				const { display, comments } = splitComments(raw);
 				if (display === "") continue;
-				// A cell the rule cannot judge is left exactly as it is: no mark removed, none added.
-				if (!ruleApplies(rule, display, numberOpts)) continue;
-				const matches = ruleMatches(rule, display, numberOpts);
+				let matches: boolean;
+				if (rule.op === "if") {
+					// Excel's own semantics: the expression is written for the first cell of the range
+					// and shifted for every other cell, so `B2>1000` walks down the column while
+					// `$B$2` stays put. Unreadable or unevaluable means "leave the cell alone".
+					const shifted = translateFormula(rule.value, r - rule.r1, c - rule.c1);
+					if (shifted === null) continue;
+					const verdict = testExpression(shifted, model, r, { numberOpts, tables });
+					if (verdict === null) continue;
+					matches = verdict;
+				} else {
+					// A cell the rule cannot judge is left exactly as it is: no mark removed, none added.
+					if (!ruleApplies(rule, display, numberOpts)) continue;
+					matches = ruleMatches(rule, display, numberOpts);
+				}
 				const inline = inlineFormatOf(rule.format);
 				const next = matches ? addInlineFormat(display, inline) : removeInlineFormat(display, inline);
 				if (next === display) continue;

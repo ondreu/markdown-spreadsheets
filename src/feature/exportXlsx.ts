@@ -146,8 +146,16 @@ function dxfsXml(dxfs: readonly ConditionalFormat[]): string {
 	return `<dxfs count="${dxfs.length}">${dxfs.map(dxfXml).join("")}</dxfs>`;
 }
 
-/** The Excel expression a rule becomes, written relative to the range's first cell. */
-export function ruleFormula(rule: Pick<ConditionalRule, "r1" | "c1" | "op" | "value">): string {
+/**
+ * The Excel expression a rule becomes, written relative to the range's first cell.
+ *
+ * Returns null for a rule Excel cannot express — an `if` whose expression does not parse as Excel
+ * syntax — so the caller drops it rather than writing a `<f>` that breaks the file.
+ */
+export function ruleFormula(rule: Pick<ConditionalRule, "r1" | "c1" | "op" | "value">, sheets?: ReadonlyMap<string, string>): string | null {
+	// `if` already *is* an expression; Excel evaluates it per cell from the range's first cell, the
+	// same way this plugin does.
+	if (rule.op === "if") return toExcelFormula(rule.value, sheets);
 	const ref = `${colName(rule.c1)}${rule.r1 + 1}`;
 	const quoted = `"${rule.value.replace(/"/g, '""')}"`;
 	switch (rule.op) {
@@ -254,12 +262,14 @@ function sheetXml(
 		for (const rule of allRules(model)) {
 			const dxfId = dxfIds.get(rule.format);
 			if (dxfId === undefined) continue;
+			const formula = ruleFormula(rule);
+			if (formula === null) continue;
 			priority++;
 			const first = `${colName(rule.c1)}${rule.r1 + 1}`;
 			const last = `${colName(rule.c2)}${rule.r2 + 1}`;
 			const sqref = first === last ? first : `${first}:${last}`;
 			cf.push(
-				`<conditionalFormatting sqref="${sqref}"><cfRule type="expression" dxfId="${dxfId}" priority="${priority}"><formula>${xmlEscape(ruleFormula(rule))}</formula></cfRule></conditionalFormatting>`,
+				`<conditionalFormatting sqref="${sqref}"><cfRule type="expression" dxfId="${dxfId}" priority="${priority}"><formula>${xmlEscape(formula)}</formula></cfRule></conditionalFormatting>`,
 			);
 		}
 	}

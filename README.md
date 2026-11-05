@@ -44,8 +44,9 @@ No table yet? **Insert a new table and open it as a spreadsheet** creates one at
 - **A note with several tables gets sheet tabs** under the grid, labelled by each table's own first
   headers. Clicking one switches the grid to that table; nothing about the note changes, and a
   single-table note shows no strip at all.
-- **Conditional formatting**: pick a range, a condition (`>`, `>=`, `<`, `<=`, `=`, `<>`, `contains`)
-  and one of five formats — **bold**, *italic*, ~~strikethrough~~, `code`, ==highlight==. The rule is
+- **Conditional formatting**: pick a range, a condition (`>`, `>=`, `<`, `<=`, `=`, `<>`, `contains`,
+  or **a whole formula** — `SUM($B$2:B2)>5000`, `IF(AND(B2>1000;C2<>"x");1;0)` — evaluated cell by
+  cell with the references shifted the way a spreadsheet does it) and one of five formats — **bold**, *italic*, ~~strikethrough~~, `code`, ==highlight==. The rule is
   a comment in the first cell of the range (`%%cf F2:F9 > 1000 bold%%`) and the format is written into
   the cells it matches, so the note shows it with or without the plugin. A cell the rule cannot judge
   — text under `> 1000` — is left exactly as it is.

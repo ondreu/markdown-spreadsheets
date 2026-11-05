@@ -702,3 +702,32 @@ everything.
   formulas.
 - **The ribbon is built from the setting**, so a change has to reach the views that are already open:
   the settings tab calls `refreshOpenGrids()`.
+
+## 39. A rule may be a formula, and a reference past the end is #REF!
+
+**Design:** conditional formatting shipped with comparisons only (decision 37), which is the smaller
+half of what a person means by it: Excel's own dialog has "use a formula to determine which cells to
+format", and that is where the useful rules live — a running total, a row that is overdue, a cell
+that disagrees with another column. The same session turned up the other half of the story: a
+reference to a row a table does not have read as a silent zero, which is how an off-by-one in a
+hand-written `SUM(Table2!B20;…)` survived a look.
+
+**Built:** two changes, one in each direction.
+
+- **`if` is the operator, the expression is whatever follows it.** `%%cf B2:B4 if SUM($B$2:B2)>1500
+  bold%%`, or `%%cf if B2>10 bold%%` for one cell. The expression is ordinary formula syntax — every
+  function the plugin knows, comparisons, text, cross-table references — and it is evaluated per
+  cell with the range's first cell as the origin, so `B2` walks down the column and `$B$2` does not.
+  That is Excel's own model, which is why the export needs no translation beyond the separator.
+- **The value is the expression, so the comment keeps it verbatim.** Only the last token of the rule
+  is the format; quotes and spaces inside the expression survive the round trip.
+- **A rule that cannot be evaluated leaves the cell alone.** A typo in the expression is not a "no":
+  nothing is added and nothing is removed, so a broken rule never quietly strips a mark.
+- **Excel gets the expression as it stands** (`AND(B2>1000,C2<>"x")`), and a rule whose expression is
+  not Excel syntax is dropped from the file rather than written as a `<f>` that breaks it.
+- **A cross-table reference past the last row or column is `#REF!`**, with the number in the message
+  (`Table2 has no B20 — it ends at B11`). A reference to an empty cell *inside* a table is still 0,
+  as in Excel; a range that runs past the end (`Table1!A1:A99`) is clipped, not an error, because
+  that is how a growing column is written.
+- **What it does not do.** The expression sees one table (plus whatever the workbook pass hands it),
+  not the whole note in every code path; there is still one rule per range and no priority list.

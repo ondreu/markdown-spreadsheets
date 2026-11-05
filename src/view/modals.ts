@@ -766,7 +766,7 @@ export class ConditionalFormatModal extends Modal {
 			.setDesc(`The selection this rule covers: ${this.opts.rangeLabel}. The rule itself is a comment in its first cell.`);
 
 		new Setting(this.contentEl).setName("Condition").addDropdown((d) => {
-			for (const op of [">", ">=", "<", "<=", "=", "<>", "contains"] as ConditionalOp[]) {
+			for (const op of [">", ">=", "<", "<=", "=", "<>", "contains", "if"] as ConditionalOp[]) {
 				d.addOption(op, OP_LABELS[op]);
 			}
 			d.setValue(this.op).onChange((value) => {
@@ -776,7 +776,7 @@ export class ConditionalFormatModal extends Modal {
 
 		new Setting(this.contentEl)
 			.setName("Value")
-			.setDesc("A number for the comparisons, text for = <> and contains.")
+			.setDesc("A number for the comparisons, text for the two equality operators and for contains — or a whole formula for the last option, evaluated cell by cell like a spreadsheet does.")
 			.addText((t) =>
 				t
 					.setPlaceholder("1000")
@@ -834,6 +834,7 @@ const OP_LABELS: Record<ConditionalOp, string> = {
 	"=": "equals",
 	"<>": "is not",
 	contains: "contains",
+	if: "matches the formula",
 };
 
 const FORMAT_LABELS: Record<ConditionalFormat, string> = {
