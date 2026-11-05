@@ -561,3 +561,22 @@ note — opened from the table it reads, and closed when it is no longer wanted.
 - **A split, not a tab, unless it is a phone.** Half the value is seeing the source next to the
   result; a 390 px screen has no room for that, so there it takes the whole leaf.
 
+## 34. A lookup joins one column in, and only in the view
+
+**Design:** decision 33 makes the pivot a read-only view over one note's tables, consolidated by
+header.
+
+**Built:** `withLookup` — a key column of the data, a key column of another table, one column brought
+over — applied to the in-memory model before the pivot runs.
+
+- **A copy, never a write.** The join happens on a fresh model for the view; neither table in the note
+  is touched, and closing the leaf discards it.
+- **Keys compare like headers**: trimmed, no case, no emphasis. `a-1` finds `A-1`.
+- **A repeated key is counted, not silently resolved.** Two suppliers for one code would make a report
+  wrong in a way nobody notices; the first wins and the bar says how many were repeated, next to how
+  many rows found no key at all.
+- **The brought column is a column like any other**: it appears in the group and value pickers as
+  `Kind (lookup)`, so a pivot by something the data does not contain is one select away.
+- **The bar is a row of selects, not a dialog.** The lookup is one visible row — `Lookup / match /
+  with / bring` — because a second modal would be the third way of doing the same thing.
+

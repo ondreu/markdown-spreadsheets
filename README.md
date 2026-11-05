@@ -78,8 +78,9 @@ No table yet? **Insert a new table and open it as a spreadsheet** creates one at
   results (`Calculate`) inserted as plain values.
 - **Pivot**: open the tables of a note as a temporary, read-only grid — group the rows by one column
   and sum, average, count, min or max another. Pick **one table or several**: rows are appended and
-  columns matched by header, so a month per table pivots as one. Nothing is written: the view belongs
-  to no note, and closing it leaves no trace.
+  columns matched by header, so a month per table pivots as one. A **lookup** can bring a column over
+  from another table by a key (`A-1` → `Furniture`) and group by it, without either table being
+  touched. Nothing is written: the view belongs to no note, and closing it leaves no trace.
 
 ### Export, import, safety
 

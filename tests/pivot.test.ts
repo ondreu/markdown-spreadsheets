@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getRaw, recomputeUsedRange, setRaw } from "../src/model/GridModel";
 import { parseTable } from "../src/model/parse";
-import { consolidate, pivot, pivotFormat, pivotValues, type PivotOptions } from "../src/feature/pivot";
+import { consolidate, pivot, pivotFormat, pivotValues, withLookup, type PivotOptions } from "../src/feature/pivot";
 
 const model = (): ReturnType<typeof parseTable> =>
 	parseTable(
@@ -114,5 +114,37 @@ describe("consolidate", () => {
 	it("ignores a table with no data rows", () => {
 		const empty = parseTable("| Item | Kind | Qty |\n| --- | --- | --- |\n");
 		expect(consolidate([january, empty]).report.tables).toBe(1);
+	});
+});
+
+describe("withLookup", () => {
+	const data = parseTable("| Code | Qty |\n| --- | ---: |\n| A-1 | 2 |\n| A-2 | 3 |\n| A-9 | 1 |\n");
+	const lookup = parseTable("| Code | Kind |\n| --- | --- |\n| A-1 | Furniture |\n| a-2 | Light |\n| A-1 | Ignored |\n");
+
+	it("appends the column and matches keys without case", () => {
+		const result = withLookup(data, { keyCol: 0, table: lookup, tableKeyCol: 0, tableValueCol: 1 });
+		expect(result.header).toBe("Kind");
+		expect(result.matched).toBe(2);
+		expect(result.unmatched).toBe(1);
+		expect(result.duplicates).toBe(1);
+		expect(result.model.cells.get("1:2")?.raw).toBe("Furniture");
+		expect(result.model.cells.get("2:2")?.raw).toBe("Light");
+	});
+
+	it("feeds a pivot by the brought column", () => {
+		const joined = withLookup(data, { keyCol: 0, table: lookup, tableKeyCol: 0, tableValueCol: 1 }).model;
+		const result = pivot(joined, { groupCol: 2, valueCol: 1, aggregate: "sum", sort: "value" });
+		// Largest first, as the view defaults to.
+		expect(result.groups.map((g) => [g.label, g.value])).toEqual([
+			["Light", 3],
+			["Furniture", 2],
+		]);
+	});
+
+	it("keeps the data's own headers and rows in place", () => {
+		const joined = withLookup(data, { keyCol: 0, table: lookup, tableKeyCol: 0, tableValueCol: 1 }).model;
+		expect(joined.cells.get("0:0")?.raw).toBe("Code");
+		expect(joined.cells.get("0:1")?.raw).toBe("Qty");
+		expect(joined.cells.get("3:0")?.raw).toBe("A-9");
 	});
 });

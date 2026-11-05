@@ -463,3 +463,15 @@ change path, so there is no back door. The harness mounts the view through `wind
 and renders it at 1200 px and 390 px; the desktop shot was checked against the numbers (Furniture 8,
 Light 4, Moving 2, total 14).
 
+## Round sixteen: a lookup in the pivot view
+
+`withLookup` brings one column from another table of the note into the pivot's model by a key, so a
+pivot can group by something the data only points at (`A-1` → `Furniture`). Three tests: matching
+without case, the column feeding a pivot, headers and rows staying put. The bar gains one row of
+selects, and the view reports matched / missing keys / repeated keys.
+
+Rendered at 1000×720 and 390×760 and checked: grouping by the brought column gives Furniture 6,
+Light 3, Cable 1, total 10 — the rows add up. Two bugs were found by that render and fixed: the grid
+kept drawing into a detached node after the bar was rebuilt, and the caption counted the total row as
+a group.
+

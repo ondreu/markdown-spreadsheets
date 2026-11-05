@@ -305,3 +305,82 @@ export function consolidate(tables: GridModel[]): Consolidated {
 	const partial = ordered.filter((entry) => entry.seen < kept.length).map((entry) => entry.header);
 	return { model, report: { tables: kept.length, rows: row - 1, mismatched: [], partial } };
 }
+
+/**
+ * A column brought over from another table by a key — a lookup, in one direction.
+ *
+ * The case: the data has a code and the meaning lives elsewhere. `Table1` says `A-1`, and `Table2`
+ * says that `A-1` is "Furniture"; a pivot by kind cannot work until the two are joined. The result is
+ * a **copy of the data model with one more column**, made in memory for the view, never written.
+ *
+ * A key that appears twice in the lookup table keeps its first value and is counted, because silently
+ * picking one of two suppliers is how a report becomes wrong without anybody noticing.
+ */
+export interface LookupSpec {
+	/** Column of the data that is matched. */
+	keyCol: number;
+	/** The table the value comes from. */
+	table: GridModel;
+	/** Its key column. */
+	tableKeyCol: number;
+	/** The column to bring over. */
+	tableValueCol: number;
+	/** Header for the new column; defaults to the lookup table's own. */
+	header?: string;
+}
+
+export interface LookupResult {
+	model: GridModel;
+	header: string;
+	matched: number;
+	/** Data rows whose key is not in the lookup table. */
+	unmatched: number;
+	/** Keys repeated in the lookup table; the first one wins. */
+	duplicates: number;
+}
+
+/** Keys compare the way headers do: trimmed, no case, no emphasis. */
+function keyOfCell(raw: string): string {
+	return plainText(peelInline(stripFormula(raw)).inner).trim().toLowerCase();
+}
+
+export function withLookup(data: GridModel, spec: LookupSpec): LookupResult {
+	const header = (spec.header ?? headerOf(spec.table, spec.tableValueCol)) || "Lookup";
+	const values = new Map<string, string>();
+	let duplicates = 0;
+	for (let r = 1; r < spec.table.usedRange.rows; r++) {
+		const key = keyOfCell(getRaw(spec.table, r, spec.tableKeyCol));
+		if (key === "") continue;
+		if (values.has(key)) {
+			duplicates++;
+			continue;
+		}
+		values.set(key, getRaw(spec.table, r, spec.tableValueCol));
+	}
+
+	const model = createModel();
+	const width = Math.max(data.usedRange.cols, 1);
+	for (let r = 0; r < data.usedRange.rows; r++) {
+		for (let c = 0; c < width; c++) {
+			const raw = getRaw(data, r, c);
+			if (raw !== "") setRaw(model, r, c, raw);
+		}
+	}
+	setRaw(model, 0, width, header);
+
+	let matched = 0;
+	let unmatched = 0;
+	for (let r = 1; r < data.usedRange.rows; r++) {
+		const key = keyOfCell(getRaw(data, r, spec.keyCol));
+		const hit = values.get(key);
+		if (hit === undefined) {
+			unmatched++;
+			continue;
+		}
+		if (hit.trim() !== "") setRaw(model, r, width, hit);
+		matched++;
+	}
+	for (let c = 0; c <= width; c++) model.colAlign[c] = data.colAlign[c] ?? null;
+	recomputeUsedRange(model);
+	return { model, header, matched, unmatched, duplicates };
+}
