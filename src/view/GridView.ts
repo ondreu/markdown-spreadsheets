@@ -2616,16 +2616,43 @@ export class GridView extends ItemView {
 			rect.r1 === rect.r2 && rect.c1 === rect.c2
 				? `${colName(rect.c1)}${rect.r1 + 1}`
 				: `${colName(rect.c1)}${rect.r1 + 1}:${colName(rect.c2)}${rect.r2 + 1}`;
-		const existing = allRules(host.getModel()).filter(
+		// Every rule the table carries, so the dialog can show what is already in the note — and
+		// the ones covering the selection, to prefill the form.
+		const rules = allRules(host.getModel());
+		const existing = rules.filter(
 			(rule) => rule.r1 >= rect.r1 && rule.r2 <= rect.r2 && rule.c1 >= rect.c1 && rule.c2 <= rect.c2,
 		);
 		new ConditionalFormatModal(this.app, {
 			rangeLabel: label,
+			rules,
 			existing,
 			onApply: (rule) =>
 				this.writeConditionalRule(rect, { ...rule, r1: rect.r1, c1: rect.c1, r2: rect.r2, c2: rect.c2 }),
 			onClear: () => this.clearConditionalRules(rect),
+			onRemove: (rule) => this.removeConditionalRule(rule.row, rule.col),
+			onReveal: (rule) => host.goTo(rule.row, rule.col),
+			// Point mode: the grid stays clickable behind the floating panel and a click writes the
+			// address into the value field, the same sink the formula bar uses.
+			attachSink: (sink) => host.setReferenceSink(sink),
+			columnValues: () => {
+				const { row, col } = host.getSelection().active;
+				return distinctColumnValues(host.getModel(), col, row);
+			},
+			sourcePath: this.file?.path ?? "",
 		}).open();
+	}
+
+	/** Drops the rule written in one cell, keeping the cell's value and its other comments. */
+	private removeConditionalRule(row: number, col: number): void {
+		const host = this.host;
+		if (!host) return;
+		host.mutate("Remove conditional formatting", () => {
+			const model = host.getModel();
+			const raw = getRaw(model, row, col);
+			if (!raw.includes("%%cf")) return;
+			const { display, comments } = splitComments(raw);
+			setRaw(model, row, col, joinComments(display, comments.filter((body) => !/^cf\s/i.test(body))));
+		});
 	}
 
 	/** Replaces whatever rules the anchor cell held: a cell carries one rule, not a pile of them. */

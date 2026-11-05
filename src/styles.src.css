@@ -1867,3 +1867,23 @@
 		opacity: 1;
 	}
 }
+
+/* The rule editor is a panel, not a wall: a formula condition is written by pointing at cells, so
+   the grid has to stay visible and clickable while the dialog is open (decision 40). */
+.mds-cf-floating {
+	align-items: flex-start;
+	justify-content: flex-end;
+}
+
+.mds-cf-floating,
+.mds-cf-floating .modal-bg {
+	pointer-events: none;
+	background: transparent;
+}
+
+.mds-cf-floating .modal {
+	pointer-events: auto;
+	margin: 12px;
+	max-height: calc(100% - 24px);
+	overflow: auto;
+}

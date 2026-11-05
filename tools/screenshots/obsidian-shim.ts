@@ -107,29 +107,29 @@ export class Modal {
 	contentEl = document.createElement("div");
 	titleEl = document.createElement("div");
 	modalEl = document.createElement("div");
-	private container: HTMLElement | null = null;
+	/** The `.modal-container` and its backdrop, as Obsidian has them: a dialog may style either. */
+	containerEl = document.createElement("div");
+	bgEl = document.createElement("div");
 
 	constructor(app: any) {
 		this.app = app;
 		this.titleEl.className = "modal-title";
 		this.contentEl.className = "modal-content";
 		this.modalEl.className = "modal";
+		this.containerEl.className = "modal-container";
+		this.bgEl.className = "modal-bg";
 	}
 
 	open(): void {
 		this.modalEl.append(this.titleEl, this.contentEl);
-		const container = document.createElement("div");
-		container.className = "modal-container";
-		container.append(this.modalEl);
-		document.body.append(container);
-		this.container = container;
+		this.containerEl.append(this.bgEl, this.modalEl);
+		document.body.append(this.containerEl);
 		(this as unknown as { onOpen?: () => void }).onOpen?.();
 	}
 
 	close(): void {
 		(this as unknown as { onClose?: () => void }).onClose?.();
-		this.container?.remove();
-		this.container = null;
+		this.containerEl.remove();
 	}
 }
 export class FuzzySuggestModal<T> extends Modal {

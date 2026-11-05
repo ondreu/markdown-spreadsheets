@@ -1,5 +1,6 @@
 import { Modal, Setting, type App } from "obsidian";
 import { colName } from "../model/address";
+import { CellSuggest } from "./CellSuggest";
 import { describeDiff, diffLines, diffStats, relativeTime, tableShape } from "../feature/diff";
 import type { GridModel } from "../model/GridModel";
 import { previewOf } from "../file/scanTables";
@@ -728,26 +729,40 @@ export class DiffModal extends Modal {
 }
 
 /**
- * Conditional formatting for the selection (decision 37).
+ * Conditional formatting (decisions 37 and 39): the rules the table already carries, and the form
+ * for adding one to the selection.
  *
- * One rule at a time, because that is what a comment in a cell can say: an operator, a value and one
- * of the five Markdown formats. The range is the selection the dialog was opened on, shown so it is
- * clear what the comment will govern — a range in the first cell, nothing for a single cell.
+ * Two things a rule needs to be usable, and both are here. **Seeing** it — every rule of the table
+ * is listed with its range, its condition and its format, so a note that inherited rules from an
+ * afternoon of experimenting still says what is going on. **Writing** a formula condition — the
+ * value field suggests functions and column values, and the panel floats over the grid instead of
+ * covering it, so a cell can be clicked and its address lands in the formula, exactly like the
+ * formula bar.
  */
 export class ConditionalFormatModal extends Modal {
 	private op: ConditionalOp = ">";
 	private value = "";
 	private format: ConditionalFormat = "bold";
+	private suggest: CellSuggest | null = null;
+	private valueEl: HTMLInputElement | null = null;
 
 	constructor(
 		app: App,
 		private readonly opts: {
 			/** `F2:F9`, or `F2` for one cell — the range the comment will govern. */
 			rangeLabel: string;
-			/** Rules already covering the selection, for the "remove" button and the preview. */
+			/** Every rule the table carries, so they can be seen and removed. */
+			rules: ConditionalRule[];
+			/** Rules covering the selection, used to prefill the form. */
 			existing: ConditionalRule[];
 			onApply(rule: Omit<ConditionalRule, "row" | "col">): void;
 			onClear(): void;
+			onRemove(rule: ConditionalRule): void;
+			onReveal(rule: ConditionalRule): void;
+			/** Point mode: a click in the grid writes its address into the value field. */
+			attachSink(sink: ReferenceSinkLike | null): void;
+			columnValues(): string[];
+			sourcePath: string;
 		},
 	) {
 		super(app);
@@ -760,7 +775,31 @@ export class ConditionalFormatModal extends Modal {
 	}
 
 	override onOpen(): void {
+		this.containerEl.addClass("mds-cf-floating");
 		this.titleEl.setText("Conditional formatting");
+
+		if (this.opts.rules.length > 0) {
+			new Setting(this.contentEl).setName("Rules in this table").setHeading();
+			for (const rule of this.opts.rules) {
+				new Setting(this.contentEl)
+					.setName(`${ruleLabel(rule)} · ${describeCondition(rule)}`)
+					.setDesc(`${FORMAT_LABELS[rule.format]} · written in ${colName(rule.col)}${rule.row + 1}`)
+					.addButton((b) =>
+						b.setButtonText("Show").onClick(() => {
+							this.close();
+							this.opts.onReveal(rule);
+						}),
+					)
+					.addButton((b) =>
+						b.setButtonText("Remove").onClick(() => {
+							this.close();
+							this.opts.onRemove(rule);
+						}),
+					);
+			}
+			new Setting(this.contentEl).setName("Add a rule").setHeading();
+		}
+
 		new Setting(this.contentEl)
 			.setName("Range")
 			.setDesc(`The selection this rule covers: ${this.opts.rangeLabel}. The rule itself is a comment in its first cell.`);
@@ -771,20 +810,20 @@ export class ConditionalFormatModal extends Modal {
 			}
 			d.setValue(this.op).onChange((value) => {
 				this.op = value as ConditionalOp;
+				this.renderValue();
 			});
 		});
 
 		new Setting(this.contentEl)
 			.setName("Value")
 			.setDesc("A number for the comparisons, text for the two equality operators and for contains — or a whole formula for the last option, evaluated cell by cell like a spreadsheet does.")
-			.addText((t) =>
-				t
-					.setPlaceholder("1000")
-					.setValue(this.value)
-					.onChange((value) => {
-						this.value = value;
-					}),
-			);
+			.addText((t) => {
+				t.setPlaceholder("1000").setValue(this.value);
+				t.onChange((value) => {
+					this.value = value;
+				});
+				this.valueEl = t.inputEl;
+			});
 
 		new Setting(this.contentEl).setName("Format").addDropdown((d) => {
 			for (const format of ["bold", "italic", "strike", "code", "highlight"] as ConditionalFormat[]) {
@@ -794,18 +833,6 @@ export class ConditionalFormatModal extends Modal {
 				this.format = value as ConditionalFormat;
 			});
 		});
-
-		if (this.opts.existing.length > 0) {
-			new Setting(this.contentEl)
-				.setName("Rules on this selection")
-				.setDesc(this.opts.existing.map((rule) => `${rule.op} ${rule.value} → ${FORMAT_LABELS[rule.format]}`).join(", "))
-				.addButton((b) =>
-					b.setButtonText("Remove").onClick(() => {
-						this.close();
-						this.opts.onClear();
-					}),
-				);
-		}
 
 		new Setting(this.contentEl)
 			.addButton((b) =>
@@ -819,11 +846,86 @@ export class ConditionalFormatModal extends Modal {
 					}),
 			)
 			.addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()));
+
+		this.renderValue();
+	}
+
+	/** The formula condition is the one field worth helping with: suggestions, and clicks in the grid. */
+	private renderValue(): void {
+		const input = this.valueEl;
+		if (input === null) return;
+		if (this.op !== "if") {
+			this.suggest?.close();
+			this.suggest = null;
+			this.opts.attachSink(null);
+			input.placeholder = "1000";
+			return;
+		}
+		input.placeholder = "A formula, or click cells";
+		if (this.suggest === null) {
+			// The list is a sibling of the field, not a child of it: an `<input>` cannot hold elements.
+			this.suggest = new CellSuggest(input.parentElement ?? this.contentEl, input, {
+				app: this.app,
+				sourcePath: this.opts.sourcePath,
+				columnValues: () => this.opts.columnValues(),
+				browseAll: true,
+			});
+			// `CellSuggest` does not listen by itself: the cell editor and the formula bar each call
+			// `update()` from their own input handler, and this field is a third place a formula is
+			// typed, so it needs the same two hooks.
+			const suggest = this.suggest;
+			input.addEventListener("input", () => suggest.update());
+			input.addEventListener("keydown", (event) => {
+				if (suggest.handleKey(event) === false) return;
+				event.preventDefault();
+				event.stopPropagation();
+			});
+		}
+		this.opts.attachSink({
+			// The host only points at cells while the text it holds starts with `=`. A rule's value
+			// is an expression and may be written without it (`B2>1000`), so the sink reports one:
+			// the field is a formula box for as long as this condition is chosen, and a click in the
+			// grid is then a reference, as it is in Excel's own dialog.
+			value: () => `=${input.value}`,
+			selection: () => ({ start: input.selectionStart ?? input.value.length, end: input.selectionEnd ?? input.value.length }),
+			prefix: () => "",
+			replace: (start, end, text) => {
+				const next = input.value.slice(0, start) + text + input.value.slice(end);
+				input.value = next;
+				this.value = next;
+				const caret = start + text.length;
+				input.setSelectionRange(caret, caret);
+				input.focus();
+			},
+		});
 	}
 
 	override onClose(): void {
+		this.suggest?.close();
+		this.suggest = null;
+		this.opts.attachSink(null);
 		this.contentEl.empty();
 	}
+}
+
+/** The shape `GridHost.setReferenceSink` expects, without importing the host into a dialog. */
+export interface ReferenceSinkLike {
+	value(): string;
+	selection(): { start: number; end: number };
+	replace(start: number, end: number, text: string): void;
+	prefix(): string;
+}
+
+/** `F2` or `F2:K9`, the range a rule governs. */
+export function ruleLabel(rule: ConditionalRule): string {
+	const first = `${colName(rule.c1)}${rule.r1 + 1}`;
+	const last = `${colName(rule.c2)}${rule.r2 + 1}`;
+	return first === last ? first : `${first}:${last}`;
+}
+
+/** The condition in words: `> 1000`, `contains "done"`, `=SUM($B$2:B2)>1500`. */
+export function describeCondition(rule: ConditionalRule): string {
+	return rule.op === "if" ? rule.value : `${rule.op} ${rule.value}`.trim();
 }
 
 const OP_LABELS: Record<ConditionalOp, string> = {

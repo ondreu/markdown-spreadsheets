@@ -731,3 +731,27 @@ hand-written `SUM(Table2!B20;…)` survived a look.
   that is how a growing column is written.
 - **What it does not do.** The expression sees one table (plus whatever the workbook pass hands it),
   not the whole note in every code path; there is still one rule per range and no priority list.
+
+## 40. The rule dialog shows what is there and can point at cells
+
+**Design:** decision 39 made a rule powerful enough to be worth writing — and that is exactly when a
+person needs to see it. A rule lives in a comment in a cell, which is good for the note and bad for
+reviewing: nothing on screen says which rules a table carries, and a formula condition was typed
+into a field with no suggestions and no way to click a cell.
+
+**Built:** three things in one dialog.
+
+- **Every rule of the table is listed**, with its range (`F2:K9`), its condition (`> 1000`, or the
+  expression itself), its format, and the cell holding the comment. *Show* jumps to that cell;
+  *Remove* deletes just that rule and leaves the cell's value and other comments alone.
+- **The formula field suggests like the formula bar** — function names with their arguments, the
+  values already in the column, `[[links` and `#tags` — because it is the same `CellSuggest`.
+- **The panel floats instead of blocking.** A modal covers the grid with a backdrop, and a formula
+  condition is written by pointing at cells; so the container and backdrop stop taking pointer
+  events and the dialog sits in the corner. The grid stays visible and clickable, and a click lands
+  its address in the field through the same `ReferenceSink` the formula bar uses.
+- **The sink reports `=` in front of the field's text.** The host only points at cells while it is
+  typing a formula, and a rule's expression may legitimately be written without the `=`. While the
+  *matches the formula* condition is chosen, the field is a formula box and a click is a reference.
+- **What it does not do.** No editing of an existing rule in place (change the value and write a new
+  one), no priority list between rules, and no per-rule enable/disable.
