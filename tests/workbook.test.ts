@@ -66,9 +66,20 @@ describe("Table2!B3", () => {
 		expect(getRaw(model, 1, 1)).toContain("Table2!B2");
 	});
 
-	it("has no Excel formula, so an export carries the value only", () => {
+	it("has no Excel formula in a single-sheet export, so it carries the value only", () => {
 		expect(toExcelFormula("Table2!B2")).toBeNull();
 		expect(toExcelFormula("SUM(Table2!B2:B9)")).toBeNull();
+	});
+
+	it("becomes a real cross-sheet reference when the workbook has that sheet", () => {
+		const sheets = new Map([
+			["table1", "Budget"],
+			["table2", "Summary"],
+		]);
+		expect(toExcelFormula("Table2!B2", sheets)).toBe("'Summary'!B2");
+		expect(toExcelFormula("SUM(table2!B2:B9)", sheets)).toBe("SUM('Summary'!B2:B9)");
+		// A table that is not in the file stays text: a <f> pointing at a missing sheet breaks the file.
+		expect(toExcelFormula("Table3!B2", sheets)).toBeNull();
 	});
 });
 

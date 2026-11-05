@@ -43,7 +43,7 @@ import {
 import { fromMarkdownTable, fromTsv, looksLikeGrid } from "../feature/clipboard";
 import { scanTables } from "../file/scanTables";
 import { diffLines } from "../feature/diff";
-import { DEFAULT_XLSX_OPTIONS, xlsxBuffer } from "../feature/exportXlsx";
+import { DEFAULT_XLSX_OPTIONS, workbookBuffer, xlsxBuffer } from "../feature/exportXlsx";
 import { fillRange, findAll, normalizeRect, rectCols, rectRows, replaceAll, type FindOptions } from "../feature/ops";
 import type MarkdownSpreadsheetsPlugin from "../main";
 import { asElement, asNode } from "./dom";
@@ -1683,9 +1683,9 @@ export class GridView extends ItemView {
 						label: "Files",
 						items: [
 							cluster("files", [
-								action("csv", "CSV", "csv", () => this.openExport("csv")),
-								action("xlsx", "Excel", "excel", () => this.openExport("xlsx")),
-								action("json", "JSON", "json", () => this.openExport("json")),
+								action("csv", "CSV", "csv", () => void this.openExport("csv")),
+								action("xlsx", "Excel", "excel", () => void this.openExport("xlsx")),
+								action("json", "JSON", "json", () => void this.openExport("json")),
 							]),
 							button("import", "Import", "importFile", () => this.openImport(), {
 								tooltip: "CSV or Excel into the grid, at the active cell",
@@ -2394,19 +2394,27 @@ export class GridView extends ItemView {
 		return `${base}.${ext}`;
 	}
 
-	private openExport(format: "csv" | "xlsx" | "json"): void {
+	private async openExport(format: "csv" | "xlsx" | "json"): Promise<void> {
 		const host = this.host;
 		if (!host) return;
 		const rect = host.getSelection().rect;
+		// The count is read from the note now, not from when the tab was opened: a table added since
+		// is still a table to export.
+		const tableCount = this.file ? scanTables(await this.app.vault.cachedRead(this.file)).length : 1;
 		new ExportModal(this.app, {
 			format,
 			defaultName: this.defaultExportName(format),
 			csvDefaults: this.csvDefaults(),
+			// Excel opens on plain text: `**bold**` and `[[links]]` are markdown, not spreadsheet data.
+			contentDefault: format === "xlsx" ? DEFAULT_XLSX_OPTIONS.content : "raw",
+			tableCount,
 			hasSelection: rect.r1 !== rect.r2 || rect.c1 !== rect.c2,
 			onExport: (choice) => {
 				const model = choice.selectionOnly ? this.selectionModel() : host.getModel();
 				if (format === "csv") void this.exportCsv(model, choice.csv, choice.fileName);
 				else if (format === "json") void this.exportJson(model, choice.csv.content, choice.fileName);
+				else if (choice.xlsxAllTables && !choice.selectionOnly)
+					void this.exportWorkbook(model, choice.csv.content, choice.xlsxDetectNumbers, choice.fileName);
 				else void this.exportXlsx(model, choice.csv.content, choice.xlsxDetectNumbers, choice.fileName);
 			},
 		}).open();
@@ -2478,6 +2486,60 @@ export class GridView extends ItemView {
 		);
 		await this.app.vault.createBinary(path, buffer);
 		new Notice(`Wrote ${path}`);
+	}
+
+	/**
+	 * What Excel calls the sheet. The heading above the table is what a person calls it, so that
+	 * comes first; a table with no heading is recognised by its own first headers, which is how the
+	 * sheet tabs under the grid are labelled; a nameless table falls back to its number.
+	 */
+	private sheetLabel(region: TableRegion): string {
+		const heading = region.precedingHeading?.trim() ?? "";
+		if (heading !== "") return heading;
+		const head = region.headerCells
+			.slice(0, 2)
+			.map((h) => plainText(h).trim())
+			.filter((h) => h !== "")
+			.join(", ");
+		return head !== "" ? head : `Table${region.index + 1}`;
+	}
+
+	/**
+	 * Excel export of the whole note: one sheet per table, named after the heading above the table
+	 * (else its headers), while a cross-table formula is rewritten through the table's number — so
+	 * `Table2!B3` arrives as a working cross-sheet reference instead of a value that stops updating.
+	 */
+	private async exportWorkbook(model: GridModel, content: "raw" | "plain", detectNumbers: boolean, fileName: string): Promise<void> {
+		const host = this.host;
+		const file = this.file;
+		if (!host || !file) return;
+		const mine = this.anchor?.tableIndex ?? 0;
+		const regions = scanTables(await this.app.vault.cachedRead(file));
+		if (regions.length === 0) return this.exportXlsx(model, content, detectNumbers, fileName);
+		const sheets = regions.map((region) => ({
+			name: this.sheetLabel(region),
+			// What a formula calls this table. The sheet is named for a person, the reference for the
+			// note, and the export maps one to the other.
+			ref: `Table${region.index + 1}`,
+			// The open table comes from the grid, not the note: unsaved edits are what the person
+			// is looking at. Every other table is read as the note has it.
+			model: region.index === mine ? model : parseTable(region.text),
+			layout: region.index === mine ? host.getLayout() : undefined,
+		}));
+		const path = await this.targetPath(fileName.endsWith(".xlsx") ? fileName : `${fileName}.xlsx`);
+		const buffer = workbookBuffer(
+			sheets,
+			{
+				...DEFAULT_XLSX_OPTIONS,
+				content,
+				detectNumbers,
+				numberOpts: host.numberOpts(),
+				defaultColWidth: this.plugin.sidecar.settings.defaultColWidth,
+			},
+			new Date(),
+		);
+		await this.app.vault.createBinary(path, buffer);
+		new Notice(`Wrote ${path} (${sheets.length} sheets)`);
 	}
 
 	/* ------------------------------------------------- plugin-facing surface */

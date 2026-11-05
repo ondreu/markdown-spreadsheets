@@ -428,6 +428,8 @@ export interface ExportChoice {
 	csv: CsvOptions;
 	xlsxDetectNumbers: boolean;
 	selectionOnly: boolean;
+	/** Excel only: every table of the note as its own sheet. */
+	xlsxAllTables: boolean;
 }
 
 export class ExportModal extends Modal {
@@ -435,6 +437,7 @@ export class ExportModal extends Modal {
 	private csv: CsvOptions;
 	private detectNumbers = true;
 	private selectionOnly = false;
+	private allTables: boolean;
 
 	constructor(
 		app: App,
@@ -442,13 +445,19 @@ export class ExportModal extends Modal {
 			format: "csv" | "xlsx" | "json";
 			defaultName: string;
 			csvDefaults: CsvOptions;
+			/** Cell content the dialog starts on; Excel opens on plain text. */
+			contentDefault?: "raw" | "plain";
+			/** Tables in the note, so the workbook option is only offered when there are several. */
+			tableCount?: number;
 			hasSelection?: boolean;
 			onExport(choice: ExportChoice): void;
 		},
 	) {
 		super(app);
 		this.fileName = opts.defaultName;
-		this.csv = Object.assign({}, opts.csvDefaults, {});
+		this.csv = Object.assign({}, opts.csvDefaults, { content: opts.contentDefault ?? opts.csvDefaults.content });
+		// A note with several tables is a workbook by construction, so that is what Excel gets.
+		this.allTables = opts.format === "xlsx" && (opts.tableCount ?? 1) > 1;
 	}
 
 	override onOpen(): void {
@@ -506,6 +515,16 @@ export class ExportModal extends Modal {
 						this.detectNumbers = value;
 					}),
 				);
+			if ((this.opts.tableCount ?? 1) > 1) {
+				new Setting(this.contentEl)
+					.setName("All tables of the note")
+					.setDesc("One sheet per table, named after the heading above it, or its headers when it has none. A reference from one table to another keeps working.")
+					.addToggle((t) =>
+						t.setValue(this.allTables).onChange((value) => {
+							this.allTables = value;
+						}),
+					);
+			}
 		}
 
 		if (this.opts.hasSelection) {
@@ -527,6 +546,7 @@ export class ExportModal extends Modal {
 							csv: this.csv,
 							xlsxDetectNumbers: this.detectNumbers,
 							selectionOnly: this.selectionOnly,
+							xlsxAllTables: this.allTables,
 						});
 					}),
 			)
