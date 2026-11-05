@@ -1,9 +1,10 @@
 import { TFile, type Vault } from "obsidian";
 import type { NumberParseOptions } from "../model/numbers";
 import { formatNumber } from "../model/numbers";
+import { applyConditionalFormats } from "../feature/conditional";
 import { parseTable } from "../model/parse";
 import { serializeTable } from "../model/serialize";
-import type { MarkdownSpreadsheetsSettings } from "../settings";
+import { conditionalEnabled, formulasEnabled, type MarkdownSpreadsheetsSettings } from "../settings";
 import { recalculate } from "../feature/formula";
 import { shiftTableRefs, tableIndexMap } from "../feature/workbook";
 import { scanTables } from "./scanTables";
@@ -60,6 +61,9 @@ export class FormulaWatcher {
 	/** A note changed on disk. Debounced per path: Sync delivers a burst of events per save. */
 	schedule(file: TFile): void {
 		if (this.disposed || file.extension !== "md") return;
+		// The feature switch comes first: in Markdown-only mode the plugin does not touch values at
+		// all, so a background pass would be a write nobody asked for (decision 38).
+		if (!formulasEnabled(this.settings())) return;
 		if (!this.settings().recalculateInBackground) return;
 		// A note open in an editor is not ours to write, but its table order still has to be watched:
 		// inserting a table above another silently moves every `Table3!` reference.
@@ -78,7 +82,8 @@ export class FormulaWatcher {
 
 	/** Recalculates every table of one note. Returns how many tables needed a write. */
 	async run(file: TFile): Promise<number> {
-		if (this.disposed || !this.settings().recalculateInBackground) return 0;
+		if (this.disposed || !formulasEnabled(this.settings())) return 0;
+		if (!this.settings().recalculateInBackground) return 0;
 		await this.watchStructure(file, !this.isOpen(file.path));
 		if (this.isOpen(file.path)) return 0;
 		let text: string;
@@ -87,12 +92,14 @@ export class FormulaWatcher {
 		} catch {
 			return 0;
 		}
-		if (!text.includes("%%=")) return 0;
+		// `%%=…%%` is a formula, `%%cf…%%` a conditional rule; a note with neither is not ours.
+		if (!text.includes("%%=") && !text.includes("%%cf")) return 0;
 		const settings = this.settings();
 		const numberOpts: NumberParseOptions = { decimalSeparator: settings.decimalSeparator };
 		try {
 			return await new Writer(this.vault).reformatAll(file, (tableText) => {
 				const model = parseTable(tableText);
+				const formatted = conditionalEnabled(settings) ? applyConditionalFormats(model, numberOpts) : [];
 				const result = recalculate(model, {
 					numberOpts,
 					// Same shape as the grid's own formatter: whole numbers without decimals, the
@@ -102,7 +109,7 @@ export class FormulaWatcher {
 							? formatNumber(value, 0, settings.numberLocale)
 							: formatNumber(value, settings.defaultDecimals, settings.numberLocale),
 				});
-				if (result.changed.length === 0) return tableText;
+				if (result.changed.length === 0 && formatted.length === 0) return tableText;
 				return serializeTable(model, { compact: settings.tableStyle === "compact" });
 			});
 		} catch {

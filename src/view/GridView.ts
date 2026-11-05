@@ -12,7 +12,7 @@ import {
 import { colName } from "../model/address";
 import { density, filledCount, getRaw, recomputeUsedRange, setRaw, shrinkToData, type Align, type GridModel } from "../model/GridModel";
 import { formatCompact, formatNumber } from "../model/numbers";
-import { resolveTouchLayout, type StatusStat } from "../settings";
+import { conditionalEnabled, formulasEnabled, resolveTouchLayout, type StatusStat } from "../settings";
 import { parseTable } from "../model/parse";
 import { serializeTable } from "../model/serialize";
 import { anchorFromRegion, anchorKey, newBlockId, resolveAnchor, type Anchor } from "../file/AnchorResolver";
@@ -44,7 +44,8 @@ import { fromMarkdownTable, fromTsv, looksLikeGrid } from "../feature/clipboard"
 import { scanTables } from "../file/scanTables";
 import { diffLines } from "../feature/diff";
 import { DEFAULT_XLSX_OPTIONS, workbookBuffer, xlsxBuffer } from "../feature/exportXlsx";
-import { fillRange, findAll, normalizeRect, rectCols, rectRows, replaceAll, type FindOptions } from "../feature/ops";
+import { allRules, buildRuleComment, joinComments, splitComments, type ConditionalRule } from "../feature/conditional";
+import { fillRange, findAll, normalizeRect, rectCols, rectRows, replaceAll, type FindOptions, type Rect } from "../feature/ops";
 import type MarkdownSpreadsheetsPlugin from "../main";
 import { asElement, asNode } from "./dom";
 import { MAX_COL_WIDTH, MAX_ROW_HEIGHT, MIN_COL_WIDTH, MIN_ROW_HEIGHT, VIEW_TYPE_GRID } from "./constants";
@@ -55,11 +56,12 @@ import { iconName, setIconSafe, type IconKey } from "./icons";
 import { ColumnsModal, ColumnStatsModal, ComputeColumnModal, GoToModal, ImportModal, MergeModal, MultiSortModal, NumberFormatModal, TextPromptModal, TotalsModal } from "./toolModals";
 import { Menu } from "obsidian";
 import { colIndex } from "../model/address";
-import { Ribbon, type RibbonAction, type RibbonItem, type RibbonTab } from "./Ribbon";
+import { Ribbon, type RibbonAction, type RibbonGroup, type RibbonItem, type RibbonTab } from "./Ribbon";
 import { StatusBar } from "./StatusBar";
 import { TouchBar, type TouchAction } from "./TouchBar";
 import {
 	CalculateModal,
+	ConditionalFormatModal,
 	ConfirmModal,
 	DensityModal,
 	DiffModal,
@@ -1158,6 +1160,15 @@ export class GridView extends ItemView {
 		this.refreshTouchBar();
 	}
 
+	/**
+	 * The feature switch changed under the ribbon: rebuild it, and re-run the conditional pass so a
+	 * switch to `all` shows the rules the note already carries.
+	 */
+	reloadRibbon(): void {
+		this.refreshRibbon();
+		this.host?.applyConditions();
+	}
+
 	/** The touch bar: what a mouse and keyboard did without a toolbar, a thumb's reach away. */
 	private refreshTouchBar(): void {
 		if (!this.touch) return;
@@ -1271,7 +1282,7 @@ export class GridView extends ItemView {
 		const redoLabel = host?.undo.redoLabel() ?? null;
 		const colLabel = colName(active.col);
 
-		return [
+		const tabs: RibbonTab[] = [
 			{
 				id: "home",
 				label: "Home",
@@ -1400,6 +1411,13 @@ export class GridView extends ItemView {
 								action("strike", "Strikethrough", "strike", () => host?.format("strikethrough"), {
 									tooltip: "~~ around the cell",
 									active: formats.has("strikethrough"),
+								}),
+								action("highlight", "Highlight", "highlight", () => host?.format("highlight"), {
+									tooltip: "== around the cell",
+									active: formats.has("highlight"),
+								}),
+								action("cf", "Conditional", "conditional", () => this.openConditionalFormatting(), {
+									tooltip: "format the cells of the selection by a condition — the rule is a comment in the first cell",
 								}),
 								action("link", "Link", "link", () => this.linkCells(), {
 									tooltip: "turns the cell text into a [[link]] (Ctrl+K)",
@@ -1729,6 +1747,45 @@ export class GridView extends ItemView {
 				],
 			},
 		];
+
+		return this.gateTabs(tabs);
+	}
+
+	/**
+	 * The feature switch, applied to the ribbon (decision 38).
+	 *
+	 * `markdown` drops the Calculate tab — formulas, and the conditional formatting that sits beside
+	 * them — and `formulas` drops conditional formatting alone. Nothing else is touched: the pivot,
+	 * the statistics and every plain table action stay, because they only read.
+	 */
+	private gateTabs(tabs: RibbonTab[]): RibbonTab[] {
+		const settings = this.plugin.sidecar.settings;
+		const drop = new Set<string>();
+		if (!formulasEnabled(settings)) drop.add("calc");
+		if (!conditionalEnabled(settings)) drop.add("cf");
+		if (drop.size === 0) return tabs;
+		// A dropped action can sit inside a cluster (the emphasis run on Home), so the filter goes
+		// one level deeper than the item list.
+		const itemsOf = (tab: RibbonTab): RibbonGroup[] =>
+			tab.groups
+				.map((group): RibbonGroup => {
+					const items: RibbonItem[] = [];
+					for (const item of group.items) {
+						if (item.kind === "cluster") {
+							const actions = item.actions.filter((action) => !drop.has(action.id));
+							if (actions.length > 0) items.push({ ...item, actions });
+							continue;
+						}
+						if (item.kind === "button" && drop.has(item.action.id)) continue;
+						items.push(item);
+					}
+					return { ...group, items };
+				})
+				.filter((group) => group.items.length > 0);
+		return tabs
+			.filter((tab) => !drop.has(tab.id))
+			.map((tab) => ({ ...tab, groups: itemsOf(tab) }))
+			.filter((tab) => tab.groups.length > 0);
 	}
 
 	/* ------------------------------------------------------------- actions */
@@ -2481,6 +2538,7 @@ export class GridView extends ItemView {
 				numberOpts: this.host.numberOpts(),
 				layout: this.host.getLayout(),
 				defaultColWidth: this.plugin.sidecar.settings.defaultColWidth,
+				conditional: conditionalEnabled(this.plugin.sidecar.settings),
 			},
 			new Date(),
 		);
@@ -2535,11 +2593,73 @@ export class GridView extends ItemView {
 				detectNumbers,
 				numberOpts: host.numberOpts(),
 				defaultColWidth: this.plugin.sidecar.settings.defaultColWidth,
+				conditional: conditionalEnabled(this.plugin.sidecar.settings),
 			},
 			new Date(),
 		);
 		await this.app.vault.createBinary(path, buffer);
 		new Notice(`Wrote ${path} (${sheets.length} sheets)`);
+	}
+
+	/* ------------------------------------------------- conditional formatting */
+
+	/**
+	 * A rule for the selection. The comment goes into the first cell of the range — or into the cell
+	 * itself when the selection is one cell — which is what makes the rule survive a save and stay
+	 * readable in the source (decisions 37 and 38).
+	 */
+	private openConditionalFormatting(): void {
+		const host = this.host;
+		if (!host || !conditionalEnabled(this.plugin.sidecar.settings)) return;
+		const rect = normalizeRect(host.getSelection().rect);
+		const label =
+			rect.r1 === rect.r2 && rect.c1 === rect.c2
+				? `${colName(rect.c1)}${rect.r1 + 1}`
+				: `${colName(rect.c1)}${rect.r1 + 1}:${colName(rect.c2)}${rect.r2 + 1}`;
+		const existing = allRules(host.getModel()).filter(
+			(rule) => rule.r1 >= rect.r1 && rule.r2 <= rect.r2 && rule.c1 >= rect.c1 && rule.c2 <= rect.c2,
+		);
+		new ConditionalFormatModal(this.app, {
+			rangeLabel: label,
+			existing,
+			onApply: (rule) =>
+				this.writeConditionalRule(rect, { ...rule, r1: rect.r1, c1: rect.c1, r2: rect.r2, c2: rect.c2 }),
+			onClear: () => this.clearConditionalRules(rect),
+		}).open();
+	}
+
+	/** Replaces whatever rules the anchor cell held: a cell carries one rule, not a pile of them. */
+	private writeConditionalRule(rect: Rect, rule: Omit<ConditionalRule, "row" | "col">): void {
+		const host = this.host;
+		if (!host) return;
+		host.mutate("Conditional formatting", () => {
+			const model = host.getModel();
+			const { display, comments } = splitComments(getRaw(model, rect.r1, rect.c1));
+			const kept = comments.filter((body) => !/^cf\s/i.test(body));
+			const comment = buildRuleComment(rule).replace(/^%%/, "").replace(/%%$/, "");
+			// First among the comments: `parseFormulaCell` only finds a formula when it is the last
+			// comment in the cell, and the cell carrying a rule is often the one carrying the total.
+			setRaw(model, rect.r1, rect.c1, joinComments(display, [comment, ...kept]));
+		});
+	}
+
+	/** Drops the rules inside the selection. The cells keep the formatting they already carry. */
+	private clearConditionalRules(rect: Rect): void {
+		const host = this.host;
+		if (!host) return;
+		host.mutate("Remove conditional formatting", () => {
+			const model = host.getModel();
+			for (let r = rect.r1; r <= rect.r2; r++) {
+				for (let c = rect.c1; c <= rect.c2; c++) {
+					const raw = getRaw(model, r, c);
+					if (!raw.includes("%%cf")) continue;
+					const { display, comments } = splitComments(raw);
+					const kept = comments.filter((body) => !/^cf\s/i.test(body));
+					if (kept.length === comments.length) continue;
+					setRaw(model, r, c, joinComments(display, kept));
+				}
+			}
+		});
 	}
 
 	/* ------------------------------------------------- plugin-facing surface */

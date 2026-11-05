@@ -3,7 +3,7 @@ import { cellLabel, colName, rangeLabel } from "../model/address";
 import { cloneModel, getRaw, recomputeUsedRange, setRaw, type Align, type GridModel } from "../model/GridModel";
 import { fnv1a } from "../model/hash";
 import { formatNumber, type NumberParseOptions } from "../model/numbers";
-import type { MarkdownSpreadsheetsSettings } from "../settings";
+import { conditionalEnabled, type MarkdownSpreadsheetsSettings } from "../settings";
 import type { TableLayout } from "../store/Sidecar";
 import { fromMarkdownTable, fromTsv, looksLikeGrid, shiftFormulas, toTsv } from "../feature/clipboard";
 import {
@@ -30,6 +30,7 @@ import {
 import { UndoStack } from "../feature/undo";
 import { DEFAULT_GESTURE, GestureTracker } from "../feature/gesture";
 import { plainText } from "../feature/exportCsv";
+import { applyConditionalFormats } from "../feature/conditional";
 import { adjustFormulaRefs, closeUnbalanced, editTextOf, isFormulaCell, rawFromEdit, recalculate, stripFormula } from "../feature/formula";
 import {
 	applyTextTransform,
@@ -411,6 +412,18 @@ export class GridHost {
 		return this.formatValue(value);
 	}
 
+	/**
+	 * Writes the conditional formats of the table into the cells (decision 37). Runs after every
+	 * change, because the value a rule tests is exactly what a change moved, and once on open, since
+	 * the note can have been edited by hand. Returns how many cells changed.
+	 */
+	applyConditions(): number {
+		if (!conditionalEnabled(this.ctx.settings)) return 0;
+		const changed = applyConditionalFormats(this.model, this.numberOpts());
+		if (changed.length > 0) recomputeUsedRange(this.model);
+		return changed.length;
+	}
+
 	/** Recalculates through the view when it can build a workbook, alone otherwise. */
 	private recalc(model: GridModel): number {
 		if (this.ctx.callbacks.onRecalculate) return this.ctx.callbacks.onRecalculate(model);
@@ -432,6 +445,9 @@ export class GridHost {
 	 * is a real edit: it goes through `mutate`, can be undone, and is what the next save writes.
 	 */
 	recalculateOnOpen(): void {
+		// The conditional pass runs even without a formula in the table: its condition may test a
+		// plain number that was edited outside the grid.
+		this.applyConditions();
 		if (!this.hasFormulas()) return;
 		const probe = cloneModel(this.model);
 		const changed = this.recalc(probe);
@@ -1465,6 +1481,7 @@ export class GridHost {
 		if (this.hasFormulas()) {
 			if (this.recalc(this.model) > 0) mode = "all";
 		}
+		if (this.applyConditions() > 0) mode = "all";
 		recomputeUsedRange(this.model);
 		for (const el of this.changedEls) el.removeClass("is-changed");
 		this.changedEls = [];

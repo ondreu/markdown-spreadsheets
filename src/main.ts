@@ -284,6 +284,14 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 		return false;
 	}
 
+	/** Settings shape the ribbon, so a change has to reach the views that are already open. */
+	refreshOpenGrids(): void {
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_GRID)) {
+			const view = leaf.view;
+			if (view instanceof GridView) view.reloadRibbon();
+		}
+	}
+
 	setStatusBarText(text: string): void {
 		this.statusBarEl?.setText(text);
 	}

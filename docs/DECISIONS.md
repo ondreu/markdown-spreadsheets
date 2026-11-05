@@ -653,3 +653,52 @@ stores.
 - **What it does not do.** Per-table column widths, row heights and frozen panes carry over for the
   open table only: they live in the sidecar under a key that names the table, and the sibling tables
   are not open. The workbook is a snapshot of a note, not a second place to edit it.
+
+## 37. Conditional formatting is a comment in the cell it starts in
+
+**Design:** §14 has no conditional formatting. It arrived with the rest of the Excel furniture: a
+person with a column of amounts wants the ones above a number to stand out, and doing it by hand is
+the thing a spreadsheet exists to avoid.
+
+**Built:** a rule per range, stored where every other piece of logic in this plugin is stored — in a
+comment inside the note.
+
+- **The rule sits in the first cell of its range**, as `%%cf F2:F9 > 1000 bold%%`; a rule for one cell
+  says `%%cf > 1000 bold%%` and governs the cell it is written in. Obsidian hides the comment, the
+  source stays readable, and a note with forty matching cells carries one rule rather than forty.
+- **The format is written into the cells it matches**, as the same inline Markdown a person would
+  type: `**1 200**`, `*…*`, `~~…~~`, `` `…` ``, `==…==`. That is the formula rule again — the comment
+  holds the logic, the cell holds the result — so a note read without the plugin still shows it.
+- **The pass is idempotent and runs after everything.** Matching adds the mark, no longer matching
+  removes it (and only that mark: an italic cell keeps its italic under a bold rule). It runs after
+  every change, on open, and in the background recalculation, so a value edited on a phone is
+  formatted by the time the note is read.
+- **A cell the rule cannot judge is not a "no".** `> 1000` over a column that also holds `Done` must
+  not take the bold off `Done`; the numeric operators skip non-numbers entirely.
+- **A rule and a formula share a cell**, because the cell holding the total is the natural place for
+  the rule over the column. The rule is written first and the formula last: `parseFormulaCell` only
+  recognises a formula whose comment ends the cell, so the order is not cosmetic. `display` strips
+  rule comments, which is why the grid shows the number and not the comment.
+- **The Excel export carries it as conditional formatting** (a `dxf` per format, `<cfRule
+  type="expression">` per rule), not as the bold it happened to produce at export time — so editing a
+  cell in Excel re-evaluates the rule there.
+- **What it does not do.** One rule per range: overlapping rules apply in cell order, and there is no
+  priority, no colour, and no rule on a formula's *expression* rather than its value.
+
+## 38. One switch for what the plugin offers
+
+**Design:** three levels, asked for in so many words: plain Markdown only, Markdown and formulas,
+everything.
+
+**Built:** `features` in the settings — `markdown`, `formulas`, `all`.
+
+- **It hides UI, it does not rewrite notes.** With formulas off, `Calculate` disappears from the
+  ribbon; with conditional formatting off, the `Conditional` action disappears. Every `%%=…%%` and
+  `%%cf…%%` stays exactly where it is, so switching back restores the feature and its rules.
+- **Visualisations stay in every mode.** The pivot, the statistics and the charts only read a table;
+  none of them writes a formula, so a Markdown-only vault keeps them.
+- **The background recalculation respects it.** In `markdown` mode the watcher does not touch a note
+  at all — a background write nobody asked for is worse than a stale number in a mode that has no
+  formulas.
+- **The ribbon is built from the setting**, so a change has to reach the views that are already open:
+  the settings tab calls `refreshOpenGrids()`.

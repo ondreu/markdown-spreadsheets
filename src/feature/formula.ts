@@ -56,7 +56,28 @@ export function parseFormulaCell(raw: string): FormulaCell | null {
 	if (expr === "" || expr.includes("%%")) return null;
 	const before = s.slice(0, open);
 	if (countMarkers(before) % 2 !== 0) return null;
-	return { display: before.trim(), expr };
+	return { display: withoutRuleComments(before).trim(), expr };
+}
+
+/**
+ * Drops trailing `%%cf …%%` blocks from the text in front of a formula.
+ *
+ * A conditional rule is written into the first cell of its range, and that cell may well hold the
+ * formula whose value the rule tests — so the two comments share a cell, and the rule sits first
+ * because the formula has to stay the last comment for the parser to find it. What the cell *shows*
+ * is neither of them.
+ */
+function withoutRuleComments(text: string): string {
+	let s = text.trimEnd();
+	for (;;) {
+		if (!s.endsWith("%%")) break;
+		const open = s.lastIndexOf("%%", s.length - 3);
+		if (open === -1) break;
+		const body = s.slice(open + 2, s.length - 2);
+		if (body.includes("%%") || !/^cf\s/i.test(body)) break;
+		s = s.slice(0, open).trimEnd();
+	}
+	return s;
 }
 
 function countMarkers(s: string): number {

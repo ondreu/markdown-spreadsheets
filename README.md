@@ -44,6 +44,11 @@ No table yet? **Insert a new table and open it as a spreadsheet** creates one at
 - **A note with several tables gets sheet tabs** under the grid, labelled by each table's own first
   headers. Clicking one switches the grid to that table; nothing about the note changes, and a
   single-table note shows no strip at all.
+- **Conditional formatting**: pick a range, a condition (`>`, `>=`, `<`, `<=`, `=`, `<>`, `contains`)
+  and one of five formats — **bold**, *italic*, ~~strikethrough~~, `code`, ==highlight==. The rule is
+  a comment in the first cell of the range (`%%cf F2:F9 > 1000 bold%%`) and the format is written into
+  the cells it matches, so the note shows it with or without the plugin. A cell the rule cannot judge
+  — text under `> 1000` — is left exactly as it is.
 - **Cells show what the note shows** — links, emphasis, code and images are rendered; editing always
   shows the Markdown. Ctrl+click follows a link, Ctrl+hover previews it.
 - A long cell opens in an editor that grows over its neighbours, so it can be read whole.
@@ -87,8 +92,10 @@ No table yet? **Insert a new table and open it as a spreadsheet** creates one at
 - Export to CSV, Excel or JSON — the whole table or just the selection. Excel gets **plain text by
   default** and, from a note with several tables, a **whole workbook**: one sheet per table, named
   after the heading above it (its headers when there is none), so a formula that points at another
-  table (`Table2!B3`) arrives as a working `='Summary'!B3` instead of a number. Copy as Markdown, as
-  a formatted table for Word or email, as JSON or as text. Import CSV, TSV or Excel.
+  table (`Table2!B3`) arrives as a working `='Summary'!B3` instead of a number, and a conditional
+  format arrives as Excel's own conditional formatting, not as the bold it happened to produce today.
+  Copy as Markdown, as a formatted table for Word or email, as JSON or as text. Import CSV, TSV or
+  Excel.
 - **The stored value is kept current.** A formula cell holds its last value as text, so a note edited
   outside the grid — on your phone, by another plugin, in the source view — would keep a stale
   number. The plugin recalculates such a note in the background, and once over recently edited notes
@@ -207,6 +214,7 @@ Obsidian's settings.
 
 | Setting | Default | Why change it |
 | --- | --- | --- |
+| Features | Everything | A kill switch: **Markdown only** (no formulas, no conditional formatting — a plain table editor), **Markdown and formulas**, or everything. Nothing is removed from a note; the visualisations stay available in every mode. |
 | Save mode | Automatic | Manual if your vault is under Git or Sync and you'd rather save explicitly — with an optional preview of the change. |
 | Table layout in the note | Aligned | Compact keeps Git diffs to the line you changed. |
 | Open the spreadsheet in | A new tab | A split puts the grid next to the note. |
