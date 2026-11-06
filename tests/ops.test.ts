@@ -407,3 +407,21 @@ describe("empty writes stay sparse", () => {
 		expect(model.cells.has("1:0")).toBe(false);
 	});
 });
+
+describe("formatting a cell that carries a conditional rule", () => {
+	const raw = "1 200 %%cf B2:B9 > 1000 bold%% %%=SUM(B2:B4)%%";
+
+	it("keeps the rule when the display is emphasised", () => {
+		// The rule is written into the first cell of its range, which is often the cell holding the
+		// formula the rule tests: pressing Ctrl+I there must not take the rule out of the note.
+		expect(addInlineFormat(raw, "italic")).toBe("*1 200* %%cf B2:B9 > 1000 bold%% %%=SUM(B2:B4)%%");
+	});
+
+	it("keeps the rule when the emphasis comes off again", () => {
+		expect(removeInlineFormat(addInlineFormat(raw, "italic"), "italic")).toBe(raw);
+	});
+
+	it("still puts the formula last, so the cell is still a formula", () => {
+		expect(parseFormulaCell(addInlineFormat(raw, "bold"))?.expr).toBe("SUM(B2:B4)");
+	});
+});

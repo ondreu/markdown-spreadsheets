@@ -30,7 +30,7 @@ import {
 import { UndoStack } from "../feature/undo";
 import { DEFAULT_GESTURE, GestureTracker } from "../feature/gesture";
 import { plainText } from "../feature/exportCsv";
-import { applyConditionalFormats } from "../feature/conditional";
+import { applyConditionalFormats, unapplyRule, type ConditionalRule } from "../feature/conditional";
 import { adjustFormulaRefs, closeUnbalanced, editTextOf, isFormulaCell, rawFromEdit, recalculate, stripFormula } from "../feature/formula";
 import {
 	applyTextTransform,
@@ -422,6 +422,21 @@ export class GridHost {
 		const changed = applyConditionalFormats(this.model, this.numberOpts());
 		if (changed.length > 0) recomputeUsedRange(this.model);
 		return changed.length;
+	}
+
+	/**
+	 * Takes the marks a rule wrote back off the table, for when the rule itself is being dropped.
+	 *
+	 * The pass in `mutate` only knows the rules the note still carries, so a removed rule's colour
+	 * would be left standing with nothing to remove it. The caller hands over the rules it is about
+	 * to delete, before it deletes them.
+	 */
+	unapplyRuleFormats(rules: readonly ConditionalRule[]): number {
+		if (!conditionalEnabled(this.ctx.settings)) return 0;
+		let count = 0;
+		for (const rule of rules) count += unapplyRule(this.model, rule, this.numberOpts()).length;
+		if (count > 0) recomputeUsedRange(this.model);
+		return count;
 	}
 
 	/** Recalculates through the view when it can build a workbook, alone otherwise. */
