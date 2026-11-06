@@ -385,7 +385,7 @@ function hasFormat(peeled: InlineLayers, format: InlineFormat): boolean {
  */
 export function addInlineFormat(raw: string, format: InlineFormat): string {
 	const formula = parseFormulaCell(raw);
-	if (formula !== null) return buildFormulaCell(addInlineFormat(formula.display, format), formula.expr);
+	if (formula !== null) return withRuleComments(buildFormulaCell(addInlineFormat(formula.display, format), formula.expr), raw);
 	const peeled = peelInline(raw);
 	if (hasFormat(peeled, format)) return raw;
 	if (format === "code") {
@@ -400,12 +400,47 @@ export function addInlineFormat(raw: string, format: InlineFormat): string {
 	return `${FORMAT_TOKENS[format][0]}${base}${FORMAT_TOKENS[format][0]}`;
 }
 
+/** The trailing `%%…%%` blocks of a cell, without their fences, in the order they were written. */
+function commentsOf(raw: string): string[] {
+	const out: string[] = [];
+	let s = raw.trimEnd();
+	for (;;) {
+		if (!s.endsWith("%%")) break;
+		const open = s.lastIndexOf("%%", s.length - 3);
+		if (open === -1) break;
+		const body = s.slice(open + 2, s.length - 2);
+		if (body.includes("%%")) break;
+		out.unshift(body);
+		s = s.slice(0, open).trimEnd();
+	}
+	return out;
+}
+
+/**
+ * Puts the conditional rules `next` lost back in front of its formula.
+ *
+ * A rule lives in the first cell of its range, and that cell is often the one carrying the formula
+ * the rule tests — `buildFormulaCell` only knows the display and the expression, so formatting the
+ * cell would quietly take the rule with it. The rule goes first because the formula has to stay the
+ * last comment for `parseFormulaCell` to find it.
+ */
+function withRuleComments(next: string, before: string): string {
+	const rules = commentsOf(before).filter((body) => /^cf\s/i.test(body));
+	if (rules.length === 0) return next;
+	const tail = rules.map((body) => `%%${body}%%`).join(" ");
+	const at = next.indexOf("%%=");
+	if (at === -1) return `${next} ${tail}`;
+	const head = next.slice(0, at).trimEnd();
+	const rest = next.slice(at);
+	return head === "" ? `${tail} ${rest}` : `${head} ${tail} ${rest}`;
+}
+
 /** Removes the outermost layer of `format`, keeping every other layer as it was. */
 export function removeInlineFormat(raw: string, format: InlineFormat): string {
 	const formula = parseFormulaCell(raw);
 	if (formula !== null) {
 		const display = removeInlineFormat(formula.display, format);
-		return display === formula.display ? raw : buildFormulaCell(display, formula.expr);
+		return display === formula.display ? raw : withRuleComments(buildFormulaCell(display, formula.expr), raw);
 	}
 	const peeled = peelInline(raw);
 	const index = peeled.layers.findIndex((t) => FORMAT_TOKENS[format].includes(t));

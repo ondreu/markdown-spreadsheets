@@ -44,7 +44,7 @@ import { fromMarkdownTable, fromTsv, looksLikeGrid } from "../feature/clipboard"
 import { scanTables } from "../file/scanTables";
 import { diffLines } from "../feature/diff";
 import { DEFAULT_XLSX_OPTIONS, workbookBuffer, xlsxBuffer } from "../feature/exportXlsx";
-import { allRules, buildRuleComment, joinComments, splitComments, type ConditionalRule } from "../feature/conditional";
+import { allRules, buildRuleComment, joinComments, rulesInCell, splitComments, type ConditionalRule } from "../feature/conditional";
 import { fillRange, findAll, normalizeRect, rectCols, rectRows, replaceAll, type FindOptions, type Rect } from "../feature/ops";
 import type MarkdownSpreadsheetsPlugin from "../main";
 import { asElement, asNode } from "./dom";
@@ -2642,7 +2642,7 @@ export class GridView extends ItemView {
 		}).open();
 	}
 
-	/** Drops the rule written in one cell, keeping the cell's value and its other comments. */
+	/** Drops the rule written in one cell, taking back what it painted. */
 	private removeConditionalRule(row: number, col: number): void {
 		const host = this.host;
 		if (!host) return;
@@ -2650,8 +2650,12 @@ export class GridView extends ItemView {
 			const model = host.getModel();
 			const raw = getRaw(model, row, col);
 			if (!raw.includes("%%cf")) return;
+			// Read the rules before the comment goes: once it is gone nothing says which cells the
+			// rule painted, and the marks would stay in the note for good.
+			const removed = rulesInCell(raw, row, col);
 			const { display, comments } = splitComments(raw);
 			setRaw(model, row, col, joinComments(display, comments.filter((body) => !/^cf\s/i.test(body))));
+			host.unapplyRuleFormats(removed);
 		});
 	}
 
@@ -2661,21 +2665,40 @@ export class GridView extends ItemView {
 		if (!host) return;
 		host.mutate("Conditional formatting", () => {
 			const model = host.getModel();
+			const raw = getRaw(model, rect.r1, rect.c1);
+			// The rule being replaced is gone the moment the comment is rewritten, so its format is
+			// taken off first — unless the new rule says exactly the same thing, in which case the
+			// cells keep the marks they already carry.
+			const replaced = rulesInCell(raw, rect.r1, rect.c1).filter(
+				(old) =>
+					old.op !== rule.op ||
+					old.value !== rule.value ||
+					old.format !== rule.format ||
+					old.r1 !== rule.r1 ||
+					old.c1 !== rule.c1 ||
+					old.r2 !== rule.r2 ||
+					old.c2 !== rule.c2,
+			);
 			const { display, comments } = splitComments(getRaw(model, rect.r1, rect.c1));
 			const kept = comments.filter((body) => !/^cf\s/i.test(body));
 			const comment = buildRuleComment(rule).replace(/^%%/, "").replace(/%%$/, "");
 			// First among the comments: `parseFormulaCell` only finds a formula when it is the last
 			// comment in the cell, and the cell carrying a rule is often the one carrying the total.
 			setRaw(model, rect.r1, rect.c1, joinComments(display, [comment, ...kept]));
+			host.unapplyRuleFormats(replaced);
 		});
 	}
 
-	/** Drops the rules inside the selection. The cells keep the formatting they already carry. */
+	/**
+	 * Drops the rules inside the selection, taking back what they painted. The cells keep the
+	 * formatting they came with — only the marks these rules wrote come off.
+	 */
 	private clearConditionalRules(rect: Rect): void {
 		const host = this.host;
 		if (!host) return;
 		host.mutate("Remove conditional formatting", () => {
 			const model = host.getModel();
+			const removed: ConditionalRule[] = [];
 			for (let r = rect.r1; r <= rect.r2; r++) {
 				for (let c = rect.c1; c <= rect.c2; c++) {
 					const raw = getRaw(model, r, c);
@@ -2683,9 +2706,11 @@ export class GridView extends ItemView {
 					const { display, comments } = splitComments(raw);
 					const kept = comments.filter((body) => !/^cf\s/i.test(body));
 					if (kept.length === comments.length) continue;
+					removed.push(...rulesInCell(raw, r, c));
 					setRaw(model, r, c, joinComments(display, kept));
 				}
 			}
+			host.unapplyRuleFormats(removed);
 		});
 	}
 

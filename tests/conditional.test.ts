@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	allRules,
 	applyConditionalFormats,
+	unapplyRule,
 	buildRuleComment,
 	joinComments,
 	parseRuleBody,
@@ -216,6 +217,69 @@ describe("applying the rules", () => {
 		const reparsed = parseTable(serializeTable(model, { compact: false }));
 		expect(allRules(reparsed)).toHaveLength(1);
 		expect(applyConditionalFormats(reparsed, {})).toEqual([]);
+	});
+});
+
+describe("removing a rule", () => {
+	/** The same table as above, with the rule already applied. */
+	const painted = (): ReturnType<typeof parseTable> => {
+		const model = parseTable(
+			"| Item | Amount |\n| --- | ---: |\n| a | 1 200 |\n| b | 20 |\n| c | 3 500 |\n| Total | 4 720 %%=SUM(B2:B4)%% %%cf B2:B5 > 1000 bold%% |\n",
+		);
+		applyConditionalFormats(model, {});
+		return model;
+	};
+
+	it("takes its own mark off every cell it painted", () => {
+		const model = painted();
+		const rule = allRules(model)[0];
+		expect(getRaw(model, 1, 1)).toBe("**1 200**");
+		unapplyRule(model, rule, {});
+		expect(getRaw(model, 1, 1)).toBe("1 200");
+		expect(getRaw(model, 3, 1).startsWith("3 500")).toBe(true);
+		expect(getRaw(model, 4, 1).startsWith("4 720")).toBe(true);
+	});
+
+	it("leaves the rule comment and the formula in the cell that carries them", () => {
+		const model = painted();
+		unapplyRule(model, allRules(model)[0], {});
+		expect(getRaw(model, 4, 1)).toBe("4 720 %%cf B2:B5 > 1000 bold%% %%=SUM(B2:B4)%%");
+	});
+
+	it("is a no-op on a cell the rule never painted", () => {
+		const model = painted();
+		unapplyRule(model, allRules(model)[0], {});
+		const snapshot = serializeTable(model, { compact: false });
+		expect(unapplyRule(model, allRules(model)[0], {})).toEqual([]);
+		expect(serializeTable(model, { compact: false })).toBe(snapshot);
+	});
+
+	it("keeps a mark the rule does not write, and a mark on a cell it cannot judge", () => {
+		const model = parseTable("| Item | Status |\n| --- | --- |\n| a | *2 000* |\n| b | **Done** |\n");
+		setRaw(model, 0, 1, "Status %%cf B2:B3 > 1000 bold%%");
+		applyConditionalFormats(model, {});
+		unapplyRule(model, allRules(model)[0], {});
+		expect(getRaw(model, 1, 1)).toBe("*2 000*");
+		expect(getRaw(model, 2, 1)).toBe("**Done**");
+	});
+
+	it("lets the next pass keep a surviving rule's mark in place", () => {
+		// Two rules, both bold: dropping the text one must not touch what the numeric one painted.
+		const model = parseTable("| Item | Amount |\n| --- | --- |\n| a | 1 200 |\n| b | 5 |\n| c | 4 000 |\n");
+		setRaw(model, 1, 1, "1 200 %%cf B2:B4 > 1000 bold%%");
+		setRaw(model, 0, 0, "Item %%cf A2:A4 = a bold%%");
+		applyConditionalFormats(model, {});
+		expect(getRaw(model, 1, 0)).toBe("**a**");
+		const textRule = allRules(model).find((rule) => rule.op === "=");
+		expect(textRule).toBeDefined();
+		// What `GridView` does: drop the comment first, then take back what it painted.
+		const header = splitComments(getRaw(model, 0, 0));
+		setRaw(model, 0, 0, joinComments(header.display, header.comments.filter((body) => !/^cf\s/i.test(body))));
+		unapplyRule(model, textRule as ConditionalRule, {});
+		applyConditionalFormats(model, {});
+		expect(getRaw(model, 1, 0)).toBe("a");
+		expect(getRaw(model, 1, 1).startsWith("**1 200**")).toBe(true);
+		expect(getRaw(model, 3, 1).startsWith("**4 000**")).toBe(true);
 	});
 });
 

@@ -290,6 +290,39 @@ export function ruleMatches(rule: ConditionalRule, display: string, numberOpts?:
 
 /* ----------------------------------------------------------------- applying */
 
+/** Every cell in the rule's range, whether or not it holds anything. */
+function eachGovernedCell(rule: ConditionalRule, visit: (row: number, col: number) => void): void {
+	for (let r = rule.r1; r <= rule.r2; r++) for (let c = rule.c1; c <= rule.c2; c++) visit(r, c);
+}
+
+/**
+ * Whether the rule holds for the cell at `row`/`col`, or null when it cannot judge it at all.
+ *
+ * Null is not "no": a mark is only taken off where the rule said something, so a numeric rule
+ * levelled at a column of text never strips what a person bolded by hand.
+ */
+function verdictAt(
+	rule: ConditionalRule,
+	model: GridModel,
+	row: number,
+	col: number,
+	display: string,
+	numberOpts?: NumberParseOptions,
+	tables?: CellSource[],
+): boolean | null {
+	if (rule.op === "if") {
+		// Excel's own semantics: the expression is written for the first cell of the range and
+		// shifted for every other cell, so `B2>1000` walks down the column while `$B$2` stays put.
+		// Unreadable or unevaluable means "leave the cell alone".
+		const shifted = translateFormula(rule.value, row - rule.r1, col - rule.c1);
+		if (shifted === null) return null;
+		return testExpression(shifted, model, row, { numberOpts, tables });
+	}
+	// A cell the rule cannot judge is left exactly as it is: no mark removed, none added.
+	if (!ruleApplies(rule, display, numberOpts)) return null;
+	return ruleMatches(rule, display, numberOpts);
+}
+
 /**
  * Applies every rule in the table to the cells it governs and returns the cells that changed.
  *
@@ -310,39 +343,52 @@ export function applyConditionalFormats(
 	if (!hasRules(model)) return changed;
 	const rules = allRules(model);
 	if (rules.length === 0) return changed;
-	const rows = Math.max(model.usedRange.rows, 0);
-	const cols = Math.max(model.usedRange.cols, 0);
 	for (const rule of rules) {
-		const r2 = Math.max(rule.r2, Math.min(rows - 1, rule.r2));
-		const c2 = Math.max(rule.c2, Math.min(cols - 1, rule.c2));
-		for (let r = rule.r1; r <= r2; r++) {
-			for (let c = rule.c1; c <= c2; c++) {
-				const raw = getRaw(model, r, c);
-				if (raw.trim() === "" && !(rule.op === "=" && rule.value.trim() === "")) continue;
-				const { display, comments } = splitComments(raw);
-				if (display === "") continue;
-				let matches: boolean;
-				if (rule.op === "if") {
-					// Excel's own semantics: the expression is written for the first cell of the range
-					// and shifted for every other cell, so `B2>1000` walks down the column while
-					// `$B$2` stays put. Unreadable or unevaluable means "leave the cell alone".
-					const shifted = translateFormula(rule.value, r - rule.r1, c - rule.c1);
-					if (shifted === null) continue;
-					const verdict = testExpression(shifted, model, r, { numberOpts, tables });
-					if (verdict === null) continue;
-					matches = verdict;
-				} else {
-					// A cell the rule cannot judge is left exactly as it is: no mark removed, none added.
-					if (!ruleApplies(rule, display, numberOpts)) continue;
-					matches = ruleMatches(rule, display, numberOpts);
-				}
-				const inline = inlineFormatOf(rule.format);
-				const next = matches ? addInlineFormat(display, inline) : removeInlineFormat(display, inline);
-				if (next === display) continue;
-				setRaw(model, r, c, joinComments(next, orderComments(comments)));
-				if (!changed.some((seen) => seen.row === r && seen.col === c)) changed.push({ row: r, col: c });
-			}
-		}
+		eachGovernedCell(rule, (r, c) => {
+			const raw = getRaw(model, r, c);
+			if (raw.trim() === "" && !(rule.op === "=" && rule.value.trim() === "")) return;
+			const { display, comments } = splitComments(raw);
+			if (display === "") return;
+			const verdict = verdictAt(rule, model, r, c, display, numberOpts, tables);
+			if (verdict === null) return;
+			const inline = inlineFormatOf(rule.format);
+			const next = verdict ? addInlineFormat(display, inline) : removeInlineFormat(display, inline);
+			if (next === display) return;
+			setRaw(model, r, c, joinComments(next, orderComments(comments)));
+			if (!changed.some((seen) => seen.row === r && seen.col === c)) changed.push({ row: r, col: c });
+		});
 	}
+	return changed;
+}
+
+/**
+ * Takes the format a rule wrote back off the cells that rule still holds for, and returns the cells
+ * that changed.
+ *
+ * Dropping the rule is not enough on its own: the mark lives in the note as ordinary Markdown, so
+ * nothing in the note says it was the rule's — once the comment is gone the pass has no reason to
+ * run over those cells at all, and the colour would stay for good. This runs while the rule is
+ * still known, over exactly the cells it painted: where the rule no longer holds, the pass has
+ * already taken the mark off, and a mark that is not there is left alone.
+ */
+export function unapplyRule(
+	model: GridModel,
+	rule: ConditionalRule,
+	numberOpts?: NumberParseOptions,
+	tables?: CellSource[],
+): Array<{ row: number; col: number }> {
+	const changed: Array<{ row: number; col: number }> = [];
+	const inline = inlineFormatOf(rule.format);
+	eachGovernedCell(rule, (r, c) => {
+		const raw = getRaw(model, r, c);
+		if (raw.trim() === "") return;
+		const { display, comments } = splitComments(raw);
+		if (display === "") return;
+		if (verdictAt(rule, model, r, c, display, numberOpts, tables) !== true) return;
+		const next = removeInlineFormat(display, inline);
+		if (next === display) return;
+		setRaw(model, r, c, joinComments(next, orderComments(comments)));
+		changed.push({ row: r, col: c });
+	});
 	return changed;
 }
