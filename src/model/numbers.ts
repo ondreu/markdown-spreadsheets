@@ -50,6 +50,59 @@ export function stripObsidianComments(s: string): string {
 	}
 }
 
+/**
+ * A date as this plugin writes it: `YYYY-MM-DD`, optionally with a time.
+ *
+ * Excel has no date type — a date is a number with a style, and that is the whole problem this
+ * solves. The note stores something a person can read, and a formula reads it back as the serial
+ * number it was in the workbook, so `B2-A2` is still a number of days.
+ */
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/;
+
+/** The Excel serial for an ISO date or date-time, or null when the text is not one. */
+export function serialFromIsoDate(text: string): number | null {
+	const m = ISO_DATE.exec(text.trim());
+	if (m === null) return null;
+	const year = Number.parseInt(m[1], 10);
+	const month = Number.parseInt(m[2], 10);
+	const day = Number.parseInt(m[3], 10);
+	const hours = m[4] === undefined ? 0 : Number.parseInt(m[4], 10);
+	const minutes = m[5] === undefined ? 0 : Number.parseInt(m[5], 10);
+	const seconds = m[6] === undefined ? 0 : Number.parseInt(m[6], 10);
+	const midnight = Date.UTC(year, month - 1, day);
+	const check = new Date(midnight);
+	if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) return null;
+	if (hours > 23 || minutes > 59 || seconds > 59) return null;
+	// 1970-01-01 is day 25569 of Excel's 1900 system, which is off by the leap year it wrongly
+	// believes in; every date this plugin writes is far past that, so the shortcut is exact.
+	return midnight / 86_400_000 + 25569 + (hours * 3600 + minutes * 60 + seconds) / 86_400;
+}
+
+/** The date part of a serial as `YYYY-MM-DD`. */
+export function isoDateFromSerial(serial: number): string {
+	const date = new Date(Date.UTC(1899, 11, 30) + Math.floor(serial) * 86_400_000);
+	const year = date.getUTCFullYear();
+	const month = `${date.getUTCMonth() + 1}`.padStart(2, "0");
+	const day = `${date.getUTCDate()}`.padStart(2, "0");
+	return `${year}-${month}-${day}`;
+}
+
+/** The time of day a serial's fraction stands for, or null when it is midnight. */
+export function isoTimeFromSerial(serial: number): string | null {
+	const total = Math.round((serial - Math.floor(serial)) * 86_400);
+	if (total === 0) return null;
+	const hours = `${Math.floor(total / 3600)}`.padStart(2, "0");
+	const minutes = `${Math.floor((total % 3600) / 60)}`.padStart(2, "0");
+	const seconds = total % 60;
+	return seconds === 0 ? `${hours}:${minutes}` : `${hours}:${minutes}:${`${seconds}`.padStart(2, "0")}`;
+}
+
+/** A serial as the text a cell holds: `2023-03-15`, or `2023-03-15 14:30`. */
+export function isoFromSerial(serial: number): string {
+	const time = isoTimeFromSerial(serial);
+	return time === null ? isoDateFromSerial(serial) : `${isoDateFromSerial(serial)} ${time}`;
+}
+
 export interface NumberParseOptions {
 	/** `'auto'` resolves a single separator as decimal and a repeated one as grouping. */
 	decimalSeparator?: "auto" | "," | ".";

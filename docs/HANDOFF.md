@@ -506,3 +506,26 @@ and 11/11 after. Five unit tests pin `closeUnbalanced`; the suite is 423.
 - Clicking a tab mid-formula relies on `preventDefault` on `mousedown` keeping focus in the bar. If
   the mobile app's tap synthesis blurs anyway, the draft is committed on the switch instead of
   carried — the same as before this round, so nothing is lost, but the feature does not appear.
+
+## Round eighteen: a workbook, and a dialog for formulas
+
+Two reports from the first real use: the Excel import took only the first sheet, and there was no
+way to write a formula without knowing it by heart.
+
+1. **A sheet at a time.** `readXlsxWorkbook` reads all of them, and the import asks which. The
+   same dialog asks what to do with formulas; `importFormula.ts` carries the ones the grid can
+   evaluate, rewrites `VLOOKUP` to `XLOOKUP` where the block is known, expands Excel's shared
+   formulas, and leaves Excel's value in place of anything it cannot prove (decisions 41–43).
+2. **Lookups.** `XLOOKUP`, `INDEX` and `MATCH` in the evaluator, with `#N/A` as an error code.
+3. **Dates.** A date-styled cell is read as `2026-03-15`, and a formula reads it back as the serial
+   (decision 44).
+4. **Insert a formula.** The Calculate tab has a function list with a form for its arguments and a
+   live preview checked by the real parser; the dialog floats so a reference can be clicked in the
+   grid, and the formula bar's `fx` opens the same dialog.
+5. **A date result.** `%%date%%` in a cell makes a formula's result read as a date, `TODAY()` and
+   `NOW()` do it on their own, and a cell that already shows a date keeps it (decision 45). The
+   marker is one `%%` pair, so the comment never ends early.
+
+The import and its dialog are covered by unit tests (`readXlsxWorkbook`, shared formulas, the
+translation, the date styles); the two dialogs were rendered at desktop and phone width in
+`tools/screenshots`. Suite: 523.

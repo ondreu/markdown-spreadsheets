@@ -909,12 +909,9 @@ export class ConditionalFormatModal extends Modal {
 }
 
 /** The shape `GridHost.setReferenceSink` expects, without importing the host into a dialog. */
-export interface ReferenceSinkLike {
-	value(): string;
-	selection(): { start: number; end: number };
-	replace(start: number, end: number, text: string): void;
-	prefix(): string;
-}
+import type { ReferenceSinkLike } from "./toolModals";
+
+export type { ReferenceSinkLike };
 
 /** `F2` or `F2:K9`, the range a rule governs. */
 export function ruleLabel(rule: ConditionalRule): string {

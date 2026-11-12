@@ -1,13 +1,18 @@
 import { colIndex } from "../model/address";
+import { isoFromSerial } from "../model/numbers";
 import { createModel, recomputeUsedRange, setRaw, type Align, type GridModel } from "../model/GridModel";
+import { shiftFormula } from "./importFormula";
 
 /**
  * CSV and XLSX import.
  *
- * Both readers produce a padded rectangle of strings; `valuesToModel` turns that into a sparse
+ * Both readers produce a padded rectangle of cells; `valuesToModel` turns that into a sparse
  * model whose first row is the markdown header. Everything here is pure and synchronous except the
  * XLSX inflate, which uses the web-standard `DecompressionStream` (Electron and Node 22 both have
  * it) — no library, no Node builtin, same reasoning as the hand-written zip writer in `zip.ts`.
+ *
+ * An XLSX is read whole: every worksheet, and the formula each cell carries. Deciding which of
+ * those a table can keep is `importFormula`'s job, not this module's.
  */
 
 export type ImportDelimiter = "," | ";" | "\t";
@@ -165,8 +170,30 @@ interface ZipDirEntry {
 	localOffset: number;
 }
 
+/** One cell of a worksheet: what it shows, and the formula Excel stored for it. */
+export interface SheetCell {
+	value: string;
+	/**
+	 * Excel's A1 formula without the `=`, when the cell has one. It is carried over verbatim: this
+	 * module reads the file, `importFormula` decides what the grid can make of it.
+	 */
+	formula?: string;
+}
+
+/** A worksheet as a padded rectangle, with the name the workbook gives it. */
+export interface ImportedSheet {
+	name: string;
+	/** Excel's own `hidden`/`veryHidden`; the import offers such a sheet last, and unchecked. */
+	hidden: boolean;
+	rows: SheetCell[][];
+}
+
+export interface ImportedWorkbook {
+	sheets: ImportedSheet[];
+}
+
 /**
- * The first worksheet of an XLSX as a padded rectangle of strings.
+ * Every worksheet of an XLSX, in workbook order.
  *
  * Shared strings, inline strings, formula string results, booleans (`TRUE`/`FALSE`) and error
  * codes come through as text. Numbers are written as JavaScript's `String(n)`, which is the
@@ -174,8 +201,11 @@ interface ZipDirEntry {
  * say otherwise, and resolving the style table is out of scope, so a date arrives as its serial
  * number (45000 is 2023-03-15). Line breaks inside a cell become spaces. Fully empty trailing rows
  * and columns are trimmed; leading ones are kept so the layout matches the sheet.
+ *
+ * Chart sheets, dialog sheets and macro sheets are skipped: they have no grid to import. A sheet
+ * whose part is missing from the package is skipped too, rather than guessed at by position.
  */
-export async function readXlsx(bytes: Uint8Array): Promise<string[][]> {
+export async function readXlsxWorkbook(bytes: Uint8Array): Promise<ImportedWorkbook> {
 	const entries = readCentralDirectory(bytes);
 	const read = async (path: string): Promise<string | null> => {
 		const entry = findEntry(entries, path);
@@ -184,21 +214,44 @@ export async function readXlsx(bytes: Uint8Array): Promise<string[][]> {
 	};
 
 	const workbook = (await read("xl/workbook.xml")) ?? "";
-	const rels = (await read("xl/_rels/workbook.xml.rels")) ?? "";
-	const targets = relationshipTargets(rels);
-
-	let sheetPath = "xl/worksheets/sheet1.xml";
-	const firstSheet = elements(workbook, "sheet")[0];
-	const rid = firstSheet === undefined ? null : attr(firstSheet.attrs, "[\\w.-]+:id");
-	const target = rid === null ? undefined : targets.find((t) => t.id === rid);
-	if (target !== undefined) sheetPath = resolvePart(target.target);
-
-	const sheet = await read(sheetPath);
-	if (sheet === null) throw new Error("The workbook has no readable worksheet.");
-
+	const targets = relationshipTargets((await read("xl/_rels/workbook.xml.rels")) ?? "");
 	const sharedTarget = targets.find((t) => t.type.endsWith("/sharedStrings"));
 	const sharedXml = (await read(sharedTarget === undefined ? "xl/sharedStrings.xml" : resolvePart(sharedTarget.target))) ?? "";
-	return sheetValues(sheet, sharedStrings(sharedXml));
+	const shared = sharedStrings(sharedXml);
+	const dates = dateStyles((await read("xl/styles.xml")) ?? "");
+
+	const sheets: ImportedSheet[] = [];
+	for (const el of elements(workbook, "sheet")) {
+		const name = attr(el.attrs, "name") ?? `Sheet${sheets.length + 1}`;
+		const state = attr(el.attrs, "state") ?? "visible";
+		const rid = attr(el.attrs, "[\\w.-]+:id");
+		const target = rid === null ? undefined : targets.find((t) => t.id === rid);
+		if (target !== undefined && !target.type.endsWith("/worksheet")) continue;
+		const path = target === undefined ? `xl/worksheets/sheet${sheets.length + 1}.xml` : resolvePart(target.target);
+		const xml = await read(path);
+		if (xml === null) continue;
+		sheets.push({ name, hidden: state !== "visible", rows: sheetCells(xml, shared, dates) });
+	}
+	if (sheets.length === 0) {
+		// A package without a usable sheet list still keeps its worksheets under a known folder.
+		const parts = entries
+			.map((entry) => entry.name)
+			.filter((name) => /^xl\/worksheets\/[^/]+\.xml$/i.test(name))
+			.sort();
+		for (const [index, path] of parts.entries()) {
+			const xml = await read(path);
+			if (xml === null) continue;
+			sheets.push({ name: `Sheet${index + 1}`, hidden: false, rows: sheetCells(xml, shared, dates) });
+		}
+	}
+	if (sheets.length === 0) throw new Error("The workbook has no readable worksheet.");
+	return { sheets };
+}
+
+/** The first worksheet of an XLSX as a padded rectangle of strings. */
+export async function readXlsx(bytes: Uint8Array): Promise<string[][]> {
+	const workbook = await readXlsxWorkbook(bytes);
+	return workbook.sheets[0].rows.map((row) => row.map((cell) => cell.value));
 }
 
 function readCentralDirectory(bytes: Uint8Array): ZipDirEntry[] {
@@ -300,8 +353,16 @@ function richText(xml: string): string {
 		.join("");
 }
 
-function sheetValues(xml: string, shared: string[]): string[][] {
-	const cells: Array<{ row: number; col: number; value: string }> = [];
+function sheetCells(xml: string, shared: string[], dates: DateStyles): SheetCell[][] {
+	interface RawCell {
+		row: number;
+		col: number;
+		value: string;
+		formula?: { text: string; kind: string; shared: string | null };
+	}
+	const raw: RawCell[] = [];
+	/** The formula a run of filled cells was copied from, by `si`; see `shiftFormula`. */
+	const masters = new Map<string, { text: string; row: number; col: number }>();
 	let rows = 0;
 	let cols = 0;
 	let rowIndex = -1;
@@ -312,17 +373,106 @@ function sheetValues(xml: string, shared: string[]): string[][] {
 		for (const cell of elements(rowEl.body ?? "", "c")) {
 			const ref = /^([A-Za-z]+)(\d+)$/.exec(attr(cell.attrs, "r") ?? "");
 			colIndexInRow = ref === null ? colIndexInRow + 1 : colIndex(ref[1]);
-			const value = cellValue(cell.attrs, cell.body ?? "", shared).replace(/\r\n|\r|\n/g, " ");
-			if (value.trim() === "") continue;
-			cells.push({ row: rowIndex, col: colIndexInRow, value });
+			const shown = cellValue(cell.attrs, cell.body ?? "", shared).replace(/\r\n|\r|\n/g, " ");
+			// A date is a number with a style; the note gets the date, the formula gets the number.
+			const value = dates.isDate(styleIndex(attr(cell.attrs, "s"))) ? isoDateText(shown) : shown;
+			const el = elements(cell.body ?? "", "f")[0];
+			let formula: RawCell["formula"];
+			if (el !== undefined) {
+				const kind = attr(el.attrs, "t") ?? "normal";
+				// An array or data-table formula is a block with rules of its own, not an A1
+				// expression; the cell keeps its value rather than pretending to carry the formula.
+				if (kind !== "array" && kind !== "dataTable") {
+					formula = { text: (el.body ?? "").trim(), kind, shared: attr(el.attrs, "si") };
+				}
+			}
+			const hasFormula = formula !== undefined && (formula.text !== "" || formula.shared !== null);
+			if (value.trim() === "" && !hasFormula) continue;
+			raw.push({ row: rowIndex, col: colIndexInRow, value, ...(formula === undefined ? {} : { formula }) });
 			rows = Math.max(rows, rowIndex + 1);
 			cols = Math.max(cols, colIndexInRow + 1);
 		}
 	}
 	if (rows * cols > MAX_IMPORT_CELLS) throw new Error("The sheet is too large to import as a table.");
-	const out: string[][] = Array.from({ length: rows }, () => new Array<string>(cols).fill(""));
-	for (const c of cells) out[c.row][c.col] = c.value;
+	// A filled column is stored once: the first cell holds the formula, the rest say only
+	// "shared, si=0". Their own reference is the master's shifted by their offset.
+	for (const cell of raw) {
+		const f = cell.formula;
+		if (f !== undefined && f.kind === "shared" && f.text !== "" && f.shared !== null) {
+			masters.set(f.shared, { text: f.text, row: cell.row, col: cell.col });
+		}
+	}
+	const out: SheetCell[][] = Array.from({ length: rows }, () => Array.from({ length: cols }, (): SheetCell => ({ value: "" })));
+	for (const cell of raw) {
+		const f = cell.formula;
+		let formula: string | undefined;
+		if (f !== undefined) {
+			if (f.kind === "shared" && f.text === "") {
+				const master = f.shared === null ? undefined : masters.get(f.shared);
+				if (master !== undefined) formula = shiftFormula(master.text, cell.row - master.row, cell.col - master.col);
+			} else if (f.text !== "") {
+				formula = f.text;
+			}
+		}
+		out[cell.row][cell.col] = formula === undefined ? { value: cell.value } : { value: cell.value, formula };
+	}
 	return out;
+}
+
+/** A cell's style index, if it has a readable one. */
+function styleIndex(style: string | null): number | undefined {
+	if (style === null) return undefined;
+	const n = Number.parseInt(style, 10);
+	return Number.isFinite(n) ? n : undefined;
+}
+
+/** The serial a date-styled cell holds, written as the date a person reads. */
+function isoDateText(raw: string): string {
+	const serial = Number(raw);
+	return Number.isFinite(serial) && serial >= 0 ? isoFromSerial(serial) : raw;
+}
+
+/**
+ * Which cell styles of a workbook show a date.
+ *
+ * `styles.xml` maps a cell's `s` attribute to an `<xf>`, whose `numFmtId` is either one of Excel's
+ * built-in formats or a custom code the workbook carries. Only the question "is this a date?" is
+ * answered here — the format itself (a German `TT.MM.JJJJ`, a currency, a percentage) is left
+ * where it is, because a markdown cell has one way to say a date and Excel has hundreds.
+ */
+interface DateStyles {
+	isDate(style: number | undefined): boolean;
+}
+
+const NO_DATES: DateStyles = { isDate: () => false };
+
+/** Excel's built-in date and time formats. 45–47 are elapsed time, which is a date to us. */
+const BUILTIN_DATE_FORMATS = new Set([14, 15, 16, 17, 18, 19, 20, 21, 22, 45, 46, 47]);
+
+function dateStyles(xml: string): DateStyles {
+	if (xml === "") return NO_DATES;
+	const custom = new Map<number, string>();
+	for (const el of elements(xml, "numFmt")) {
+		const id = Number.parseInt(attr(el.attrs, "numFmtId") ?? "", 10);
+		if (Number.isFinite(id)) custom.set(id, attr(el.attrs, "formatCode") ?? "");
+	}
+	// `cellXfs` alone: `cellStyleXfs` holds named styles, and their order is not what `s` means.
+	const xfs = elements(xml, "cellXfs")[0]?.body ?? "";
+	const flags = elements(xfs, "xf").map((xf) => {
+		const id = Number.parseInt(attr(xf.attrs, "numFmtId") ?? "0", 10);
+		return BUILTIN_DATE_FORMATS.has(id) || isDateFormatCode(custom.get(id) ?? "");
+	});
+	return { isDate: (style) => style !== undefined && flags[style] === true };
+}
+
+/** Whether a custom number format draws a date: `d/m/yyyy`, `[$-409]h:mm`, but not `0.00 "m"`. */
+function isDateFormatCode(code: string): boolean {
+	const plain = code
+		.replace(/"[^"]*"/g, "")
+		.replace(/\\./g, "")
+		.replace(/\[[^\]]*\]/g, "")
+		.toLowerCase();
+	return /[ymdhs]/.test(plain);
 }
 
 function cellValue(attrs: string, body: string, shared: string[]): string {

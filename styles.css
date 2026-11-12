@@ -314,8 +314,19 @@
 
 .mds-formula-icon {
 	display: inline-flex;
+	align-items: center;
 	flex: 0 0 auto;
+	height: auto;
+	padding: 2px;
+	border: none;
+	background: none;
+	box-shadow: none;
 	color: var(--text-faint);
+	cursor: pointer;
+}
+
+.mds-formula-icon:hover {
+	color: var(--text-muted);
 }
 
 .mds-formula-icon .svg-icon {
@@ -1019,6 +1030,222 @@
 .mds-restore-when {
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
+}
+
+/* ----------------------------------------------- importing a spreadsheet */
+
+/* The sheet list and the function list are the picker's list, with their own rows. */
+.mds-sheet-list,
+.mds-function-list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	max-height: 320px;
+	overflow-y: auto;
+	margin-bottom: 12px;
+}
+
+/*
+ * The dialog is two columns when it can be: the function list beside its arguments. A tall stack
+ * of list + arguments + preview + footer is taller than a laptop window, and the buttons end up
+ * below the fold of a modal that scrolls as a whole.
+ */
+.mds-formula-body {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-start;
+	gap: 0 14px;
+}
+
+.mds-function-list {
+	flex: 1 1 200px;
+	min-width: 0;
+	max-height: 260px;
+	margin-bottom: 8px;
+}
+
+.mds-formula-args {
+	flex: 1 1 300px;
+	min-width: 0;
+}
+
+/* One argument: its name, its field, and why it may be left empty. */
+.mds-formula-arg {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 6px 0;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.mds-formula-arg:first-of-type {
+	border-top: none;
+	padding-top: 0;
+}
+
+.mds-formula-arg-label {
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.mds-formula-arg-input {
+	width: 100%;
+}
+
+.mds-formula-arg-hint {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+
+.mds-formula-add {
+	align-self: flex-start;
+	height: auto;
+	margin-top: 6px;
+	padding: 4px 10px;
+	font-size: var(--font-ui-smaller);
+}
+
+/*
+ * A sheet is a `<label>` with a checkbox: the whole row is the target, which is what makes it
+ * usable with a thumb. Wrapping matters at a phone's width — the name, the tags and the numbers
+ * on one line do not fit in a modal on a 390 px screen.
+ */
+.mds-sheet-item {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 2px 8px;
+	flex: 0 0 auto;
+	padding: 6px 10px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	background-color: var(--background-secondary);
+	cursor: pointer;
+}
+
+.mds-sheet-item.is-disabled {
+	opacity: 0.6;
+	cursor: default;
+}
+
+.mds-sheet-check {
+	flex: 0 0 auto;
+	align-self: center;
+	margin: 0;
+}
+
+.mds-sheet-head {
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.mds-sheet-name {
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	font-weight: var(--font-semibold);
+}
+
+.mds-sheet-tag {
+	padding: 0 5px;
+	border-radius: var(--radius-s);
+	background-color: var(--background-modifier-border);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.mds-sheet-meta {
+	flex: 1 1 100%;
+	padding-left: 22px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+/* Excel's fx: the function list, then its arguments. */
+.mds-function-item {
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 2px;
+	flex: 0 0 auto;
+	width: 100%;
+	height: auto;
+	min-height: 0;
+	padding: 6px 8px;
+	border: 1px solid transparent;
+	border-radius: var(--radius-s);
+	background-color: var(--background-secondary);
+	box-shadow: none;
+	text-align: left;
+	white-space: normal;
+	cursor: pointer;
+}
+
+.mds-function-item:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+.mds-function-item.is-selected {
+	border-color: var(--interactive-accent);
+	background-color: var(--background-modifier-active-hover);
+}
+
+.mds-function-name {
+	font-family: var(--font-monospace);
+	font-weight: var(--font-semibold);
+}
+
+/* Wraps rather than clipping: a description cut at the first ellipsis says nothing at all. */
+.mds-function-summary {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.35;
+}
+
+.mds-function-empty {
+	padding: 8px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+
+.mds-function-chosen {
+	margin: 10px 0 4px;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-small);
+	color: var(--text-normal);
+}
+
+.mds-formula-search {
+	width: 100%;
+	margin-bottom: 8px;
+}
+
+.mds-formula-modal {
+	width: min(760px, 92vw);
+}
+
+.mds-formula-preview-label {
+	margin-top: 10px;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+
+.mds-formula-preview {
+	margin-top: 2px;
+	padding: 6px 8px;
+	border-radius: var(--radius-s);
+	background-color: var(--background-secondary);
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-small);
+	overflow-wrap: anywhere;
+}
+
+.mds-formula-preview.is-error {
+	color: var(--text-error);
 }
 
 /* -------------------------------------------------- restore a version */
@@ -1867,6 +2094,26 @@
 	.mds-table-launcher-btn {
 		opacity: 1;
 	}
+}
+
+/* The function dialog is pinned to the side for the same reason the rule editor is: an argument
+   is filled by clicking the cell that holds the value, so the grid must stay visible and clickable. */
+.mds-formula-floating {
+	align-items: flex-start;
+	justify-content: flex-end;
+}
+
+.mds-formula-floating,
+.mds-formula-floating .modal-bg {
+	pointer-events: none;
+	background: transparent;
+}
+
+.mds-formula-floating .modal {
+	pointer-events: auto;
+	margin: 12px;
+	max-height: calc(100% - 24px);
+	overflow: auto;
 }
 
 /* The rule editor is a panel, not a wall: a formula condition is written by pointing at cells, so

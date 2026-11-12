@@ -19,13 +19,15 @@ import { GridView, type GridViewState } from "./view/GridView";
 import { PivotView, VIEW_TYPE_PIVOT } from "./view/PivotView";
 import { TablePickerModal } from "./view/modals";
 import { GRID_COMMANDS } from "./view/gridCommands";
-import { ImportModal, InsertTableModal, TableIndexModal, type VaultTable } from "./view/toolModals";
+import { ImportModal, InsertTableModal, pickSheets, TableIndexModal, type SheetChoice, type VaultTable } from "./view/toolModals";
 import { Writer } from "./file/Writer";
 import { FormulaWatcher } from "./file/FormulaWatcher";
 import { parseTable } from "./model/parse";
 import { serializeTable } from "./model/serialize";
 import { setRaw, createModel, recomputeUsedRange, type Align } from "./model/GridModel";
-import { readTableFile } from "./feature/tableFile";
+import { readTableBook } from "./feature/tableFile";
+import { countFormulas, formulaTotal, sheetToValues, type FormulaSheet } from "./feature/importFormula";
+import { valuesToModel } from "./feature/importTable";
 import { iconName, setIconSafe } from "./view/icons";
 import { livePreviewTableButton } from "./view/livePreviewButton";
 
@@ -443,16 +445,67 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 
 	private async importAsTable(editor: Editor, file: TFile, name: string, read: () => Promise<ArrayBuffer>): Promise<void> {
 		try {
-			const values = await readTableFile(name, await read());
-			if (values.length === 0) {
+			const book = await readTableBook(name, await read());
+			const total = book.sheets.reduce((n, sheet) => n + formulaTotal(sheet.rows), 0);
+			const choice: SheetChoice | null =
+				book.sheets.length === 1 && total === 0
+					? { sheets: [0], formulas: "values", headings: false }
+					: await pickSheets(this.app, {
+							fileName: name,
+							sheets: book.sheets,
+							multiple: true,
+							formulas: true,
+							target: "Each sheet becomes its own table in the note, at the cursor.",
+						});
+			if (choice === null) return;
+			const chosen = choice.sheets.map((index) => book.sheets[index]);
+			if (chosen.every((sheet) => sheet.rows.length === 0)) {
 				new Notice("The file has no data.");
 				return;
 			}
-			const model = createModel();
-			values.forEach((row, r) => row.forEach((v, c) => setRaw(model, r, c, v.replace(/\r?\n/g, " "))));
-			model.colAlign = Array.from({ length: Math.max(...values.map((r) => r.length)) }, (): Align => null);
-			recomputeUsedRange(model);
-			await this.insertBlock(editor, file, serializeTable(model, { compact: this.sidecar.settings.tableStyle === "compact" }));
+			// A table's number is its position in the note, and formulas in other tables use it. The
+			// new tables start after every table above the cursor, so `Table3!B2` in one of them
+			// names the table a sibling sheet becomes — not some table that was already there.
+			const line = editor.getCursor().line;
+			const at = (editor.getLine(line) ?? "").trim() === "" ? line : line + 1;
+			const base = scanTables(editor.getValue()).filter((region) => region.startLine < at).length;
+			const refs = new Map<string, FormulaSheet>();
+			for (const [position, sheet] of chosen.entries()) {
+				refs.set(sheet.name.toLowerCase(), {
+					ref: `Table${base + position + 1}`,
+					rows: sheet.rows.length,
+					cols: sheet.rows[0]?.length ?? 0,
+				});
+			}
+			const compact = this.sidecar.settings.tableStyle === "compact";
+			const blocks: string[] = [];
+			let formulas = 0;
+			let convertible = 0;
+			for (const sheet of chosen) {
+				const width = sheet.rows[0]?.length ?? 0;
+				if (sheet.rows.length === 0 || width === 0) continue;
+				const context = { sheet: { rows: sheet.rows.length, cols: width }, sheets: refs };
+				const values = sheetToValues(sheet.rows, { formulas: choice.formulas, context });
+				const counts = countFormulas(sheet.rows, context);
+				formulas += counts.total;
+				convertible += counts.convertible;
+				const table = serializeTable(valuesToModel(values), { compact });
+				if (choice.headings && sheet.name.trim() !== "") blocks.push(`### ${sheet.name}\n\n${table}`);
+				else blocks.push(table);
+			}
+			if (blocks.length === 0) {
+				new Notice("The file has no data.");
+				return;
+			}
+			await this.insertBlock(editor, file, blocks.join("\n\n"));
+			const parts = [`${blocks.length} ${blocks.length === 1 ? "table" : "tables"} from ${name}`];
+			if (formulas > 0) {
+				const kept = choice.formulas === "values" ? 0 : convertible;
+				if (kept === formulas) parts.push(`${formulas} ${formulas === 1 ? "formula" : "formulas"}`);
+				else if (kept === 0) parts.push(`values only, ${formulas} formulas dropped`);
+				else parts.push(`${kept} of ${formulas} formulas carried over`);
+			}
+			new Notice(`Imported ${parts.join(" · ")}.`);
 		} catch (error) {
 			new Notice(`Could not import ${name} — ${error instanceof Error ? error.message : String(error)}`);
 		}

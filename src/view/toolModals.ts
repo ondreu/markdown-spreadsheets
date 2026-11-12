@@ -2,6 +2,10 @@ import { FuzzySuggestModal, Modal, Notice, Setting, type App, type FuzzyMatch, t
 import { colName } from "../model/address";
 import { formatCompact } from "../model/numbers";
 import type { ColumnStats, NumberFormatOptions, NumberStyle } from "../feature/transform";
+import { FORMULA_FUNCTIONS, formulaProblem, type FormulaFunctionDoc } from "../feature/formula";
+import { argumentSlots, formulaFromArgs, slotAt, type FormulaArgLayout } from "../feature/formulaInsert";
+import { countFormulas, formulaTotal, type FormulaContext, type FormulaCounts, type FormulaSheet } from "../feature/importFormula";
+import type { ImportedSheet } from "../feature/importTable";
 import type { TableRegion } from "../file/scanTables";
 import { previewOf } from "../file/scanTables";
 
@@ -12,6 +16,9 @@ export function columnOptions(headers: string[]): Array<[string, string]> {
 
 /** A modal whose body is a list of settings and whose footer is OK / Cancel. */
 abstract class FormModal extends Modal {
+	/** The OK button, so a dialog can hold it disabled while its form does not make sense. */
+	protected ctaButton: HTMLButtonElement | null = null;
+
 	protected abstract title: string;
 	protected abstract cta: string;
 	protected abstract build(el: HTMLElement): void;
@@ -22,14 +29,14 @@ abstract class FormModal extends Modal {
 		this.build(this.contentEl);
 		new Setting(this.contentEl)
 			.addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()))
-			.addButton((b) =>
-				b
-					.setButtonText(this.cta)
+			.addButton((b) => {
+				this.ctaButton = b.buttonEl;
+				b.setButtonText(this.cta)
 					.setCta()
 					.onClick(() => {
 						if (this.submit() !== false) this.close();
-					}),
-			);
+					});
+			});
 		this.contentEl.addEventListener("keydown", (evt) => {
 			if (evt.key !== "Enter" || evt.isComposing) return;
 			const tag = (evt.target as HTMLElement | null)?.tagName;
@@ -428,6 +435,237 @@ export class ImportModal extends Modal {
 	}
 }
 
+/** What a spreadsheet import should take, once the person has said so. */
+export interface SheetChoice {
+	/** Indexes into `sheets`, in the order the tables will be written. */
+	sheets: number[];
+	/** `convert` keeps every formula the grid can compute; `values` keeps what Excel calculated. */
+	formulas: "convert" | "values";
+	/** Put the sheet's name above its table, so an export names the sheet the same way again. */
+	headings: boolean;
+}
+
+export interface SheetImportOptions {
+	fileName: string;
+	sheets: ImportedSheet[];
+	/** Several sheets at once only makes sense when each becomes its own table. */
+	multiple: boolean;
+	/** Whether the formula choice applies to this target at all — a merge reads values only. */
+	formulas: boolean;
+	/** What will happen to the chosen sheets, in one sentence. */
+	target: string;
+}
+
+/**
+ * Which worksheets to take, and what to do with their formulas.
+ *
+ * A workbook is often a dozen tabs, of which one is meant. Reading only the first and saying
+ * nothing — which is what the import used to do — silently turns "import the file" into "import
+ * a twelfth of it". The formula question is asked here for the same reason: the grid can compute
+ * `SUM`, `IF` and the conditional aggregates, and cannot compute `VLOOKUP`, so a formula either
+ * travels as a formula or stays the number Excel last wrote in the cell. Saying which is the
+ * difference between a table that keeps itself current and one that quietly does not.
+ */
+export class SheetImportModal extends Modal {
+	private readonly picked = new Set<number>();
+	private formulas: "convert" | "values" = "convert";
+	private headings = true;
+	private readonly boxes: Array<{ index: number; input: HTMLInputElement }> = [];
+	private summaryEl: HTMLElement | null = null;
+	private formulaSetting: Setting | null = null;
+	private importButton: HTMLButtonElement | null = null;
+	private submitted = false;
+
+	constructor(
+		app: App,
+		private readonly opts: SheetImportOptions & { onSubmit(choice: SheetChoice): void; onCancel?(): void },
+	) {
+		super(app);
+		// Everything with data, except sheets Excel hides: those are opened deliberately.
+		for (const [index, sheet] of opts.sheets.entries()) {
+			if (sheet.rows.length > 0 && !sheet.hidden) this.picked.add(index);
+		}
+		if (this.picked.size === 0) {
+			for (const [index, sheet] of opts.sheets.entries()) {
+				if (sheet.rows.length > 0) this.picked.add(index);
+			}
+		}
+	}
+
+	override onOpen(): void {
+		this.titleEl.setText("Import a spreadsheet");
+		const count = this.opts.sheets.length;
+		this.contentEl.createEl("p", {
+			cls: "mds-modal-note",
+			text: `${this.opts.fileName}: ${count === 1 ? "one sheet" : `${count} sheets`}. ${this.opts.target}`,
+		});
+		this.buildList();
+		if (this.opts.formulas && this.opts.sheets.some((sheet) => formulaTotal(sheet.rows) > 0)) this.buildFormulaChoice();
+		if (this.opts.multiple) this.buildHeadings();
+		this.summaryEl = this.contentEl.createEl("p", { cls: "mds-modal-summary" });
+		new Setting(this.contentEl)
+			.addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()))
+			.addButton((b) => {
+				this.importButton = b.buttonEl;
+				b.setButtonText("Import")
+					.setCta()
+					.onClick(() => this.submit());
+			});
+		this.refresh();
+	}
+
+	private buildList(): void {
+		const list = this.contentEl.createDiv({ cls: "mds-sheet-list" });
+		for (const [index, sheet] of this.opts.sheets.entries()) {
+			const width = sheet.rows[0]?.length ?? 0;
+			const empty = sheet.rows.length === 0 || width === 0;
+			const row = list.createEl("label", { cls: "mds-sheet-item" });
+			row.toggleClass("is-disabled", empty);
+			const input = row.createEl("input", {
+				cls: "mds-sheet-check",
+				attr: { type: this.opts.multiple ? "checkbox" : "radio", name: "mds-import-sheet", value: String(index) },
+			});
+			input.checked = this.picked.has(index);
+			input.disabled = empty;
+			input.addEventListener("change", () => {
+				if (!this.opts.multiple) this.picked.clear();
+				if (input.checked) this.picked.add(index);
+				else this.picked.delete(index);
+				this.refresh();
+			});
+			const head = row.createDiv({ cls: "mds-sheet-head" });
+			head.createSpan({ cls: "mds-sheet-name", text: sheet.name });
+			if (sheet.hidden) head.createSpan({ cls: "mds-sheet-tag", text: "hidden" });
+			if (empty) head.createSpan({ cls: "mds-sheet-tag", text: "empty" });
+			const parts = empty ? ["nothing to import"] : [`${sheet.rows.length} rows`, `${width} columns`];
+			const formulas = formulaTotal(sheet.rows);
+			if (formulas > 0) parts.push(`${formulas} ${formulas === 1 ? "formula" : "formulas"}`);
+			row.createDiv({ cls: "mds-sheet-meta", text: parts.join(" · ") });
+			this.boxes.push({ index, input });
+		}
+	}
+
+	private buildFormulaChoice(): void {
+		this.formulaSetting = new Setting(this.contentEl)
+			.setName("Formulas")
+			.addDropdown((d) => {
+				d.addOption("convert", "Convert what the grid can compute");
+				d.addOption("values", "Values only — drop every formula");
+				d.setValue(this.formulas);
+				d.onChange((value) => {
+					this.formulas = value === "values" ? "values" : "convert";
+					this.refresh();
+				});
+			});
+	}
+
+	private buildHeadings(): void {
+		new Setting(this.contentEl)
+			.setName("Title each table with its sheet name")
+			.setDesc("The heading above a table is the name it exports under, so the sheet names survive the round trip.")
+			.addToggle((t) =>
+				t.setValue(this.headings).onChange((value) => {
+					this.headings = value;
+					this.refresh();
+				}),
+			);
+	}
+
+	/** Sheet names to the `TableN` each will be, by position — enough to judge a formula. */
+	private sheetRefs(selected: number[]): Map<string, FormulaSheet> {
+		const refs = new Map<string, FormulaSheet>();
+		for (const [position, index] of selected.entries()) {
+			const sheet = this.opts.sheets[index];
+			refs.set(sheet.name.toLowerCase(), {
+				ref: `Table${position + 1}`,
+				rows: sheet.rows.length,
+				cols: sheet.rows[0]?.length ?? 0,
+			});
+		}
+		return refs;
+	}
+
+	private refresh(): void {
+		const selected = Array.from(this.picked).sort((a, b) => a - b);
+		const sheets = selected.map((index) => this.opts.sheets[index]);
+		const refs = this.sheetRefs(selected);
+		let rows = 0;
+		let total = 0;
+		let convertible = 0;
+		for (const sheet of sheets) {
+			const context: FormulaContext = { sheet: { rows: sheet.rows.length, cols: sheet.rows[0]?.length ?? 0 }, sheets: refs };
+			const counts = countFormulas(sheet.rows, context);
+			rows += sheet.rows.length;
+			total += counts.total;
+			convertible += counts.convertible;
+		}
+		if (this.formulaSetting !== null) {
+			this.formulaSetting.setDesc(`${convertible} of ${total} can be carried over; the rest keep the value Excel calculated.`);
+		}
+		if (this.summaryEl !== null) {
+			const parts = [`${sheets.length} ${sheets.length === 1 ? "sheet" : "sheets"}`, `${rows} ${rows === 1 ? "row" : "rows"}`];
+			if (total > 0) {
+				parts.push(
+					this.formulas === "convert"
+						? `${total} ${total === 1 ? "formula" : "formulas"} (${convertible} convertible)`
+						: `${total} ${total === 1 ? "formula" : "formulas"} dropped`,
+				);
+			}
+			this.summaryEl.setText(`${parts.join(" · ")}.`);
+		}
+		if (this.importButton !== null) {
+			if (sheets.length === 0) this.importButton.setAttribute("disabled", "true");
+			else this.importButton.removeAttribute("disabled");
+		}
+		for (const box of this.boxes) {
+			if (!box.input.disabled) box.input.checked = this.picked.has(box.index);
+		}
+	}
+
+	private submit(): void {
+		const selected = Array.from(this.picked).sort((a, b) => a - b);
+		if (selected.length === 0) return;
+		this.submitted = true;
+		this.close();
+		this.opts.onSubmit({ sheets: selected, formulas: this.formulas, headings: this.opts.multiple && this.headings });
+	}
+
+	override onClose(): void {
+		this.contentEl.empty();
+		if (!this.submitted) this.opts.onCancel?.();
+	}
+}
+
+/** The dialog as a promise: `null` when it was dismissed. */
+export function pickSheets(app: App, options: SheetImportOptions): Promise<SheetChoice | null> {
+	return new Promise((resolve) => {
+		new SheetImportModal(app, {
+			...options,
+			onSubmit: (choice) => resolve(choice),
+			onCancel: () => resolve(null),
+		}).open();
+	});
+}
+
+/**
+ * What one imported sheet came to, in the line a Notice shows.
+ *
+ * The formula half is the part that matters afterwards: a table whose formulas were silently left
+ * as values no longer follows its own numbers, and the person who imported it should hear that at
+ * the moment it happens rather than the first time a total disagrees.
+ */
+export function describeImport(name: string, sheet: ImportedSheet, choice: SheetChoice, counts: FormulaCounts): string {
+	const width = sheet.rows[0]?.length ?? 0;
+	const parts = [`${sheet.rows.length} rows × ${width} columns from ${name}`];
+	if (counts.total > 0) {
+		const kept = choice.formulas === "values" ? 0 : counts.convertible;
+		if (kept === 0) parts.push(`${counts.total} ${counts.total === 1 ? "formula" : "formulas"} left as values`);
+		else if (kept === counts.total) parts.push(`${kept} ${kept === 1 ? "formula" : "formulas"} carried over`);
+		else parts.push(`${kept} of ${counts.total} formulas carried over, the rest kept their values`);
+	}
+	return `${parts.join(" · ")}.`;
+}
+
 export interface VaultTable {
 	file: TFile;
 	region: TableRegion;
@@ -594,5 +832,216 @@ export class MergeModal extends Modal {
 		if (summary.columns > 0) parts.push(`${summary.columns} new ${summary.columns === 1 ? "column" : "columns"}`);
 		if (summary.duplicates > 0) parts.push(`${summary.duplicates} repeated key ${summary.duplicates === 1 ? "row" : "rows"} left as they are`);
 		this.summaryEl.setText(`${parts.join(" · ")}.`);
+	}
+}
+
+/**
+ * What a field must offer to receive a reference picked in the grid — the same shape `GridHost`
+ * speaks. Declared here rather than imported so the dialog does not depend on the grid.
+ */
+export interface ReferenceSinkLike {
+	value(): string;
+	selection(): { start: number; end: number };
+	replace(start: number, end: number, text: string): void;
+	prefix(): string;
+}
+
+/**
+ * Excel's *Insert Function*: pick a function, fill in its arguments, get the formula.
+ *
+ * The function list is the same one the cell editor suggests, so nothing is offered here that the
+ * grid cannot evaluate; the arguments are the signature read literally, and the preview is checked
+ * with the real parser before *Insert* is allowed to write anything. What it deliberately does not
+ * do is point at cells — a reference is typed as `B2:B10`, and the formula bar is where a clicked
+ * range lands.
+ */
+export class FormulaHelperModal extends FormModal {
+	protected title = "Insert a formula";
+	protected cta = "Insert";
+	private listEl: HTMLElement | null = null;
+	private argsEl: HTMLElement | null = null;
+	private previewEl: HTMLElement | null = null;
+	private search = "";
+	private chosen: FormulaFunctionDoc | null = null;
+	private layout: FormulaArgLayout | null = null;
+	private args: string[] = [];
+
+	constructor(
+		app: App,
+		private readonly opts: { cellLabel: string; onInsert(expr: string): void; attachSink(sink: ReferenceSinkLike | null): void },
+	) {
+		super(app);
+	}
+
+	protected build(el: HTMLElement): void {
+		// The list needs room for a sentence beside it; the default 640 px modal leaves it truncated.
+		this.modalEl.addClass("mds-formula-modal");
+		// A panel, not a wall: the grid has to stay clickable, because a reference is picked by
+		// clicking the cell it names.
+		this.containerEl.addClass("mds-formula-floating");
+		el.createEl("p", {
+			cls: "mds-modal-note",
+			text: `Built from a function and its arguments, then written into ${this.opts.cellLabel}. A range is typed as B2:B10, text in quotes.`,
+		});
+		const search = el.createEl("input", {
+			cls: "mds-formula-search",
+			attr: { type: "text", placeholder: "Search functions — sum, if, countif…", spellcheck: "false" },
+		});
+		search.addEventListener("input", () => {
+			this.search = search.value;
+			this.renderList();
+		});
+		search.focus();
+		// Two columns when the dialog is wide enough — the list beside the arguments, as Excel's
+		// own function dialog has them — and one column on a phone, where the pair would not fit.
+		const body = el.createDiv({ cls: "mds-formula-body" });
+		this.listEl = body.createDiv({ cls: "mds-function-list" });
+		this.argsEl = body.createDiv({ cls: "mds-formula-args" });
+		this.renderList();
+		this.renderArgs();
+	}
+
+	protected submit(): boolean | void {
+		const expr = this.expression();
+		if (expr === null) return false;
+		this.opts.onInsert(expr);
+	}
+
+	private expression(): string | null {
+		if (this.chosen === null) return null;
+		const expr = formulaFromArgs(this.chosen.name, this.args);
+		return formulaProblem(expr) === null ? expr : null;
+	}
+
+	private renderList(): void {
+		const list = this.listEl;
+		if (list === null) return;
+		list.empty();
+		const query = this.search.trim().toLowerCase();
+		const hits = FORMULA_FUNCTIONS.filter(
+			(doc) => query === "" || doc.name.toLowerCase().includes(query) || doc.summary.toLowerCase().includes(query),
+		);
+		if (hits.length === 0) {
+			list.createDiv({ cls: "mds-function-empty", text: "No function matches that." });
+			return;
+		}
+		for (const doc of hits) {
+			const item = list.createEl("button", { cls: "mds-function-item", attr: { type: "button" } });
+			item.toggleClass("is-selected", doc.name === this.chosen?.name);
+			// Name and one line about it: the signature is repeated under the arguments once the
+			// function is picked, and printing it here only truncates the sentence beside it.
+			item.createDiv({ cls: "mds-function-name", text: doc.name });
+			item.createDiv({ cls: "mds-function-summary", text: doc.summary });
+			item.addEventListener("click", () => this.pick(doc));
+		}
+		// A long list opens at the top; the chosen function may be well below it.
+		list.querySelector<HTMLElement>(".mds-function-item.is-selected")?.scrollIntoView({ block: "nearest" });
+	}
+
+	private pick(doc: FormulaFunctionDoc): void {
+		this.chosen = doc;
+		this.layout = argumentSlots(doc);
+		// One repetition of the variadic group is shown from the start: `COUNTIFS` takes a pair,
+		// and a form that begins with too few fields only teaches that the formula is not ready.
+		this.args = this.layout.slots.map(() => "");
+		if (this.layout.variadic) this.args.push(...Array<string>(this.layout.unit).fill(""));
+		this.renderList();
+		this.renderArgs();
+		// The first thing to fill in is the first argument, so typing can start at once.
+		this.argsEl?.querySelector<HTMLInputElement>("input")?.focus();
+	}
+
+	private renderArgs(): void {
+		const el = this.argsEl;
+		if (el === null) return;
+		el.empty();
+		this.previewEl = null;
+		const layout = this.layout;
+		if (this.chosen === null || layout === null) {
+			el.createEl("p", { cls: "mds-modal-note", text: "Pick a function above to fill in its arguments." });
+			return;
+		}
+		el.createEl("p", { cls: "mds-function-chosen", text: `${this.chosen.name}(${this.chosen.signature})` });
+		const seen = new Map<string, number>();
+		this.args.forEach((value, index) => {
+			// The repeating argument of a variadic function is named once; after that it is counted,
+			// so `SUM` reads number, number 2, number 3, and `COUNTIFS` keeps its range/condition
+			// pairs together.
+			const slot = slotAt(layout, index);
+			const occurrence = (seen.get(slot.label) ?? 0) + 1;
+			seen.set(slot.label, occurrence);
+			// A `<label>` around the field, so the whole row is the target on a phone and the
+			// argument's name is announced with its input.
+			const row = el.createEl("label", { cls: "mds-formula-arg" });
+			row.createSpan({ cls: "mds-formula-arg-label", text: occurrence === 1 ? slot.label : `${slot.label} ${occurrence}` });
+			const input = row.createEl("input", { cls: "mds-formula-arg-input", attr: { type: "text", spellcheck: "false" } });
+			input.value = value;
+			input.addEventListener("input", () => {
+				this.args[index] = input.value;
+				this.refreshPreview();
+			});
+			input.addEventListener("focus", () => this.opts.attachSink(this.sinkFor(input)));
+			input.addEventListener("blur", () => this.opts.attachSink(null));
+			if (slot.optional) row.createDiv({ cls: "mds-formula-arg-hint", text: "optional — leave it empty to skip it" });
+		});
+		if (layout.variadic) {
+			const add = el.createEl("button", { cls: "mds-formula-add", attr: { type: "button" } });
+			add.setText(layout.unit === 1 ? "Add argument" : "Add a pair");
+			add.addEventListener("click", () => {
+				this.args.push(...Array<string>(layout.unit).fill(""));
+				this.renderArgs();
+			});
+		}
+		const previewWrap = el.createDiv({ cls: "mds-formula-preview-wrap" });
+		previewWrap.createDiv({ cls: "mds-formula-preview-label", text: "Formula" });
+		this.previewEl = previewWrap.createEl("p", { cls: "mds-formula-preview" });
+		this.refreshPreview();
+	}
+
+	/**
+	 * The sink for one argument: what a click in the grid writes into.
+	 *
+	 * The host points at cells only while the text it is given starts with `=`, and an argument is
+	 * not a whole formula — so the sink reports the `=` in front of the field's value and keeps its
+	 * selection in the same coordinates. A click then lands `B2` or `B2:B9` at the caret, which is
+	 * Excel's own behaviour for an argument box.
+	 */
+	private sinkFor(input: HTMLInputElement): ReferenceSinkLike {
+		return {
+			value: () => `=${input.value}`,
+			selection: () => {
+				const start = input.selectionStart ?? input.value.length;
+				const end = input.selectionEnd ?? start;
+				return { start: start + 1, end: end + 1 };
+			},
+			replace: (start, end, text) => {
+				const from = Math.max(0, start - 1);
+				const to = Math.max(0, end - 1);
+				input.value = input.value.slice(0, from) + text + input.value.slice(to);
+				const caret = from + text.length;
+				input.setSelectionRange(caret, caret);
+				input.dispatchEvent(new Event("input"));
+				input.focus();
+			},
+			prefix: () => "",
+		};
+	}
+
+	override onClose(): void {
+		this.opts.attachSink(null);
+		this.contentEl.empty();
+	}
+
+	private refreshPreview(): void {
+		const preview = this.previewEl;
+		if (preview === null || this.chosen === null) return;
+		const shown = formulaFromArgs(this.chosen.name, this.args);
+		const problem = formulaProblem(shown);
+		preview.setText(problem === null ? `=${shown}` : `=${shown} — ${problem}`);
+		preview.toggleClass("is-error", problem !== null);
+		if (this.ctaButton !== null) {
+			if (problem === null) this.ctaButton.removeAttribute("disabled");
+			else this.ctaButton.setAttribute("disabled", "true");
+		}
 	}
 }

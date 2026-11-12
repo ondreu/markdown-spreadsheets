@@ -22,8 +22,10 @@ import { defaultLayout, type TableLayout } from "../store/Sidecar";
 import { aggregate, applyFunction, formatResult, summaryLine, type CalcFunction } from "../feature/QuickCalc";
 import { csvBytes, plainText, type CsvOptions } from "../feature/exportCsv";
 import { toHtmlTable, toJson } from "../feature/exportExtra";
-import { closeUnbalanced, computeColumn, recalculate, totalsRow } from "../feature/formula";
-import { readTableFile } from "../feature/tableFile";
+import { closeUnbalanced, computeColumn, flattenFormulas, hasDateMark, recalculate, setDateMark, totalsRow } from "../feature/formula";
+import { readTableBook, type TableBook } from "../feature/tableFile";
+import { countFormulas, formulaTotal, sheetToValues } from "../feature/importFormula";
+import type { ImportedSheet } from "../feature/importTable";
 import { applyMerge, planMerge } from "../feature/merge";
 import { VIEW_TYPE_PIVOT } from "./PivotView";
 import { recalculateWorkbook } from "../feature/workbook";
@@ -53,7 +55,22 @@ import { GridHost, type ReferenceSink, type Selection } from "./GridHost";
 import { formatNow } from "./GridHost";
 import { CellSuggest } from "./CellSuggest";
 import { iconName, setIconSafe, type IconKey } from "./icons";
-import { ColumnsModal, ColumnStatsModal, ComputeColumnModal, GoToModal, ImportModal, MergeModal, MultiSortModal, NumberFormatModal, TextPromptModal, TotalsModal } from "./toolModals";
+import {
+	ColumnsModal,
+	ColumnStatsModal,
+	ComputeColumnModal,
+	FormulaHelperModal,
+	GoToModal,
+	ImportModal,
+	MergeModal,
+	MultiSortModal,
+	NumberFormatModal,
+	describeImport,
+	pickSheets,
+	TextPromptModal,
+	TotalsModal,
+	type SheetChoice,
+} from "./toolModals";
 import { Menu } from "obsidian";
 import { colIndex } from "../model/address";
 import { Ribbon, type RibbonAction, type RibbonGroup, type RibbonItem, type RibbonTab } from "./Ribbon";
@@ -759,7 +776,10 @@ export class GridView extends ItemView {
 	private buildFormulaBar(): void {
 		const bar = this.contentEl.createDiv({ cls: "mds-formulabar" });
 		this.formulaAddressEl = bar.createDiv({ cls: "mds-formula-address", text: "A1" });
-		setIconSafe(bar.createDiv({ cls: "mds-formula-icon", attr: { "aria-hidden": "true" } }), "formula");
+		// Excel's fx sits at the head of the bar; this one opens the same helper the ribbon has.
+		const fx = bar.createEl("button", { cls: "mds-formula-icon", attr: { type: "button", "aria-label": "Insert a formula" } });
+		setIconSafe(fx, "formula");
+		fx.addEventListener("click", () => this.openFormulaHelper());
 		this.formulaInputEl = bar.createEl("input", {
 			cls: "mds-formula-input",
 			attr: { type: "text", placeholder: "Cell contents as Markdown, or a formula starting with =", spellcheck: "false" },
@@ -1547,17 +1567,27 @@ export class GridView extends ItemView {
 					{
 						label: "Formulas",
 						items: [
+							button("insert-formula", "Insert formula", "formula", () => this.openFormulaHelper(), {
+								tooltip: "pick a function, fill in its arguments, and write the formula into the cell",
+							}),
 							button("totals-row", "Totals row", "totals", () => this.openTotals(), {
 								tooltip: "SUM under every numeric column, kept up to date by the grid",
 							}),
 							button("compute-column", "Compute column", "compute", () => this.openComputeColumn(), {
 								tooltip: "fills a column from an expression such as [Qty] * [Price], once",
 							}),
+							button("flatten", "Flatten", "flatten", () => this.flattenTable(), {
+								tooltip: "replaces every formula in this table with the value it shows — one undo away",
+							}),
 						],
 					},
 					{
 						label: "Numbers",
 						items: [
+							button("date-format", "Show as date", "date", () => this.toggleDateMark(), {
+								tooltip: "writes a formula's result as a date instead of a serial number",
+								active: host !== null && hasDateMark(getRaw(host.getModel(), active.row, active.col)),
+							}),
 							button("number-format", "Format numbers", "numberFormat", () => this.openNumberFormat(), {
 								tooltip: "rewrites the selected numbers as currency, percent or with fixed decimals",
 							}),
@@ -2083,6 +2113,46 @@ export class GridView extends ItemView {
 		}).open();
 	}
 
+	/**
+	 * The date marker over the selection: `2026-03-15 %%date%% %%=A2+30%%`.
+	 *
+	 * It changes what the cell *shows*, never what it holds — the value stays the serial the
+	 * formula computed, so the arithmetic downstream is untouched. Marking a cell without a
+	 * formula does nothing visible, which is why the notice talks about results.
+	 */
+	private toggleDateMark(): void {
+		const host = this.host;
+		if (!host) return;
+		const model = host.getModel();
+		const rect = host.getSelection().rect;
+		let filled = 0;
+		let marked = 0;
+		for (let row = rect.r1; row <= rect.r2; row++) {
+			for (let col = rect.c1; col <= rect.c2; col++) {
+				const raw = getRaw(model, row, col);
+				if (raw.trim() === "") continue;
+				filled++;
+				if (hasDateMark(raw)) marked++;
+			}
+		}
+		if (filled === 0) {
+			new Notice("Select the cells to show as dates first.");
+			return;
+		}
+		const wanted = marked < filled;
+		host.mutate("Date format", () => {
+			for (let row = rect.r1; row <= rect.r2; row++) {
+				for (let col = rect.c1; col <= rect.c2; col++) {
+					const raw = getRaw(model, row, col);
+					if (raw.trim() === "") continue;
+					const next = setDateMark(raw, wanted);
+					if (next !== raw) setRaw(model, row, col, next);
+				}
+			}
+		});
+		new Notice(wanted ? "Formula results in the selection show as dates." : "Formula results in the selection show as numbers.");
+	}
+
 	private openNumberFormat(): void {
 		const host = this.host;
 		if (!host) return;
@@ -2098,6 +2168,23 @@ export class GridView extends ItemView {
 				new Notice(n === 0 ? "No numbers in the selection to format." : `Formatted ${n} ${n === 1 ? "cell" : "cells"}.`);
 			},
 		}).open();
+	}
+
+	/**
+	 * Turns the table's formulas into the values they print.
+	 *
+	 * The whole table is flattened, not the selection: the point is a note that no longer needs a
+	 * recalculation, and half a table of formulas is the state this button exists to leave behind.
+	 * A rule or a date marker in the cell survives — only the expression goes.
+	 */
+	private flattenTable(): void {
+		const host = this.host;
+		if (!host) return;
+		let n = 0;
+		host.mutate("Flatten formulas", () => {
+			n = flattenFormulas(host.getModel());
+		});
+		new Notice(n === 0 ? "This table has no formulas." : `Flattened ${n} ${n === 1 ? "formula" : "formulas"} to values.`);
 	}
 
 	private openColumnStats(): void {
@@ -2144,17 +2231,24 @@ export class GridView extends ItemView {
 	private async mergeValues(name: string, read: () => Promise<ArrayBuffer>): Promise<void> {
 		const host = this.host;
 		if (!host) return;
-		let values: string[][];
+		let book: TableBook;
 		try {
-			values = await readTableFile(name, await read());
+			book = await readTableBook(name, await read());
 		} catch (error) {
 			new Notice(`Could not read ${name} — ${error instanceof Error ? error.message : String(error)}`);
 			return;
 		}
-		if (values.length < 2) {
+		const sheet = await this.pickOneSheet(book, name, "It is merged into this table by a key column; only values are read.");
+		if (sheet === null) return;
+		const width = sheet.rows[0]?.length ?? 0;
+		if (sheet.rows.length < 2 || width === 0) {
 			new Notice(`${name} needs a header row and at least one row of data.`);
 			return;
 		}
+		const values = sheetToValues(sheet.rows, {
+			formulas: "values",
+			context: { sheet: { rows: sheet.rows.length, cols: width }, sheets: new Map() },
+		});
 		const model = host.getModel();
 		const headers = [];
 		for (let c = 0; c < Math.max(model.usedRange.cols, 1); c++) {
@@ -2192,6 +2286,24 @@ export class GridView extends ItemView {
 		}).open();
 	}
 
+	/** Excel's fx, in the ribbon: build a formula from a function and its arguments. */
+	private openFormulaHelper(): void {
+		const host = this.host;
+		if (!host) return;
+		new FormulaHelperModal(this.app, {
+			cellLabel: host.activeLabel(),
+			// A click in the grid lands its address in the argument that has focus, as Excel's
+			// function dialog does — the same sink the formula bar and the rule editor use.
+			attachSink: (sink) => host.setReferenceSink(sink),
+			onInsert: (expr) => {
+				const { row, col } = host.getSelection().active;
+				host.setValueAt(row, col, `=${expr}`);
+				this.syncFormulaBar();
+				host.focus();
+			},
+		}).open();
+	}
+
 	/** Import into the grid at the active cell. */
 	private openImport(): void {
 		const host = this.host;
@@ -2209,16 +2321,50 @@ export class GridView extends ItemView {
 		const host = this.host;
 		if (!host) return;
 		try {
-			const values = await readTableFile(name, await read());
-			if (values.length === 0) {
-				new Notice("The file has no data.");
+			const book = await readTableBook(name, await read());
+			const choice = await this.chooseSheet(book, name, {
+				multiple: false,
+				formulas: true,
+				target: `It is written into the grid starting at ${host.activeLabel()}.`,
+			});
+			if (choice === null) return;
+			const sheet = book.sheets[choice.sheets[0]];
+			const width = sheet.rows[0]?.length ?? 0;
+			if (sheet.rows.length === 0 || width === 0) {
+				new Notice(`The sheet “${sheet.name}” has no data.`);
 				return;
 			}
+			// A paste moves the rectangle, so its relative references move with it; a reference into
+			// another sheet cannot come along, because that sheet is not in this note.
+			const context = {
+				sheet: { rows: sheet.rows.length, cols: width },
+				sheets: new Map(),
+				offset: host.getSelection().active,
+			};
+			const values = sheetToValues(sheet.rows, { formulas: choice.formulas, context });
+			const counts = countFormulas(sheet.rows, context);
 			host.pasteValues(values, "Import");
-			new Notice(`Imported ${values.length} rows from ${name}.`);
+			new Notice(`Imported ${describeImport(name, sheet, choice, counts)}`);
 		} catch (error) {
 			new Notice(`Could not import ${name} — ${error instanceof Error ? error.message : String(error)}`);
 		}
+	}
+
+	/**
+	 * The sheet dialog, skipped when there is nothing to ask: one sheet and no formulas is the
+	 * file as it has always been read.
+	 */
+	private chooseSheet(book: TableBook, name: string, options: { multiple: boolean; formulas: boolean; target: string }): Promise<SheetChoice | null> {
+		if (book.sheets.length === 1 && formulaTotal(book.sheets[0].rows) === 0) {
+			return Promise.resolve({ sheets: [0], formulas: "values", headings: false });
+		}
+		return pickSheets(this.app, { fileName: name, sheets: book.sheets, ...options });
+	}
+
+	/** One sheet out of a file, asking which when the workbook has more. */
+	private async pickOneSheet(book: TableBook, name: string, target: string): Promise<ImportedSheet | null> {
+		const choice = await this.chooseSheet(book, name, { multiple: false, formulas: false, target });
+		return choice === null ? null : book.sheets[choice.sheets[0]];
 	}
 
 	/**

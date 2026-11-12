@@ -755,3 +755,127 @@ into a field with no suggestions and no way to click a cell.
   *matches the formula* condition is chosen, the field is a formula box and a click is a reference.
 - **What it does not do.** No editing of an existing rule in place (change the value and write a new
   one), no priority list between rules, and no per-rule enable/disable.
+
+## 41. A workbook is imported a sheet at a time
+
+**Design:** the import read the first worksheet and said nothing about the rest. A workbook is
+often a dozen tabs of which one is meant, and "import the file" turning into "import a twelfth of
+it" is the kind of quiet wrong answer a note never recovers from. The same dialog has to ask about
+formulas, because that is the other thing the reader knows and the note cannot guess.
+
+**Built:**
+
+- `readXlsxWorkbook` reads every worksheet — name, `hidden`/`veryHidden`, and the formula stored in
+  each cell — and `readXlsx` is now its first-sheet wrapper. Chart, dialog and macro sheets are
+  skipped: they have no grid.
+- `SheetImportModal` lists the sheets with a checkbox each, their size and their formula count. A
+  hidden sheet starts unchecked, an empty one cannot be picked at all, and the footer says what
+  the current choice comes to: sheets, rows, formulas, and how many of those the grid can keep.
+- The dialog appears only when there is something to decide: one sheet with no formulas is the
+  file as it has always been read.
+- Importing into the note writes one table per sheet, in workbook order, with `### Name` above each
+  (the heading is what `sheetLabel` exports as the sheet name, so the names survive a round trip).
+  The `TableN` of each new table is computed from the tables above the cursor, so a cross-sheet
+  formula in one of them names the right sibling.
+- Importing into the grid, or merging, takes one sheet: those write into an existing table.
+
+**What it does not do.** No column widths, styles, colours, merged cells or hidden rows; a sheet
+whose part is missing from the package is skipped rather than guessed at.
+
+## 42. A formula comes over only when the grid can evaluate it
+
+**Design:** a formula the grid cannot compute is worse than a number. It reads `#NAME?` or
+`#REF!` in the note while the note claims to hold what Excel had, and nothing on screen says which
+part was lost. So the importer translates what it can prove and keeps Excel's cached value for the
+rest, and the dialog says how many of each before anything is written.
+
+**Built:**
+
+- `src/feature/importFormula.ts` translates one formula: A1 references and ranges, Excel's
+  operators, `;` separators, and the functions `formula.ts` actually has (`isGridFunction`). The
+  result is checked with the real parser (`formulaProblem`) before it is accepted.
+- A reference outside the imported rectangle is refused, because the table has no cell there.
+- `'Q1 data'!B2` becomes `Table2!B2` when that sheet is part of the same import; otherwise the
+  value stays. A paste at a cell other than A1 shifts the relative references with it.
+- Excel stores a filled column once and the rest as "shared, `si=0`"; those followers are expanded
+  by shifting the master's references, or a whole column of formulas would arrive as one formula.
+- `values` mode drops every formula and keeps only values. The cell is written as
+  `value %%=expr%%`, so the note reads correctly before the first recalculation and stays readable
+  where the plugin is not installed.
+
+**What it does not do.** Array and data-table formulas keep their value. Structured references
+(`Table1[Qty]`), percent literals, error constants and external links are refused. `TODAY`/`NOW`
+do not exist yet.
+
+## 43. Lookups are XLOOKUP, INDEX and MATCH — VLOOKUP is translated on the way in
+
+**Design:** lookup is the one thing an imported sheet needs that the grid did not have, and
+VLOOKUP is the wrong primitive to add: it counts columns by position, so the first inserted column
+silently changes the answer. XLOOKUP says what it means (a key range and a result range), INDEX
+and MATCH cover the cases that want a position. Adding VLOOKUP as a function would also mean two
+lookup semantics in one evaluator, which is how they drift apart.
+
+**Built:**
+
+- `XLOOKUP(lookup, keys, results, [ifNotFound])`, `INDEX(range, row, [column])`,
+  `MATCH(lookup, range, [0])`, and `#N/A` as a real error code — the honest answer to "not found",
+  and one `IFERROR` already knows how to catch. Comparison is Excel's: case-insensitive text,
+  numbers with numbers, a blank matching zero.
+- `MATCH` is exact only. An approximate match needs a sorted range and Excel's tie-break, and a
+  note that says a value is "near this one" is a wrong answer nobody notices.
+- The import rewrites `VLOOKUP(k, block, n, FALSE)` to `XLOOKUP(k, block col 1, block col n)` while
+  the block's columns are still known; `HLOOKUP` the same with rows. Only an exact lookup with a
+  literal column number is translated.
+- Export writes `_xlfn.XLOOKUP`, which is how Excel stores a function newer than its file format.
+
+**What it does not do.** No approximate match, no wildcard mode, no array results (`XLOOKUP`
+returns one cell), no `INDEX` with a row or column of 0.
+
+## 44. A date is text in the note and a number in a formula
+
+**Design:** Excel has no date type — a date is a serial number with a style. A note that stores
+`46096` gives a person nothing, and a note that stores only `2026-03-15` makes `B2-A2` meaningless.
+So the cell holds a date a person reads, and the formula reads it back as the serial it was.
+
+**Built:**
+
+- `xl/styles.xml` decides which cell styles are dates: the built-in formats (14–22, 45–47) and any
+  custom format whose code still has a `y`, `m`, `d`, `h` or `s` once quoted literals and bracket
+  sections are removed. A date-styled cell is read as `YYYY-MM-DD`, with ` HH:MM` when the serial
+  has a time of day.
+- `formula.ts` classifies a cell whose text is an ISO date as a number — `serialFromIsoDate` — so
+  subtraction gives days and comparisons work. Only the formula layer does this: sorting and the
+  series filler keep reading dates as dates, which is why this is not in `parseNumber`.
+- `isoFromSerial` and `serialFromIsoDate` round-trip through Excel's 1900 system, including the
+  time of day.
+
+**What it does not do.** A formula whose *result* is a date still displays as a serial; there is no
+result formatting yet, so `=TODAY()` and `=A2+30` read as numbers. Date literals inside criteria
+strings (`">2026-01-01"`) compare as text.
+
+## 45. A date result is a marker in the cell, not a guess
+
+**Design:** decision 44 left one hole: `=A2+30` computed a serial and *showed* it. Excel solves this
+with a cell format, and a note has no format table — but it does have cell comments, and the grid
+already keeps a conditional rule in one (`%%cf …%%`, decision 37). So the date is a marker:
+`2026-03-15 %%date%% %%=A2+30%%`.
+
+**Built:**
+
+- One marker decides the display, and it is exactly one `%%` pair. The formula stays the last
+  comment, and `parseFormulaCell` now strips the marker from the display the way it strips a rule,
+  so the cell reads `2026-03-15`.
+- Three things ask for it: the marker itself; `TODAY()` and `NOW()`, whose result cannot mean
+  anything else; and a cell that already shows a date, which keeps doing so for as long as the
+  number stays within a century of it. The last rule is what makes an imported workbook survive its
+  first recalculation, and the century window is what keeps `=B2-A2` at 14 days instead of
+  1900-01-14.
+- `withMarkerComments` rebuilds a formula cell with the comments it carried. Without it a
+  recalculation silently dropped them — which it had been doing to conditional rules as well.
+- **Show as date** sits in Calculate → Numbers and toggles the marker over the selection; it
+  changes what the cell shows, never what it holds.
+- `TODAY()` and `NOW()` are evaluated in the machine's own calendar, as Excel does.
+
+**What it does not do.** No general number formats (currency, percent) as markers — those rewrite
+the value, and a formula cell is the wrong place to rewrite a value. No time zone handling, no
+`DATE()` constructor yet.
