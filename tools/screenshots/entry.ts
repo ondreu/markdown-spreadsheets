@@ -1,6 +1,8 @@
 import { GridView } from "../../src/view/GridView";
 import { PivotView } from "../../src/view/PivotView";
 import { Sidecar } from "../../src/store/Sidecar";
+import { FormulaHelperModal, SheetImportModal } from "../../src/view/toolModals";
+import type { ImportedSheet } from "../../src/feature/importTable";
 import { TFile } from "obsidian";
 
 const NOTE = `# Office move
@@ -75,6 +77,71 @@ const plugin: any = { loadData: async () => store.data, saveData: async (d: unkn
 		await pivot.setState({ path: file.path, tableIndex }, {} as any);
 		await pivot.onOpen();
 		return true;
+	};
+
+	// The two dialogs of the workbook import and the formula helper, rendered by the same code the
+	// plugin runs. They are here so their layout can be judged at desktop and phone widths.
+	const sheetRow = (...cells: Array<string | { value: string; formula?: string }>) =>
+		cells.map((cell) => (typeof cell === "string" ? { value: cell } : cell));
+	const demoSheets: ImportedSheet[] = [
+		{
+			name: "Kalkulace",
+			hidden: false,
+			rows: [
+				sheetRow("Položka", "Ks", "Cena", "Celkem"),
+				sheetRow("Šroub M6", "120", "3.5", { value: "420", formula: "B2*C2" }),
+				sheetRow("Matice M6", "120", "1.2", { value: "144", formula: "B3*C3" }),
+				sheetRow("Podložka", "240", "0.4", { value: "96", formula: "B4*C4" }),
+				sheetRow("Profil 40×40", "12", "289", { value: "3 468", formula: "B5*C5" }),
+				sheetRow("Spojka", "36", "48", { value: "1 728", formula: "B6*C6" }),
+				sheetRow("Doprava", "1", "2 900", { value: "2 900", formula: "VLOOKUP(A7,Rates!A:B,2,FALSE)" }),
+				sheetRow("Montáž", "16", "450", { value: "7 200", formula: "B8*C8" }),
+				sheetRow("Celkem", "", "", { value: "15 956", formula: "SUM(D2:D8)" }),
+			],
+		},
+		{
+			name: "Q1 (rozpis)",
+			hidden: true,
+			rows: [
+				sheetRow("Měsíc", "Hodiny", "Sazba"),
+				sheetRow("Leden", "168", { value: "420", formula: "B2*2.5" }),
+				sheetRow("Únor", "152", { value: "380", formula: "B3*2.5" }),
+			],
+		},
+		{ name: "Poznámky", hidden: false, rows: [] },
+	];
+	(window as any).openSheetImport = (multiple = true) => {
+		new SheetImportModal(app, {
+			fileName: "Kalkulace 2026.xlsx",
+			sheets: demoSheets,
+			multiple,
+			formulas: true,
+			target: multiple ? "Each sheet becomes its own table in the note, at the cursor." : "It is written into the grid starting at B2.",
+			onSubmit: () => {},
+		}).open();
+	};
+	(window as any).openFormulaHelper = () => {
+		new FormulaHelperModal(app, {
+			cellLabel: "D9",
+			onInsert: (expr: string) => {
+				(window as any).insertedFormula = expr;
+			},
+			attachSink: (sink) => (window as any).host?.setReferenceSink(sink),
+		}).open();
+	};
+	/** Picks a function and fills its arguments, so a screenshot shows the form in use. */
+	(window as any).fillFormulaDemo = (name: string, args: string[]) => {
+		const item = Array.from(document.querySelectorAll<HTMLButtonElement>(".mds-function-item")).find((el) =>
+			(el.textContent ?? "").startsWith(name),
+		);
+		item?.click();
+		const inputs = Array.from(document.querySelectorAll<HTMLInputElement>(".mds-formula-args input"));
+		args.forEach((value, index) => {
+			const input = inputs[index];
+			if (input === undefined) return;
+			input.value = value;
+			input.dispatchEvent(new Event("input"));
+		});
 	};
 	(window as any).ready = true;
 })();

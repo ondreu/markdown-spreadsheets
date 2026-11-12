@@ -4,7 +4,8 @@ import { getRaw } from "../src/model/GridModel";
 import { parseTable } from "../src/model/parse";
 import { serializeTable } from "../src/model/serialize";
 import { buildXlsx } from "../src/feature/exportXlsx";
-import { detectDelimiter, parseCsv, readXlsx, valuesToModel } from "../src/feature/importTable";
+import { detectDelimiter, parseCsv, readXlsx, readXlsxWorkbook, valuesToModel } from "../src/feature/importTable";
+import { countFormulas, formulaTotal, importFormula, sheetToValues, shiftFormula, type FormulaContext } from "../src/feature/importFormula";
 import { crc32 } from "../src/feature/zip";
 
 describe("parseCsv", () => {
@@ -267,5 +268,207 @@ break</t></si></sst>`,
 		);
 		const back = valuesToModel(await readXlsx(bytes));
 		expect(serializeTable(back)).toBe(serializeTable(parseTable("| A | B |\n| --- | --- |\n| x | 2 |\n")));
+	});
+});
+
+/* ------------------------------------------------- formulas out of Excel */
+
+const NS = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"';
+const REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+/** Two worksheets, one hidden, one formula, one cell with a formula and no cached value. */
+function workbookBytes(): Uint8Array {
+	return deflatedZip([
+		{
+			path: "xl/workbook.xml",
+			text: `<?xml version="1.0"?><workbook ${NS} xmlns:r="${REL}"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/><sheet name="Notes" sheetId="2" state="hidden" r:id="rId2"/></sheets></workbook>`,
+		},
+		{
+			path: "xl/_rels/workbook.xml.rels",
+			text: `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="${REL}/worksheet" Target="worksheets/sheet2.xml"/></Relationships>`,
+		},
+		{
+			path: "xl/worksheets/sheet1.xml",
+			text: `<worksheet ${NS}><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Name</t></is></c><c r="B1" t="inlineStr"><is><t>Qty</t></is></c><c r="C1" t="inlineStr"><is><t>Total</t></is></c><c r="D1" t="inlineStr"><is><t>Next</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>Bolt</t></is></c><c r="B2"><v>2</v></c><c r="C2"><f>B2*10</f><v>20</v></c><c r="D2"><f>1+1</f></c></row></sheetData></worksheet>`,
+		},
+		{
+			path: "xl/worksheets/sheet2.xml",
+			text: `<worksheet ${NS}><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>note</t></is></c></row></sheetData></worksheet>`,
+		},
+	]);
+}
+
+describe("readXlsxWorkbook", () => {
+	it("reads every worksheet, its name, its state and its formulas", async () => {
+		const book = await readXlsxWorkbook(workbookBytes());
+		expect(book.sheets.map((sheet) => sheet.name)).toEqual(["Data", "Notes"]);
+		expect(book.sheets.map((sheet) => sheet.hidden)).toEqual([false, true]);
+		expect(formulaTotal(book.sheets[0].rows)).toBe(2);
+		expect(book.sheets[0].rows[1][2]).toEqual({ value: "20", formula: "B2*10" });
+		// A formula Excel never calculated still travels: the grid recomputes it on open.
+		expect(book.sheets[0].rows[1][3]).toEqual({ value: "", formula: "1+1" });
+		expect(book.sheets[1].rows).toEqual([[{ value: "note" }]]);
+	});
+
+	it("expands a shared formula over the cells that copy it", async () => {
+		const bytes = deflatedZip([
+			{
+				path: "xl/workbook.xml",
+				text: `<?xml version="1.0"?><workbook ${NS} xmlns:r="${REL}"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+			},
+			{
+				path: "xl/_rels/workbook.xml.rels",
+				text: `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`,
+			},
+			{
+				path: "xl/worksheets/sheet1.xml",
+				text: `<worksheet ${NS}><sheetData>
+<row r="2"><c r="B2"><v>2</v></c><c r="C2"><v>3</v></c><c r="D2"><f t="shared" ref="D2:D4" si="0">B2*C2</f><v>6</v></c></row>
+<row r="3"><c r="B3"><v>4</v></c><c r="C3"><v>5</v></c><c r="D3"><f t="shared" si="0"/><v>20</v></c></row>
+<row r="4"><c r="B4"><v>6</v></c><c r="C4"><v>7</v></c><c r="D4"><f t="shared" si="0"/><v>42</v></c></row>
+</sheetData></worksheet>`,
+			},
+		]);
+		const sheet = (await readXlsxWorkbook(bytes)).sheets[0];
+		expect(formulaTotal(sheet.rows)).toBe(3);
+		// The first row of the file is row 2, so the rectangle starts with an empty row.
+		expect(sheet.rows[2][3]).toEqual({ value: "20", formula: "B3*C3" });
+		expect(sheet.rows[3][3]).toEqual({ value: "42", formula: "B4*C4" });
+	});
+});
+
+describe("shiftFormula", () => {
+	it("moves relative references and leaves anchored ones", () => {
+		expect(shiftFormula("B2*C2", 1, 0)).toBe("B3*C3");
+		expect(shiftFormula("$B$2+B2", 1, 1)).toBe("$B$2+C3");
+		expect(shiftFormula("$B2+B$2", 2, 3)).toBe("$B4+E$2");
+	});
+
+	it("stays out of strings and quoted sheet names", () => {
+		expect(shiftFormula('IF(A2="B2","A2","x")', 1, 0)).toBe('IF(A3="B2","A2","x")');
+		expect(shiftFormula("'My B2'!B2", 1, 0)).toBe("'My B2'!B3");
+	});
+
+	it("does not mistake a function name for a reference", () => {
+		expect(shiftFormula("LOG10(B2)", 1, 0)).toBe("LOG10(B3)");
+	});
+});
+
+describe("importFormula", () => {
+	const context = (over: Partial<FormulaContext> = {}): FormulaContext => ({
+		sheet: { rows: 10, cols: 5 },
+		sheets: new Map([
+			["data", { ref: "Table1", rows: 10, cols: 5 }],
+			["q1 data", { ref: "Table2", rows: 4, cols: 3 }],
+		]),
+		...over,
+	});
+
+	it("keeps what the grid can compute", () => {
+		expect(importFormula("SUM(B2:B4)", context())).toBe("SUM(B2:B4)");
+		expect(importFormula("=IF(B2>10,1,0)", context())).toBe("IF(B2>10,1,0)");
+		expect(importFormula("SUMIF(A2:A9,\">10\",B2:B9)", context())).toBe('SUMIF(A2:A9,">10",B2:B9)');
+		expect(importFormula("B2*$C$2&\" %\"", context())).toBe('B2*$C$2&" %"');
+	});
+
+	it("reads a comma-decimal writer's separators", () => {
+		expect(importFormula("ROUND(B2;2)", context())).toBe("ROUND(B2,2)");
+	});
+
+	it("points a cross-sheet reference at the table its sheet becomes", () => {
+		expect(importFormula("SUM('Q1 data'!B2:B4)", context())).toBe("SUM(Table2!B2:B4)");
+		expect(importFormula("Data!A2*2", context())).toBe("Table1!A2*2");
+	});
+
+	it("rewrites a legacy lookup into XLOOKUP, where the block is known", () => {
+		expect(importFormula("VLOOKUP(A2,B2:D9,3,FALSE)", context())).toBe("XLOOKUP(A2,B2:B9,D2:D9)");
+		expect(importFormula("VLOOKUP(A2,$B$2:$D$9,3,0)", context())).toBe("XLOOKUP(A2,$B$2:$B$9,$D$2:$D$9)");
+		expect(importFormula("HLOOKUP(A2,B2:D5,2,FALSE)", context())).toBe("XLOOKUP(A2,B2:D2,B3:D3)");
+		expect(importFormula("VLOOKUP(A2,'Q1 data'!A2:C4,2,FALSE)", context())).toBe(
+			"XLOOKUP(A2,Table2!A2:A4,Table2!B2:B4)",
+		);
+		// A column past the block, and a lookup that is not exact: neither can be carried over.
+		expect(importFormula("VLOOKUP(A2,B2:D9,4,FALSE)", context())).toBeNull();
+		expect(importFormula("VLOOKUP(A2,B2:D9,3,TRUE)", context())).toBeNull();
+		expect(importFormula("VLOOKUP(A2,B2:D9,3)", context())).toBeNull();
+	});
+
+	it("refuses what it cannot carry, so the value stays", () => {
+		expect(importFormula("LEN(A2)*1", context())).toBeNull();
+		expect(importFormula("TODAY()", context())).toBe("TODAY()");
+		expect(importFormula("LEN(A2)*1", context())).toBeNull();
+		expect(importFormula("Table1[Qty]*2", context())).toBeNull();
+		expect(importFormula("B2*10%", context())).toBeNull();
+		expect(importFormula("#REF!+1", context())).toBeNull();
+		// A reference outside the rectangle has no cell to read in the table.
+		expect(importFormula("SUM(B2:B99)", context())).toBeNull();
+		expect(importFormula("Q2!A1", context({ sheets: new Map() }))).toBeNull();
+	});
+
+	it("moves the references when the block is pasted lower or further right", () => {
+		expect(importFormula("B2*C2", context({ offset: { row: 3, col: 1 } }))).toBe("C5*D5");
+		// A reference into another sheet belongs to that sheet, which is not moving.
+		expect(importFormula("'Q1 data'!B2", context({ offset: { row: 3, col: 1 } }))).toBe("Table2!B2");
+	});
+
+	it("is checked by the real parser, not by its own rules", () => {
+		// IF takes two arguments at least; the importer must not accept it and let the grid fail.
+		expect(importFormula("IF(B2>1)", context())).toBeNull();
+	});
+});
+
+describe("sheetToValues", () => {
+	const rows = [
+		[{ value: "Name" }, { value: "Qty" }, { value: "Total" }],
+		[{ value: "Bolt" }, { value: "2", formula: "B2*10" }, { value: "n/a", formula: "LEN(A2)*1" }],
+	];
+	const context: FormulaContext = { sheet: { rows: 2, cols: 3 }, sheets: new Map() };
+
+	it("writes a convertible formula as its value plus the formula comment", () => {
+		expect(sheetToValues(rows, { formulas: "convert", context })[1]).toEqual(["Bolt", "2 %%=B2*10%%", "n/a"]);
+	});
+
+	it("drops every formula when values are asked for", () => {
+		expect(sheetToValues(rows, { formulas: "values", context })[1]).toEqual(["Bolt", "2", "n/a"]);
+	});
+
+	it("counts what could be carried over", () => {
+		expect(countFormulas(rows, context)).toEqual({ total: 2, convertible: 1 });
+	});
+});
+
+describe("dates in a workbook", () => {
+	const bytesWithStyles = (): Uint8Array =>
+		deflatedZip([
+			{
+				path: "xl/workbook.xml",
+				text: `<?xml version="1.0"?><workbook ${NS} xmlns:r="${REL}"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+			},
+			{
+				path: "xl/_rels/workbook.xml.rels",
+				text: `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="${REL}/styles" Target="styles.xml"/></Relationships>`,
+			},
+			{
+				path: "xl/styles.xml",
+				text: `<styleSheet ${NS}><numFmts count="1"><numFmt numFmtId="164" formatCode="dd.mm.yyyy"/></numFmts><cellStyleXfs count="1"><xf numFmtId="0"/></cellStyleXfs><cellXfs count="4"><xf numFmtId="0"/><xf numFmtId="14" applyNumberFormat="1"/><xf numFmtId="164" applyNumberFormat="1"/><xf numFmtId="4" applyNumberFormat="1"/></cellXfs></styleSheet>`,
+			},
+			{
+				path: "xl/worksheets/sheet1.xml",
+				text: `<worksheet ${NS}><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>When</t></is></c><c r="B1" t="inlineStr"><is><t>Custom</t></is></c><c r="C1" t="inlineStr"><is><t>Plain</t></is></c><c r="D1" t="inlineStr"><is><t>Money</t></is></c></row><row r="2"><c r="A2" s="1"><v>46096</v></c><c r="B2" s="2"><v>46097</v></c><c r="C2" s="0"><v>46096</v></c><c r="D2" s="3"><v>46096</v></c></row></sheetData></worksheet>`,
+			},
+		]);
+
+	it("writes a date-styled cell as a date, and leaves every other number alone", async () => {
+		const sheet = (await readXlsxWorkbook(bytesWithStyles())).sheets[0];
+		expect(sheet.rows[1][0]).toEqual({ value: "2026-03-15" });
+		expect(sheet.rows[1][1]).toEqual({ value: "2026-03-16" });
+		expect(sheet.rows[1][2]).toEqual({ value: "46096" });
+		// `#,##0` is not a date: a serial there is a number, however odd it looks.
+		expect(sheet.rows[1][3]).toEqual({ value: "46096" });
+	});
+
+	it("feeds the grid a cell a formula can subtract", async () => {
+		const model = valuesToModel(await readXlsx(bytesWithStyles()));
+		expect(getRaw(model, 1, 0)).toBe("2026-03-15");
 	});
 });

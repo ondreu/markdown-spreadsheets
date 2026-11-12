@@ -1,6 +1,12 @@
 import { addrKey, colIndex, colName, parseAddrKey, type CellAddr } from "../model/address";
 import { getRaw, recomputeUsedRange, setRaw, type GridModel } from "../model/GridModel";
-import { parseNumber, type NumberParseOptions } from "../model/numbers";
+import {
+	isoFromSerial,
+	parseNumber,
+	serialFromIsoDate,
+	stripInlineMarkdown,
+	type NumberParseOptions,
+} from "../model/numbers";
 import { peelInline } from "./ops";
 
 /**
@@ -26,7 +32,7 @@ export interface FormulaCell {
 }
 
 /** Error codes a formula can produce. `#CYCLE!` and `#ERROR!` are ours; the rest are Excel's. */
-export type FormulaErrorCode = "#VALUE!" | "#REF!" | "#DIV/0!" | "#CYCLE!" | "#ERROR!" | "#NUM!" | "#NAME?";
+export type FormulaErrorCode = "#VALUE!" | "#REF!" | "#DIV/0!" | "#N/A" | "#CYCLE!" | "#ERROR!" | "#NUM!" | "#NAME?";
 
 export class FormulaError extends Error {
 	readonly code: FormulaErrorCode;
@@ -74,7 +80,92 @@ export function parseFormulaCell(raw: string): FormulaCell | null {
 }
 
 /**
- * Drops trailing `%%cf …%%` blocks from the text in front of a formula.
+ * A cell split into its display and the trailing `%%…%%` comments after it.
+ *
+ * A formula has to be the last comment in the cell, so everything before it is a marker of some
+ * kind: a conditional rule (`cf …`) or the date marker (`date`). Written by hand the cell may hold
+ * prose with its own `%%` pairs, which is why only whole trailing comments are peeled.
+ */
+function splitTrailing(raw: string): { display: string; comments: string[] } {
+	const comments: string[] = [];
+	let s = raw.trimEnd();
+	for (;;) {
+		if (!s.endsWith("%%")) break;
+		const open = s.lastIndexOf("%%", s.length - 3);
+		if (open === -1) break;
+		const body = s.slice(open + 2, s.length - 2);
+		if (body.includes("%%")) break;
+		comments.unshift(body);
+		s = s.slice(0, open).trimEnd();
+	}
+	return { display: s, comments };
+}
+
+const DATE_MARK = /^date$/i;
+
+/** Whether the cell asks for its result to be written as a date. */
+export function hasDateMark(raw: string): boolean {
+	return splitTrailing(raw).comments.some((body) => DATE_MARK.test(body));
+}
+
+/**
+ * Rebuilds a formula cell with the comments it carried in front of the formula.
+ *
+ * A recalculation rewrites the display, and `buildFormulaCell` knows only the display and the
+ * expression — so without this the cell would lose the rule or the date marker that lived in it,
+ * silently and for good.
+ */
+export function withMarkerComments(next: string, raw: string): string {
+	const markers = splitTrailing(raw).comments.filter((body) => !body.startsWith("="));
+	if (markers.length === 0) return next;
+	const tail = markers.map((body) => `%%${body}%%`).join(" ");
+	const at = next.indexOf("%%=");
+	if (at === -1) return `${next} ${tail}`;
+	const head = next.slice(0, at).trimEnd();
+	const rest = next.slice(at);
+	return head === "" ? `${tail} ${rest}` : `${head} ${tail} ${rest}`;
+}
+
+/**
+ * Replaces every formula in a model with the value it shows, and reports how many cells changed.
+ *
+ * The value is the display the cell already had, so nothing a reader sees changes — what goes is
+ * the expression. A rule comment or a date marker stays where it was: it is not a formula, and
+ * flattening a cell should not quietly take its formatting with it.
+ */
+export function flattenFormulas(model: GridModel): number {
+	let changed = 0;
+	for (const [key, cell] of Array.from(model.cells)) {
+		const formula = parseFormulaCell(cell.raw);
+		if (formula === null) continue;
+		const next = withMarkerComments(formula.display, cell.raw);
+		if (next === cell.raw) continue;
+		const { row, col } = parseAddrKey(key);
+		setRaw(model, row, col, next);
+		changed++;
+	}
+	return changed;
+}
+
+/**
+ * Adds or removes the date marker, keeping the formula the last comment.
+ *
+ * The marker is exactly one `%%` pair: `2026-03-15 %%date%% %%=A2+30%%`. A second pair would end
+ * the comment early, and whatever followed it would be read as part of the cell's text.
+ */
+export function setDateMark(raw: string, wanted: boolean): string {
+	const { display, comments } = splitTrailing(raw);
+	const formula = comments.find((body) => body.startsWith("="));
+	const rest = comments.filter((body) => !body.startsWith("=") && !DATE_MARK.test(body));
+	const next = wanted ? [...rest, "date"] : rest;
+	if (formula !== undefined) next.push(formula);
+	if (next.length === 0) return display;
+	const tail = next.map((body) => `%%${body}%%`).join(" ");
+	return display === "" ? tail : `${display} ${tail}`;
+}
+
+/**
+ * Drops the markers from the text in front of a formula.
  *
  * A conditional rule is written into the first cell of its range, and that cell may well hold the
  * formula whose value the rule tests — so the two comments share a cell, and the rule sits first
@@ -88,7 +179,7 @@ function withoutRuleComments(text: string): string {
 		const open = s.lastIndexOf("%%", s.length - 3);
 		if (open === -1) break;
 		const body = s.slice(open + 2, s.length - 2);
-		if (body.includes("%%") || !/^cf\s/i.test(body)) break;
+		if (body.includes("%%") || !(/^cf\s/i.test(body) || DATE_MARK.test(body))) break;
 		s = s.slice(0, open).trimEnd();
 	}
 	return s;
@@ -374,7 +465,12 @@ type FunctionName =
 	| "COUNTIF"
 	| "COUNTIFS"
 	| "AVERAGEIF"
-	| "AVERAGEIFS";
+	| "AVERAGEIFS"
+	| "XLOOKUP"
+	| "INDEX"
+	| "MATCH"
+	| "TODAY"
+	| "NOW";
 
 /** Canonical name and arity. AVG is accepted as an alias and exported to Excel as AVERAGE. */
 const FUNCTIONS: Record<string, { fn: FunctionName; min: number; max: number }> = {
@@ -402,6 +498,11 @@ const FUNCTIONS: Record<string, { fn: FunctionName; min: number; max: number }> 
 	COUNTIFS: { fn: "COUNTIFS", min: 2, max: 255 },
 	AVERAGEIF: { fn: "AVERAGEIF", min: 2, max: 3 },
 	AVERAGEIFS: { fn: "AVERAGEIFS", min: 3, max: 255 },
+	XLOOKUP: { fn: "XLOOKUP", min: 3, max: 4 },
+	INDEX: { fn: "INDEX", min: 2, max: 3 },
+	MATCH: { fn: "MATCH", min: 2, max: 3 },
+	TODAY: { fn: "TODAY", min: 0, max: 0 },
+	NOW: { fn: "NOW", min: 0, max: 0 },
 };
 
 /**
@@ -439,11 +540,16 @@ export const FORMULA_FUNCTIONS: readonly FormulaFunctionDoc[] = [
 	{ name: "COUNTIFS", signature: "range, condition, …", summary: "Counts the cells that match several conditions" },
 	{ name: "AVERAGEIF", signature: "range, condition, averageRange?", summary: "Averages the cells whose neighbours match a condition" },
 	{ name: "AVERAGEIFS", signature: "averageRange, range, condition, …", summary: "Averages the cells that match several conditions" },
+	{ name: "XLOOKUP", signature: "lookup, keys, results, ifNotFound?", summary: "The result beside the first key that matches — the lookup that survives an inserted column" },
+	{ name: "INDEX", signature: "range, row, column?", summary: "The nth cell of a range, or the cell at a row and column in it" },
+	{ name: "MATCH", signature: "lookup, range, exact?", summary: "Where in a range a value first appears" },
+	{ name: "TODAY", signature: "", summary: "Today's date, as a number the grid shows as a date" },
+	{ name: "NOW", signature: "", summary: "Today's date and the time of the recalculation" },
 	{ name: "TRUE", signature: "", summary: "The constant true" },
 	{ name: "FALSE", signature: "", summary: "The constant false" },
 ];
 
-const ERROR_CODES: readonly FormulaErrorCode[] = ["#VALUE!", "#REF!", "#DIV/0!", "#CYCLE!", "#ERROR!", "#NUM!", "#NAME?"];
+const ERROR_CODES: readonly FormulaErrorCode[] = ["#VALUE!", "#REF!", "#DIV/0!", "#N/A", "#CYCLE!", "#ERROR!", "#NUM!", "#NAME?"];
 
 /** Resolves a bare column letter (`bracket` false) or a `[Header]` to a column index, or -1. */
 type ColumnResolver = (name: string, bracket: boolean) => number;
@@ -700,7 +806,10 @@ function tableSource(ctx: EvalContext, table: number): CellSource {
 function classify(raw: string, numberOpts?: NumberParseOptions): CellValue {
 	const shown = stripFormula(raw);
 	if (shown.trim() === "") return { t: "empty" };
-	const n = parseNumber(shown, numberOpts);
+	// A date is text in the note and a serial number in a formula, as it was in Excel: `B2-A2`
+	// has to be a count of days. Numbers stay numbers everywhere else — sorting and the series
+	// filler have their own, calendar-aware reading of a date.
+	const n = parseNumber(shown, numberOpts) ?? serialFromIsoDate(stripInlineMarkdown(shown));
 	return n === null ? { t: "text", s: shown.trim() } : { t: "num", n };
 }
 
@@ -1024,6 +1133,16 @@ function rectOf(node: Node, ctx: EvalContext): RectRef {
 	throw new FormulaError("#VALUE!", "A range is expected here");
 }
 
+/** A range argument read into a flat list, row by row, with its rectangle for indexing. */
+function rangeValues(node: Node, ctx: EvalContext): { values: CellValue[]; rect: Rect } {
+	const { rect, source } = rectOf(node, ctx);
+	const values: CellValue[] = [];
+	for (let r = rect.r1; r <= rect.r2; r++) {
+		for (let c = rect.c1; c <= rect.c2; c++) values.push(source.value(r, c));
+	}
+	return { values, rect };
+}
+
 function* valuesOf(node: Node, ctx: EvalContext): Generator<CellValue> {
 	const { rect, source } = rectOf(node, ctx);
 	for (let r = rect.r1; r <= rect.r2; r++) {
@@ -1177,6 +1296,10 @@ function evalCall(fn: FunctionName, args: Node[], ctx: EvalContext): CellValue {
 		}
 		case "NOT":
 			return { t: "bool", b: !toBool(evalValue(args[0], ctx)) };
+		case "TODAY":
+			return { t: "num", n: todaySerial() };
+		case "NOW":
+			return { t: "num", n: nowSerial() };
 		case "TRUE":
 			return { t: "bool", b: true };
 		case "FALSE":
@@ -1192,6 +1315,48 @@ function evalCall(fn: FunctionName, args: Node[], ctx: EvalContext): CellValue {
 			return { t: "num", n: round(evalNum(args[0], ctx), Math.trunc(evalNum(args[1], ctx))) };
 		case "ABS":
 			return { t: "num", n: Math.abs(evalNum(args[0], ctx)) };
+		case "XLOOKUP": {
+			const needle = evalValue(args[0], ctx);
+			const keys = rangeValues(args[1], ctx).values;
+			const results = rangeValues(args[2], ctx).values;
+			if (keys.length !== results.length) {
+				throw new FormulaError("#VALUE!", `XLOOKUP has ${keys.length} keys for ${results.length} results — they have to line up`);
+			}
+			const at = keys.findIndex((key) => compareValues(key, needle) === 0);
+			if (at === -1) {
+				if (args.length > 3) return evalValue(args[3], ctx);
+				throw new FormulaError("#N/A", "XLOOKUP found no match");
+			}
+			return results[at];
+		}
+		case "MATCH": {
+			if (args.length > 2 && evalNum(args[2], ctx) !== 0) {
+				// Approximate matching needs a sorted range and an Excel-defined tie-break; a note
+				// that says a value is "near" this one is a recipe for a wrong answer nobody sees.
+				throw new FormulaError("#VALUE!", "MATCH here is exact — the third argument must be 0 or left out");
+			}
+			const needle = evalValue(args[0], ctx);
+			const values = rangeValues(args[1], ctx).values;
+			const at = values.findIndex((value) => compareValues(value, needle) === 0);
+			if (at === -1) throw new FormulaError("#N/A", "MATCH found no match");
+			return { t: "num", n: at + 1 };
+		}
+		case "INDEX": {
+			const { values, rect } = rangeValues(args[0], ctx);
+			const rows = rect.r2 - rect.r1 + 1;
+			const cols = rect.c2 - rect.c1 + 1;
+			let row = Math.trunc(evalNum(args[1], ctx));
+			let col = args.length > 2 ? Math.trunc(evalNum(args[2], ctx)) : 1;
+			// A single row (or column) is a vector, and one number walks along it, as in Excel.
+			if (args.length === 2 && rows === 1) {
+				col = row;
+				row = 1;
+			}
+			if (row < 1 || row > rows || col < 1 || col > cols) {
+				throw new FormulaError("#REF!", `INDEX asks for ${row}, ${col} in a ${rows} × ${cols} range`);
+			}
+			return values[(row - 1) * cols + (col - 1)];
+		}
 		case "COUNT":
 			return { t: "num", n: collect(args, ctx, true).nums.length };
 		case "COUNTA":
@@ -1221,6 +1386,18 @@ function evalCall(fn: FunctionName, args: Node[], ctx: EvalContext): CellValue {
 		default:
 			throw new FormulaError("#NAME?", "Unknown function");
 	}
+}
+
+/** Today at midnight on this machine's calendar, as a serial — Excel's TODAY is local, not UTC. */
+function todaySerial(): number {
+	const now = new Date();
+	return Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 86_400_000 + 25569;
+}
+
+function nowSerial(): number {
+	const now = new Date();
+	const seconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+	return todaySerial() + seconds / 86_400;
 }
 
 /** Half away from zero, like Excel; the epsilon nudge makes ROUND(1.005, 2) give 1.01. */
@@ -1379,12 +1556,18 @@ export function recalculate(model: GridModel, opts: RecalcOptions): RecalcResult
 		if (value === undefined) continue;
 		let text: string;
 		if (value.t === "num") {
-			// A display that already reads as this number stays as written. Formatting is locale
-			// dependent, and rewriting "1 200" as "1,200" on another machine would make every open
-			// on that machine an edit — two devices would rewrite the note back and forth forever.
-			const shown = parseNumber(entry.cell.display, opts.numberOpts);
-			if (shown !== null && Math.abs(shown - clean(value.n)) <= 1e-9 * Math.max(1, Math.abs(shown))) continue;
-			text = opts.format(clean(value.n));
+			const n = clean(value.n);
+			const asDate = dateText(entry, n);
+			if (asDate !== null) {
+				text = asDate;
+			} else {
+				// A display that already reads as this number stays as written. Formatting is locale
+				// dependent, and rewriting "1 200" as "1,200" on another machine would make every open
+				// on that machine an edit — two devices would rewrite the note back and forth forever.
+				const shown = parseNumber(entry.cell.display, opts.numberOpts);
+				if (shown !== null && Math.abs(shown - n) <= 1e-9 * Math.max(1, Math.abs(shown))) continue;
+				text = opts.format(n);
+			}
 		} else if (value.t === "text") {
 			text = cellText(value.s);
 		} else if (value.t === "bool") {
@@ -1395,13 +1578,32 @@ export function recalculate(model: GridModel, opts: RecalcOptions): RecalcResult
 			text = value.code;
 			result.errors.push({ row: entry.row, col: entry.col, code: value.code, message: value.message ?? "The formula cannot be evaluated" });
 		}
-		const next = buildFormulaCell(withLayersOf(entry.cell.display, text), entry.cell.expr);
+		const next = withMarkerComments(buildFormulaCell(withLayersOf(entry.cell.display, text), entry.cell.expr), entry.raw);
 		if (next !== entry.raw) {
 			setRaw(model, entry.row, entry.col, next);
 			result.changed.push({ row: entry.row, col: entry.col });
 		}
 	}
 	return result;
+}
+
+/**
+ * The date a numeric result should be written as, or null when it stays a number.
+ *
+ * Three things ask for it. The `date` marker is explicit. `TODAY()` and `NOW()` are the one
+ * automatic case, because their result cannot mean anything else. And a cell that already reads as
+ * a date keeps doing so — but only while the number stays within a century of it, so a formula
+ * changed from `=A2+30` to `=B2-A2` gives 14 days rather than 1900-01-14.
+ */
+function dateText(entry: FormulaEntry, value: number): string | null {
+	if (value < 1 || value >= 2_958_466) return null;
+	if (hasDateMark(entry.raw)) return isoFromSerial(value);
+	const ast = entry.ast;
+	if (ast !== null && ast.kind === "call" && ast.args.length === 0 && (ast.fn === "TODAY" || ast.fn === "NOW")) {
+		return isoFromSerial(value);
+	}
+	const shown = serialFromIsoDate(entry.cell.display);
+	return shown !== null && Math.abs(value - shown) <= 36_500 ? isoFromSerial(value) : null;
 }
 
 function evaluateEntry(entry: FormulaEntry, source: CellSource, opts: RecalcOptions): CellValue {
@@ -1593,6 +1795,9 @@ function rewriteRefs(expr: string, map: (a: RefParts, b: RefParts) => [RefParts,
  * points at a table that is not in the file, it stays text: a `<f>` aimed at a missing sheet makes
  * Excel refuse the whole workbook.
  */
+/** Functions whose Excel spelling is not their name: `XLOOKUP` is written `_xlfn.XLOOKUP`. */
+const EXCEL_NAMES: Record<string, string> = { XLOOKUP: "_xlfn.XLOOKUP" };
+
 export function toExcelFormula(expr: string, sheets?: ReadonlyMap<string, string>): string | null {
 	let tokens: Token[];
 	try {
@@ -1618,7 +1823,9 @@ export function toExcelFormula(expr: string, sheets?: ReadonlyMap<string, string
 			if (sheet !== undefined) return `'${sheet.replace(/'/g, "''")}'`;
 			switch (tok.type) {
 				case "func":
-					return FUNCTIONS[tok.text.toUpperCase()]?.fn ?? tok.text.toUpperCase();
+					// Excel stores functions it did not ship with under `_xlfn.`; without the prefix
+					// it reads the formula as a name it has never heard of.
+					return EXCEL_NAMES[tok.text.toUpperCase()] ?? FUNCTIONS[tok.text.toUpperCase()]?.fn ?? tok.text.toUpperCase();
 				case "sep":
 					return ",";
 				case "ref":
@@ -1630,6 +1837,27 @@ export function toExcelFormula(expr: string, sheets?: ReadonlyMap<string, string
 			}
 		})
 		.join("");
+}
+
+/**
+ * Whether the grid's parser knows this function.
+ *
+ * Imported formulas are checked against this before they reach the cell: a name the parser does
+ * not know would be written into the note and then read as `#NAME?`. It is also what keeps the
+ * import honest about which Excel functions travel and which keep their value.
+ */
+export function isGridFunction(name: string): boolean {
+	return FUNCTIONS[name.toUpperCase()] !== undefined;
+}
+
+/** Why the grid cannot read this expression, or null when it can. */
+export function formulaProblem(expr: string): string | null {
+	try {
+		parseExpr(expr, null);
+		return null;
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
+	}
 }
 
 /* -------------------------------------------------------------- generators */

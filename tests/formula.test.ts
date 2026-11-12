@@ -9,8 +9,11 @@ import {
 	closeUnbalanced,
 	computeColumn,
 	editTextOf,
+	flattenFormulas,
+	hasDateMark,
 	isFormulaCell,
 	parseFormulaCell,
+	setDateMark,
 	rawFromEdit,
 	recalculate,
 	stripFormula,
@@ -19,6 +22,7 @@ import {
 	translateFormula,
 	withLayersOf,
 } from "../src/feature/formula";
+import { serialFromIsoDate } from "../src/model/numbers";
 import { addInlineFormat, removeInlineFormat } from "../src/feature/ops";
 
 function grid(rows: string[][]): GridModel {
@@ -654,5 +658,186 @@ describe("closeUnbalanced", () => {
 
 	it("keeps trailing spaces outside the bracket it adds", () => {
 		expect(closeUnbalanced("=SUM(B2:B5 ")).toBe("=SUM(B2:B5 )");
+	});
+});
+
+describe("lookups", () => {
+	const table = (): GridModel =>
+		grid([
+			["Code", "Name", "Qty"],
+			["A-1", "Bolt", "4"],
+			["B-2", "Nut", "7"],
+			["C-3", "Washer", "2"],
+		]);
+
+	it("XLOOKUP returns the value beside the matching key", () => {
+		const m = table();
+		expect(evalAt(m, 1, 3, 'XLOOKUP("B-2", A2:A4, B2:B4)')).toBe("Nut");
+		expect(evalAt(m, 2, 3, 'XLOOKUP("B-2", A2:A4, C2:C4)')).toBe("7");
+	});
+
+	it("XLOOKUP takes a fallback, and says #N/A without one", () => {
+		const m = table();
+		expect(evalAt(m, 1, 3, 'XLOOKUP("ZZ", A2:A4, B2:B4, "none")')).toBe("none");
+		expect(evalAt(m, 2, 3, 'XLOOKUP("ZZ", A2:A4, B2:B4)')).toBe("#N/A");
+	});
+
+	it("matches without case, as Excel does", () => {
+		expect(evalAt(table(), 1, 3, 'XLOOKUP("b-2", A2:A4, B2:B4)')).toBe("Nut");
+	});
+
+	it("MATCH gives the position and INDEX reads one", () => {
+		const m = table();
+		expect(evalAt(m, 1, 3, 'MATCH("Nut", B2:B4, 0)')).toBe("2");
+		expect(evalAt(m, 2, 3, "INDEX(B2:B4, 2)")).toBe("Nut");
+		expect(evalAt(m, 3, 3, "INDEX(B2:C4, 2, 2)")).toBe("7");
+	});
+
+	it("refuses a position outside the range, and an approximate match", () => {
+		const m = table();
+		expect(evalAt(m, 1, 3, "INDEX(B2:B4, 9)")).toBe("#REF!");
+		expect(evalAt(m, 2, 3, 'MATCH("x", B2:B4, 1)')).toBe("#VALUE!");
+		expect(evalAt(m, 3, 3, 'MATCH("x", B2:B4, 0)')).toBe("#N/A");
+	});
+
+	it("writes XLOOKUP with the prefix Excel stores it under", () => {
+		expect(toExcelFormula('XLOOKUP("A", B2:B4, C2:C4)')).toBe('_xlfn.XLOOKUP("A",B2:B4,C2:C4)');
+	});
+});
+
+describe("a date in a cell", () => {
+	it("is a serial number to a formula, so dates subtract to days", () => {
+		const m = grid([
+			["Start", "End", "Days"],
+			["2026-03-01", "2026-03-15", ""],
+		]);
+		expect(evalAt(m, 1, 2, "B2-A2")).toBe("14");
+	});
+
+	it("compares as a number", () => {
+		const m = grid([
+			["When", "After"],
+			["2026-01-01", ""],
+			["2026-06-01", ""],
+		]);
+		expect(evalAt(m, 1, 1, 'IF(A3>A2, "later", "earlier")')).toBe("later");
+	});
+
+	it("still reads as the date it was typed as", () => {
+		const m = grid([["When"], ["2026-03-15"]]);
+		recalculate(m, plain);
+		expect(stripFormula(getRaw(m, 1, 0))).toBe("2026-03-15");
+	});
+
+	it("agrees with the serial the reader would write", () => {
+		expect(serialFromIsoDate("2026-03-15")).toBe(46096);
+	});
+});
+
+describe("a date a formula computes", () => {
+	it("is written as a date when the cell is marked", () => {
+		const m = grid([["When", "Plus"], ["2026-03-01", "0 %%=A2+30%%"]]);
+		setRaw(m, 1, 1, setDateMark(getRaw(m, 1, 1), true));
+		expect(getRaw(m, 1, 1)).toBe("0 %%date%% %%=A2+30%%");
+		recalculate(m, plain);
+		expect(stripFormula(getRaw(m, 1, 1))).toBe("2026-03-31");
+	});
+
+	it("stays a number when it is not", () => {
+		const m = grid([["When", "Plus"], ["2026-03-01", "0 %%=A2+30%%"]]);
+		recalculate(m, plain);
+		expect(stripFormula(getRaw(m, 1, 1))).toBe(String(serialFromIsoDate("2026-03-01")! + 30));
+	});
+
+	it("keeps a cell that already shows a date showing one", () => {
+		const m = grid([["When", "Plus"], ["2026-03-01", "2026-03-01 %%=A2+30%%"]]);
+		recalculate(m, plain);
+		expect(stripFormula(getRaw(m, 1, 1))).toBe("2026-03-31");
+	});
+
+	it("does not turn a difference of days into a date", () => {
+		// The classic trap: the cell used to show a date, the formula now returns 14.
+		const m = grid([
+			["From", "To", "Days"],
+			["2026-03-01", "2026-03-15", "2026-03-01 %%=B2-A2%%"],
+		]);
+		recalculate(m, plain);
+		expect(stripFormula(getRaw(m, 1, 2))).toBe("14");
+	});
+
+	it("shows TODAY() as a date, and a difference from it as a number", () => {
+		const m = grid([
+			["A", "B"],
+			["2026-03-01", ""],
+		]);
+		setRaw(m, 0, 1, buildFormulaCell("", "TODAY()"));
+		setRaw(m, 1, 1, buildFormulaCell("", "TODAY()-A2"));
+		recalculate(m, plain);
+		expect(stripFormula(getRaw(m, 0, 1))).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+		expect(stripFormula(getRaw(m, 1, 1))).toMatch(/^\d+$/);
+	});
+
+	it("shows NOW() with the time of day", () => {
+		const m = grid([["Now"], [""]]);
+		setRaw(m, 1, 0, buildFormulaCell("", "NOW()"));
+		recalculate(m, plain);
+		expect(stripFormula(getRaw(m, 1, 0))).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/);
+	});
+
+	it("survives being marked and unmarked", () => {
+		const start = "2026-03-15 %%=A2+30%%";
+		const marked = setDateMark(start, true);
+		// One `%%` pair, or the comment ends early and the formula stops being a formula.
+		expect(marked).toBe("2026-03-15 %%date%% %%=A2+30%%");
+		expect(parseFormulaCell(marked)?.display).toBe("2026-03-15");
+		expect(parseFormulaCell(marked)?.expr).toBe("A2+30");
+		expect(setDateMark(marked, false)).toBe(start);
+	});
+
+	it("keeps a rule and the marker through a recalculation", () => {
+		const m = grid([
+			["A", "B"],
+			["1", "0 %%cf B2>5 bold%% %%=A2*10%%"],
+		]);
+		recalculate(m, plain);
+		expect(getRaw(m, 1, 1)).toBe("10 %%cf B2>5 bold%% %%=A2*10%%");
+	});
+
+	it("leaves a conditional rule where it was", () => {
+		const marked = setDateMark("0 %%cf B2>10 bold%% %%=A2+30%%", true);
+		expect(marked).toBe("0 %%cf B2>10 bold%% %%date%% %%=A2+30%%");
+		expect(parseFormulaCell(marked)?.display).toBe("0");
+		expect(setDateMark(marked, false)).toBe("0 %%cf B2>10 bold%% %%=A2+30%%");
+	});
+
+	it("marks a cell with no formula without breaking it", () => {
+		expect(setDateMark("2026-03-15", true)).toBe("2026-03-15 %%date%%");
+		expect(hasDateMark("2026-03-15 %%date%%")).toBe(true);
+		expect(setDateMark("2026-03-15 %%date%%", false)).toBe("2026-03-15");
+	});
+});
+
+describe("flattenFormulas", () => {
+	it("replaces every formula with the value it shows", () => {
+		const m = grid([
+			["A", "B"],
+			["1", "10 %%=A2*10%%"],
+			["2", "20 %%=A2*20%%"],
+		]);
+		recalculate(m, plain);
+		expect(flattenFormulas(m)).toBe(2);
+		expect(getRaw(m, 1, 1)).toBe("10");
+		expect(getRaw(m, 2, 1)).toBe("20");
+	});
+
+	it("leaves a rule in the cell it was written in", () => {
+		const m = grid([["A"], ["5 %%cf A2>3 bold%% %%=2+3%%"]]);
+		expect(flattenFormulas(m)).toBe(1);
+		expect(getRaw(m, 1, 0)).toBe("5 %%cf A2>3 bold%%");
+	});
+
+	it("does nothing to a table without formulas", () => {
+		const m = grid([["A"], ["1"]]);
+		expect(flattenFormulas(m)).toBe(0);
 	});
 });

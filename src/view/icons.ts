@@ -93,6 +93,8 @@ export const ICONS = {
 	merge: ["merge", "combine", "git-merge"],
 	dedupe: ["list-x", "list-minus", "trash"],
 	totals: ["sigma-square", "sigma"],
+	// Freezing the values: the formula goes, the number stays.
+	flatten: ["file-down", "arrow-down-to-line", "download"],
 	compute: ["square-function", "function-square", "calculator"],
 	stats: ["chart-bar", "bar-chart-2", "bar-chart"],
 	numberFormat: ["hash", "binary"],

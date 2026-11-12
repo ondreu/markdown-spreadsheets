@@ -2,7 +2,7 @@ import { addrKey, parseAddrKey } from "../model/address";
 import { getRaw, recomputeUsedRange, setRaw, type Align, type GridModel } from "../model/GridModel";
 import { parseNumber, type NumberParseOptions } from "../model/numbers";
 import type { TableLayout } from "../store/Sidecar";
-import { buildFormulaCell, parseFormulaCell, stripFormula, translateFormula } from "./formula";
+import { buildFormulaCell, parseFormulaCell, stripFormula, translateFormula, withMarkerComments } from "./formula";
 import { detectSeries, type SeriesFn } from "./series";
 
 export interface Rect {
@@ -401,21 +401,6 @@ export function addInlineFormat(raw: string, format: InlineFormat): string {
 }
 
 /** The trailing `%%…%%` blocks of a cell, without their fences, in the order they were written. */
-function commentsOf(raw: string): string[] {
-	const out: string[] = [];
-	let s = raw.trimEnd();
-	for (;;) {
-		if (!s.endsWith("%%")) break;
-		const open = s.lastIndexOf("%%", s.length - 3);
-		if (open === -1) break;
-		const body = s.slice(open + 2, s.length - 2);
-		if (body.includes("%%")) break;
-		out.unshift(body);
-		s = s.slice(0, open).trimEnd();
-	}
-	return out;
-}
-
 /**
  * Puts the conditional rules `next` lost back in front of its formula.
  *
@@ -424,15 +409,9 @@ function commentsOf(raw: string): string[] {
  * cell would quietly take the rule with it. The rule goes first because the formula has to stay the
  * last comment for `parseFormulaCell` to find it.
  */
+/** The markers a cell carries in front of its formula survive a format change. */
 function withRuleComments(next: string, before: string): string {
-	const rules = commentsOf(before).filter((body) => /^cf\s/i.test(body));
-	if (rules.length === 0) return next;
-	const tail = rules.map((body) => `%%${body}%%`).join(" ");
-	const at = next.indexOf("%%=");
-	if (at === -1) return `${next} ${tail}`;
-	const head = next.slice(0, at).trimEnd();
-	const rest = next.slice(at);
-	return head === "" ? `${tail} ${rest}` : `${head} ${tail} ${rest}`;
+	return withMarkerComments(next, before);
 }
 
 /** Removes the outermost layer of `format`, keeping every other layer as it was. */

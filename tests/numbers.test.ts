@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { formatNumber, isNumeric, parseNumber, stripInlineMarkdown, stripObsidianComments } from "../src/model/numbers";
+import {
+	formatNumber,
+	isoDateFromSerial,
+	isoFromSerial,
+	isNumeric,
+	parseNumber,
+	serialFromIsoDate,
+	stripInlineMarkdown,
+	stripObsidianComments,
+} from "../src/model/numbers";
 
 describe("stripInlineMarkdown", () => {
 	it("removes balanced wrappers", () => {
@@ -118,5 +127,33 @@ describe("Obsidian comments", () => {
 		expect(parseNumber("%%=A1%%")).toBeNull();
 		expect(parseNumber("#DIV/0! %%=1/0%%")).toBeNull();
 		expect(isNumeric("12 %%note%%")).toBe(true);
+	});
+});
+
+describe("dates and serials", () => {
+	it("round-trips an ISO date through Excel's serial", () => {
+		expect(serialFromIsoDate("2026-03-15")).toBe(46096);
+		expect(isoDateFromSerial(46096)).toBe("2026-03-15");
+		expect(isoFromSerial(46096)).toBe("2026-03-15");
+	});
+
+	it("keeps the time of day, without seconds when there are none", () => {
+		expect(isoFromSerial(46096.625)).toBe("2026-03-15 15:00");
+		expect(isoFromSerial(46096.500694)).toBe("2026-03-15 12:01");
+	});
+
+	it("reads a time-only serial as a time", () => {
+		expect(isoFromSerial(0.5)).toBe("1899-12-30 12:00");
+	});
+
+	it("refuses what is not a date", () => {
+		expect(serialFromIsoDate("2026-02-30")).toBeNull();
+		expect(serialFromIsoDate("15. 3. 2026")).toBeNull();
+		expect(serialFromIsoDate("2026-03-15 25:00")).toBeNull();
+	});
+
+	it("does not turn a date into a number for the rest of the grid", () => {
+		// Sorting and the series filler read dates as dates; only a formula wants the serial.
+		expect(parseNumber("2026-03-15")).toBeNull();
 	});
 });
