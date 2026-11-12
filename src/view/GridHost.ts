@@ -1539,10 +1539,6 @@ export class GridHost {
 		const rect = this.selection.rect;
 		const count = rect.r2 - rect.r1 + 1;
 		const at = where === "above" ? rect.r1 : rect.r2 + 1;
-		if (at <= 0) {
-			this.ctx.callbacks.onNotice("Row 1 is the table header and cannot be moved down.");
-			return;
-		}
 		this.ensureExtent(Math.min(this.rows - 1 + count, MAX_ROWS - 1), rect.c2);
 		this.mutate("Insert rows", () => {
 			insertRows(this.model, this.layout, at, count);
@@ -2778,7 +2774,6 @@ export class GridHost {
 				i
 					.setTitle("Insert row above")
 					.setIcon(iconName("rowAbove"))
-					.setDisabled(this.selection.rect.r1 === 0)
 					.onClick(() => this.insertRowsAt("above")),
 			);
 			menu.addItem((i) => i.setTitle("Insert row below").setIcon(iconName("rowBelow")).onClick(() => this.insertRowsAt("below")));
@@ -2811,7 +2806,6 @@ export class GridHost {
 				i
 					.setTitle("Insert row above")
 					.setIcon(iconName("rowAbove"))
-					.setDisabled(this.selection.rect.r1 === 0)
 					.onClick(() => this.insertRowsAt("above")),
 			);
 			menu.addItem((i) => i.setTitle("Insert row below").setIcon(iconName("rowBelow")).onClick(() => this.insertRowsAt("below")));

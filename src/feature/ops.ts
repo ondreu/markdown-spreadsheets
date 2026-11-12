@@ -73,8 +73,10 @@ export function clearRange(model: GridModel, rect: Rect): void {
  */
 export function insertRows(model: GridModel, layout: TableLayout, at: number, count: number): void {
 	if (count <= 0) return;
-	// Row 0 is the markdown header and cannot be pushed down.
-	const target = Math.max(1, at);
+	// At 0 the header itself moves down and the blank row above it becomes the new header. That is
+	// what a table read without a header needs: its first row is data, and a row above it is the
+	// only way to give the table one.
+	const target = Math.max(0, at);
 	const moved = new Map<string, string>();
 	for (const [key, cell] of model.cells) {
 		const { row } = parseAddrKey(key);

@@ -278,8 +278,8 @@ describe("adjustFormulaRefs", () => {
 		// Model row 2 is label 3.
 		expect(exprAfter("A2 + A3 + A4", { kind: "insertRows", at: 2, count: 1 })).toBe("A2 + A4 + A5");
 		expect(exprAfter("$A$3*2", { kind: "insertRows", at: 2, count: 2 })).toBe("$A$5*2");
-		// The header never moves.
-		expect(exprAfter("A1", { kind: "insertRows", at: 0, count: 1 })).toBe("A1");
+		// An insert at the top moves the header down, and what pointed at it follows.
+		expect(exprAfter("A1", { kind: "insertRows", at: 0, count: 1 })).toBe("A2");
 	});
 
 	it("grows a range only when the insertion is strictly inside it", () => {
@@ -658,6 +658,21 @@ describe("closeUnbalanced", () => {
 
 	it("keeps trailing spaces outside the bracket it adds", () => {
 		expect(closeUnbalanced("=SUM(B2:B5 ")).toBe("=SUM(B2:B5 )");
+	});
+});
+
+describe("adjustFormulaRefs above the header", () => {
+	it("moves a reference with the cell when a row goes in at the top", () => {
+		const m = grid([["H", "Total"], ["5", "%%=A1*2%%"]]);
+		adjustFormulaRefs(m, { kind: "insertRows", at: 0, count: 1 });
+		expect(parseFormulaCell(getRaw(m, 1, 1))?.expr).toBe("A2*2");
+	});
+
+	it("still refuses to delete the header row", () => {
+		const m = grid([["H", "Total"], ["5", "%%=A1*2%%"]]);
+		adjustFormulaRefs(m, { kind: "deleteRows", at: 0, count: 1 });
+		// Deleting row 1 is not a thing, so nothing moves and the reference stays where it was.
+		expect(parseFormulaCell(getRaw(m, 1, 1))?.expr).toBe("A1*2");
 	});
 });
 

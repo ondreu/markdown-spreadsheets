@@ -1340,8 +1340,7 @@ export class GridView extends ItemView {
 						items: [
 							cluster("rows", [
 								action("row-above", "Insert row above", "rowAbove", () => host?.insertRowsAt("above"), {
-									disabled: rect.r1 === 0,
-									tooltip: rect.r1 === 0 ? "row 1 is the table header, so nothing can go above it" : undefined,
+									tooltip: rect.r1 === 0 ? "the new row becomes the header and row 1 moves down" : undefined,
 								}),
 								action("row-below", "Insert row below", "rowBelow", () => host?.insertRowsAt("below")),
 								action("row-duplicate", "Duplicate row", "duplicate", () => host?.duplicateSelectedRows(), {

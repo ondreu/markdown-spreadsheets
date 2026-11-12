@@ -1683,10 +1683,13 @@ export function adjustFormulaRefs(model: GridModel, change: StructuralChange): v
 	let { at, count } = change;
 	const rowsAxis = change.kind === "insertRows" || change.kind === "deleteRows";
 	const inserting = change.kind === "insertRows" || change.kind === "insertCols";
-	if (rowsAxis) {
-		// The header row can neither be pushed down nor deleted.
-		if (at < 1) {
-			if (!inserting) count -= 1 - at;
+	if (rowsAxis && at < 1) {
+		// Deleting the header is not a thing, but an insertion above it is: everything moves down
+		// one and a reference to A1 has to follow the cell it named.
+		if (inserting) {
+			at = 0;
+		} else {
+			count -= 1 - at;
 			at = 1;
 		}
 	}

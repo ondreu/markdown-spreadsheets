@@ -53,11 +53,15 @@ describe("insertRows", () => {
 		expect(l.rowHeights).toEqual({ "1": 40, "5": 60 });
 	});
 
-	it("never pushes the header row down", () => {
+	it("makes room above the header, which moves down and becomes data", () => {
+		// A table read without a header has its data in row 0, and this is how it gets one.
 		const model = parseTable(TABLE);
 		const l = layout();
 		insertRows(model, l, 0, 1);
-		expect(getRaw(model, 0, 0)).toBe("A");
+		expect(getRaw(model, 0, 0)).toBe("");
+		expect(getRaw(model, 1, 0)).toBe("A");
+		expect(getRaw(model, 2, 0)).toBe("1");
+		expect(model.usedRange.rows).toBe(5);
 	});
 });
 
