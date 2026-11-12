@@ -1676,8 +1676,9 @@ export interface StructuralChange {
  * it is deleted and becomes `#REF!` only when all of it is.
  *
  * A deletion is one contiguous block; for a scattered selection call this once per block, from the
- * bottom up. Row 0 is clamped out exactly as `insertRows`/`deleteRows` do. Display values are left
- * alone — run `recalculate` afterwards.
+ * bottom up. Deleting the header is clamped out exactly as `deleteRows` does; an insertion at 0 is
+ * allowed, because the header moves down and a reference to A1 has to follow it. Display values
+ * are left alone — run `recalculate` afterwards.
  */
 export function adjustFormulaRefs(model: GridModel, change: StructuralChange): void {
 	let { at, count } = change;
