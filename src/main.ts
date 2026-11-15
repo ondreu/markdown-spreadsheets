@@ -271,6 +271,32 @@ export default class MarkdownSpreadsheetsPlugin extends Plugin {
 	}
 
 	/**
+	 * True when the Ribbon toolbar plugin is enabled and offering to host this plugin's toolbar.
+	 *
+	 * The contract is duck-typed and versioned (`ribbonHostApi`), so neither plugin imports the
+	 * other and either can be installed alone. The user's own switch can always veto it.
+	 */
+	usesExternalRibbon(): boolean {
+		if (!this.sidecar.settings.externalRibbon) return false;
+		type HostPlugin = { ribbonHostApi?: { version: number; acceptsIntegration(id: string): boolean } };
+		const plugins = (this.app as unknown as { plugins?: { plugins?: Record<string, HostPlugin> } }).plugins?.plugins;
+		const api = plugins?.["ribbon-toolbar"]?.ribbonHostApi;
+		return api?.version === 1 && api.acceptsIntegration("markdown-spreadsheets") === true;
+	}
+
+	/** The host toolbar's setting changed: every open grid re-checks where its toolbar lives. */
+	refreshRibbonHost(): void {
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_GRID)) {
+			if (leaf.view instanceof GridView) leaf.view.refreshRibbonHost();
+		}
+	}
+
+	/** True while a grid is the focused view. The ribbon host asks this to show its Spreadsheet tab. */
+	isGridActive(): boolean {
+		return this.app.workspace.getActiveViewOfType(GridView) !== null;
+	}
+
+	/**
 	 * True when the note is open anywhere: an editor holds a buffer the vault write would race, and
 	 * an open grid has its own conflict handling and recalculates when it opens.
 	 */

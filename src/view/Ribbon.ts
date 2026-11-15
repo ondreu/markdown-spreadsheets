@@ -88,8 +88,11 @@ export class Ribbon {
 		this.collapsed = opts.collapsed === true;
 	}
 
-	mount(parent: HTMLElement): void {
+	mount(parent: HTMLElement, before?: HTMLElement | null): void {
 		this.containerEl = parent.createDiv({ cls: "mds-ribbon" });
+		// The host may turn its toolbar off later; the ribbon then goes back above the formula
+		// bar, where it was when the grid opened.
+		if (before) parent.insertBefore(this.containerEl, before);
 		this.containerEl.toggleClass("is-icons-only", this.opts.iconsOnly === true);
 		this.barEl = this.containerEl.createDiv({ cls: "mds-ribbon-bar" });
 		this.tabStripEl = this.barEl.createDiv({ cls: "mds-ribbon-tabs", attr: { role: "tablist" } });
@@ -105,7 +108,18 @@ export class Ribbon {
 		this.applyCollapsed();
 	}
 
+	/** True while the toolbar has a live element; false after {@link destroy}. */
+	isMounted(): boolean {
+		return this.containerEl?.isConnected === true;
+	}
+
+	/** Removes the toolbar. The view calls this when another plugin hosts its actions. */
+	destroy(): void {
+		this.containerEl?.remove();
+	}
+
 	setTabs(tabs: RibbonTab[]): void {
+		if (!this.isMounted()) return;
 		this.tabs = tabs;
 		if (!tabs.some((t) => t.id === this.activeTab)) this.activeTab = tabs[0]?.id ?? "home";
 		const signature = this.signatureOf();

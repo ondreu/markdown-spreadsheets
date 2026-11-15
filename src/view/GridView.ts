@@ -114,6 +114,7 @@ export class GridView extends ItemView {
 
 	private bodyEl!: HTMLElement;
 	private bannerEl!: HTMLElement;
+	private formulaBarEl!: HTMLElement;
 	private formulaAddressEl!: HTMLElement;
 	private formulaInputEl!: HTMLInputElement;
 
@@ -234,8 +235,10 @@ export class GridView extends ItemView {
 	override async onOpen(): Promise<void> {
 		this.contentEl.addClass("markdown-spreadsheet-view");
 		this.contentEl.toggleClass("mds-touch", this.touch);
-		this.ribbon.mount(this.contentEl);
 		this.buildFormulaBar();
+		// Another plugin may host this toolbar. The bar keeps its place above the formula bar
+		// either way, so turning the host off puts the ribbon back where it was.
+		if (!this.plugin.usesExternalRibbon()) this.ribbon.mount(this.contentEl, this.formulaBarEl);
 		this.bannerEl = this.contentEl.createDiv({ cls: "mds-banner mds-hidden" });
 		this.bodyEl = this.contentEl.createDiv({ cls: "mds-body" });
 		this.sheetsEl = this.contentEl.createDiv({
@@ -775,6 +778,7 @@ export class GridView extends ItemView {
 
 	private buildFormulaBar(): void {
 		const bar = this.contentEl.createDiv({ cls: "mds-formulabar" });
+		this.formulaBarEl = bar;
 		this.formulaAddressEl = bar.createDiv({ cls: "mds-formula-address", text: "A1" });
 		// Excel's fx sits at the head of the bar; this one opens the same helper the ribbon has.
 		const fx = bar.createEl("button", { cls: "mds-formula-icon", attr: { type: "button", "aria-label": "Insert a formula" } });
@@ -1176,8 +1180,21 @@ export class GridView extends ItemView {
 	/* --------------------------------------------------------------- ribbon */
 
 	private refreshRibbon(): void {
+		// Another plugin is drawing the toolbar; there is nothing here to update.
+		if (!this.ribbon.isMounted()) return;
 		this.ribbon.setTabs(this.buildTabs());
 		this.refreshTouchBar();
+	}
+
+	/**
+	 * The host toolbar was turned on or off in settings: put this view's own toolbar back, or
+	 * take it away, without reopening the tab.
+	 */
+	refreshRibbonHost(): void {
+		const external = this.plugin.usesExternalRibbon();
+		if (external) this.ribbon.destroy();
+		else if (!this.ribbon.isMounted()) this.ribbon.mount(this.contentEl, this.formulaBarEl);
+		this.refreshRibbon();
 	}
 
 	/**

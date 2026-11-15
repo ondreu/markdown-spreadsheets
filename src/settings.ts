@@ -73,6 +73,8 @@ export interface MarkdownSpreadsheetsSettings {
 	headerNamesInLetters: boolean;
 	/** Ribbon buttons with labels, or icons only. */
 	ribbonStyle: "labels" | "icons";
+	/** Hand the toolbar over to the Ribbon toolbar plugin when it is installed. */
+	externalRibbon: boolean;
 	statusStats: StatusStat[];
 	/** Manual save mode: show the diff of what is about to be written before writing it. */
 	previewBeforeSave: boolean;
@@ -115,6 +117,7 @@ export const DEFAULT_SETTINGS: MarkdownSpreadsheetsSettings = {
 	highlightActiveLine: true,
 	headerNamesInLetters: true,
 	ribbonStyle: "labels",
+	externalRibbon: true,
 	statusStats: ["sum", "average", "count"],
 	previewBeforeSave: false,
 	maxBackups: 10,

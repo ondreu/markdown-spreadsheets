@@ -290,6 +290,19 @@ export class MarkdownSpreadsheetsSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName("Use ribbon toolbar when available")
+			.setDesc(
+				"Hides this plugin's own toolbar and shows its actions in the ribbon toolbar plugin's spreadsheet tab. Only applies while that plugin is installed and enabled.",
+			)
+			.addToggle((t) =>
+				t.setValue(settings.externalRibbon).onChange((value) => {
+					settings.externalRibbon = value;
+					commit();
+					this.plugin.refreshRibbonHost();
+				}),
+			);
+
+		new Setting(containerEl)
 			.setName("Touch layout")
 			.setDesc(
 				"Tap to select and tap again to edit, a long press for the menu, two fingers to zoom, and an action bar under the grid. Automatic turns it on in the mobile app. Takes effect in newly opened grids.",
