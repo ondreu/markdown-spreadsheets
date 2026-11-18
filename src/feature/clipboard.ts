@@ -1,5 +1,7 @@
+import { getRaw, type GridModel } from "../model/GridModel";
 import { isDelimiterRow, parseTable, splitCells } from "../model/parse";
 import { buildFormulaCell, parseFormulaCell, translateFormula } from "./formula";
+import { normalizeRect, type Rect } from "./ops";
 
 /**
  * TSV is the lingua franca of the system clipboard: Excel, LibreOffice and Google Sheets all
@@ -31,6 +33,29 @@ export function shiftFormulas(values: string[][], dRow: number, dCol: number): s
 
 export function toTsv(values: string[][]): string {
 	return values.map((row) => row.map(encodeCell).join("\t")).join("\n");
+}
+
+/**
+ * The rows of `rect` that are on screen. A filter is display-only and never changes the note
+ * (§11), but a copy is a copy of what the person sees: carrying the hidden rows along would
+ * paste rows that were filtered out, and a cut would delete data that was never on screen.
+ */
+export function visibleRows(rect: Rect, hidden: ReadonlySet<number>): number[] {
+	const r = normalizeRect(rect);
+	const out: number[] = [];
+	for (let row = r.r1; row <= r.r2; row++) if (!hidden.has(row)) out.push(row);
+	return out;
+}
+
+/** A selection as raw cells, with the rows a filter hides left out. */
+export function selectionBlock(model: GridModel, rect: Rect, hidden: ReadonlySet<number>): string[][] {
+	const r = normalizeRect(rect);
+	const rows = visibleRows(r, hidden);
+	return rows.map((row) => {
+		const line: string[] = [];
+		for (let col = r.c1; col <= r.c2; col++) line.push(getRaw(model, row, col));
+		return line;
+	});
 }
 
 /**
