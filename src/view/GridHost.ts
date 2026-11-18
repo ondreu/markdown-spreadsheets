@@ -5,7 +5,7 @@ import { fnv1a } from "../model/hash";
 import { formatNumber, type NumberParseOptions } from "../model/numbers";
 import { conditionalEnabled, type MarkdownSpreadsheetsSettings } from "../settings";
 import type { TableLayout } from "../store/Sidecar";
-import { fromMarkdownTable, fromTsv, looksLikeGrid, shiftFormulas, toTsv } from "../feature/clipboard";
+import { fromMarkdownTable, fromTsv, looksLikeGrid, selectionBlock, shiftFormulas, toTsv, visibleRows } from "../feature/clipboard";
 import {
 	applyInlineFormat,
 	clearRange,
@@ -18,7 +18,6 @@ import {
 	moveCol,
 	moveRow,
 	normalizeRect,
-	readRange,
 	rectCols,
 	rectRows,
 	setColAlign,
@@ -1712,9 +1711,20 @@ export class GridHost {
 		this.setSelection({ r1: row, c1: col, r2: row + height - 1, c2: col + width - 1 }, { row, col });
 	}
 
-	/** The selection as a rectangle of raw values, trimmed of whole-line overhang. */
+	/**
+	 * The selection as raw cells, without the rows a filter hides: a copy carries what is on
+	 * screen. Filtering itself stays display-only and never touches the note (§11).
+	 */
 	selectionValues(): string[][] {
-		return readRange(this.model, this.effectiveRect());
+		return this.visibleValues(this.effectiveRect());
+	}
+
+	/**
+	 * Reads a rectangle of the model for a copy, dropping the rows a filter hides. The rows stay
+	 * in the note; only the block handed to the clipboard is shortened.
+	 */
+	private visibleValues(rect: Rect): string[][] {
+		return selectionBlock(this.model, rect, this.hiddenRows);
 	}
 
 	/** Sorts every data row by one column; the header row never moves. */
@@ -2058,15 +2068,22 @@ export class GridHost {
 
 	copySelection(): string {
 		const rect = this.effectiveRect();
-		const text = toTsv(readRange(this.model, rect));
-		this.copiedBlock = { r1: rect.r1, c1: rect.c1, text };
+		const text = toTsv(this.visibleValues(rect));
+		// Formulas pasted back shift from the first row the person could see, since that is the
+		// row the eye counts from when the block is placed.
+		const first = visibleRows(rect, this.hiddenRows)[0] ?? rect.r1;
+		this.copiedBlock = { r1: first, c1: rect.c1, text };
 		return text;
 	}
 
 	cutSelection(): string {
 		const text = this.copySelection();
 		const rect = this.effectiveRect();
-		this.mutate("Cut", () => clearRange(this.model, rect));
+		const rows = visibleRows(rect, this.hiddenRows);
+		this.mutate("Cut", () => {
+			if (rows.length === rect.r2 - rect.r1 + 1) clearRange(this.model, rect);
+			else for (const row of rows) clearRange(this.model, { r1: row, c1: rect.c1, r2: row, c2: rect.c2 });
+		});
 		return text;
 	}
 
@@ -2107,7 +2124,7 @@ export class GridHost {
 
 	/** Markdown of the current selection, for `Export ▸ Copy as markdown`. */
 	selectionAsMarkdown(): string[][] {
-		return readRange(this.model, this.effectiveRect());
+		return this.visibleValues(this.effectiveRect());
 	}
 
 	/* ------------------------------------------------------------------ fill */
