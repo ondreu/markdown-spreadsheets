@@ -1046,7 +1046,7 @@ export class GridView extends ItemView {
 	private refreshStatus(): void {
 		if (!this.host) return;
 		const settings = this.plugin.sidecar.settings;
-		const agg = aggregate(this.host.getModel(), this.host.getSelection().rect, this.host.numberOpts());
+		const agg = aggregate(this.host.getModel(), this.host.getSelectionAreas(), this.host.numberOpts());
 		const line = summaryLine(agg, settings.numberLocale);
 		const hints: string[] = [];
 		if (this.host.getFilters().length > 0) hints.push("Filtered view — hidden rows are still saved");
@@ -1171,6 +1171,12 @@ export class GridView extends ItemView {
 				evt.preventDefault();
 				this.host.cancelCalcPlacement();
 				this.refreshRibbon();
+				return false;
+			}
+			// Escape also drops the frame around what was copied.
+			if (this.host.hasCopied()) {
+				evt.preventDefault();
+				this.host.clearCopied();
 				return false;
 			}
 			return true;
@@ -1896,6 +1902,7 @@ export class GridView extends ItemView {
 		if (!this.host) return;
 		// The real serializer, so the copied text is valid GFM rather than an approximation.
 		await navigator.clipboard.writeText(this.serialize(this.selectionModel()));
+		this.host.markCopied();
 		new Notice("Copied as a Markdown table.");
 	}
 
@@ -1914,6 +1921,7 @@ export class GridView extends ItemView {
 					"text/plain": new scope.Blob([this.host.copySelection()], { type: "text/plain" }),
 				}),
 			]);
+			this.host.markCopied();
 			new Notice("Copied as a formatted table.");
 		} catch {
 			new Notice("Could not write a formatted table to the clipboard.");
@@ -1923,6 +1931,7 @@ export class GridView extends ItemView {
 	private async copyAsJson(): Promise<void> {
 		if (!this.host) return;
 		await navigator.clipboard.writeText(toJson(this.host.selectionValues().map((row) => row.map((v) => plainText(v)))));
+		this.host.markCopied();
 		new Notice("Copied as JSON.");
 	}
 
@@ -2504,7 +2513,7 @@ export class GridView extends ItemView {
 		if (!this.host) return;
 		const host = this.host;
 		const settings = this.plugin.sidecar.settings;
-		const agg = aggregate(host.getModel(), host.getSelection().rect, host.numberOpts());
+		const agg = aggregate(host.getModel(), host.getSelectionAreas(), host.numberOpts());
 		new CalculateModal(this.app, {
 			aggregate: agg,
 			decimals: host.getLayout().decimals,
@@ -2532,7 +2541,7 @@ export class GridView extends ItemView {
 		const host = this.host;
 		if (!host || !this.lastCalc) return;
 		const fn = this.lastCalc.fn;
-		const agg = aggregate(host.getModel(), host.getSelection().rect, host.numberOpts());
+		const agg = aggregate(host.getModel(), host.getSelectionAreas(), host.numberOpts());
 		const value = applyFunction(agg, fn);
 		if (value === null) {
 			new Notice("This selection has no numeric cells to calculate from.");

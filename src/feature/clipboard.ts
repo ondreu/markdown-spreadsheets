@@ -59,6 +59,38 @@ export function selectionBlock(model: GridModel, rect: Rect, hidden: ReadonlySet
 }
 
 /**
+ * The block a copy hands over for several ranges.
+ *
+ * Ctrl+click builds two shapes: rows picked one by one (the ranges share their columns) and
+ * columns picked one by one (they share their rows). The first copies as one stack of rows in
+ * row order, the second as one row of columns in column order — exactly the cells that were
+ * selected, with nothing from between them. Ranges of any other shape follow in the order they
+ * were added, so no selected cell is dropped.
+ */
+export function areasBlock(model: GridModel, areas: readonly Rect[], hidden: ReadonlySet<number>): string[][] {
+	const rects = areas.map(normalizeRect);
+	if (rects.length === 0) return [];
+	const blocks = rects.map((rect) => selectionBlock(model, rect, hidden));
+	if (rects.length === 1) return blocks[0];
+
+	const first = rects[0];
+	if (rects.every((rect) => rect.c1 === first.c1 && rect.c2 === first.c2)) {
+		return rects
+			.map((rect, i) => ({ rect, block: blocks[i] }))
+			.sort((a, b) => a.rect.r1 - b.rect.r1)
+			.flatMap((entry) => entry.block);
+	}
+	if (rects.every((rect) => rect.r1 === first.r1 && rect.r2 === first.r2)) {
+		const columns = rects
+			.map((rect, i) => ({ rect, block: blocks[i] }))
+			.sort((a, b) => a.rect.c1 - b.rect.c1);
+		// Every block was built from the same rows, so line `i` is the same row in each of them.
+		return (blocks[0] ?? []).map((_, i) => columns.flatMap((entry) => entry.block[i] ?? []));
+	}
+	return blocks.flat();
+}
+
+/**
  * Parses clipboard TSV into a rectangle.
  *
  * Quoted fields may contain tabs and newlines, so this is a character scan rather than a

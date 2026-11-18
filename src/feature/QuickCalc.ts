@@ -31,20 +31,27 @@ export interface Aggregate {
 	product: number;
 }
 
-export function aggregate(model: GridModel, rect: Rect, opts?: NumberParseOptions): Aggregate {
-	const r = normalizeRect(rect);
+/**
+ * Totals over one range, or over several ranges of a Ctrl+click selection. Overlapping ranges
+ * count their shared cells twice, exactly as a copy of them would contain them twice.
+ */
+export function aggregate(model: GridModel, rects: Rect | Rect[], opts?: NumberParseOptions): Aggregate {
+	const areas = Array.isArray(rects) ? rects : [rects];
 	const numbers: number[] = [];
 	let ignored = 0;
 	let filled = 0;
 
-	for (let row = r.r1; row <= r.r2; row++) {
-		for (let col = r.c1; col <= r.c2; col++) {
-			const raw = getRaw(model, row, col);
-			if (raw.trim() === "") continue;
-			filled++;
-			const n = parseNumber(raw, opts);
-			if (n === null) ignored++;
-			else numbers.push(n);
+	for (const area of areas) {
+		const r = normalizeRect(area);
+		for (let row = r.r1; row <= r.r2; row++) {
+			for (let col = r.c1; col <= r.c2; col++) {
+				const raw = getRaw(model, row, col);
+				if (raw.trim() === "") continue;
+				filled++;
+				const n = parseNumber(raw, opts);
+				if (n === null) ignored++;
+				else numbers.push(n);
+			}
 		}
 	}
 

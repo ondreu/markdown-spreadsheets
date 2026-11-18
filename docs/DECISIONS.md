@@ -879,3 +879,31 @@ already keeps a conditional rule in one (`%%cf …%%`, decision 37). So the date
 **What it does not do.** No general number formats (currency, percent) as markers — those rewrite
 the value, and a formula cell is the wrong place to rewrite a value. No time zone handling, no
 `DATE()` constructor yet.
+
+## 46. Ctrl+click selects several ranges, and a copy marks them
+
+**Design:** §11's key list has one range and one clipboard block. Excel's Ctrl+click is how a
+person copies two rows that are not neighbours, and filtering made that need visible: *copy the
+three rows I picked, not the two in between*. Nothing here changes the note.
+
+**Built:**
+
+- `Selection` grew `extra: Rect[]`; `rect` stays the primary range, so typing, the formula bar and
+  every single-range action still act on it. A plain click or any arrow key drops the extras.
+- Ctrl+click and Ctrl+drag on cells, row headers and column headers add a range instead of
+  replacing the selection. Ctrl+clicking the same range again moves it to primary rather than
+  adding it twice. Ctrl+click on a link cell now selects it; following a link moved to Alt+click.
+- `areasBlock` (`feature/clipboard.ts`): ranges that share their columns are stacked in row order
+  (rows picked one by one), ranges that share their rows are joined in column order (columns
+  picked one by one), and ranges of any other shape follow in the order they were added. The rows
+  a filter hides are dropped from every range, as before.
+- Cut and Delete clear only the visible cells of every range; Format applies to all of them, and
+  the status bar and Calculate total all of them.
+- After a copy, a dashed green frame stays around each range until the next edit, another copy or
+  Escape. It is a static frame rather than Excel's marching ants, and it is drawn from row and
+  cell offsets so a frozen header cannot pull it out of place.
+
+**What it does not do.** No toggle-off (Ctrl+click on a selected range only makes it primary), and
+no paste back into the same multi-range shape: the clipboard still carries one block, and a paste
+fills a contiguous rectangle. Overlapping ranges count their shared cells twice, exactly as they
+appear twice in the block.

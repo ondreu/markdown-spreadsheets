@@ -5,7 +5,7 @@ import { fnv1a } from "../model/hash";
 import { formatNumber, type NumberParseOptions } from "../model/numbers";
 import { conditionalEnabled, type MarkdownSpreadsheetsSettings } from "../settings";
 import type { TableLayout } from "../store/Sidecar";
-import { fromMarkdownTable, fromTsv, looksLikeGrid, selectionBlock, shiftFormulas, toTsv, visibleRows } from "../feature/clipboard";
+import { areasBlock, fromMarkdownTable, fromTsv, looksLikeGrid, shiftFormulas, toTsv, visibleRows } from "../feature/clipboard";
 import {
 	applyInlineFormat,
 	clearRange,
@@ -64,6 +64,11 @@ import { iconName, setIconSafe } from "./icons";
 
 export interface Selection {
 	rect: Rect;
+	/**
+	 * The other ranges of a Ctrl+click selection, in the order they were added. The primary
+	 * `rect` stays the range that receives typing and the one every single-range action uses.
+	 */
+	extra?: Rect[];
 	/** The cell that receives typing; always inside `rect`. */
 	active: { row: number; col: number };
 }
@@ -217,6 +222,11 @@ export class GridHost {
 	private readonly styles = new GridStyles();
 	private geometryTimer: number | null = null;
 	private dragging: DragKind | null = null;
+	/** A Ctrl+drag is extending the range it has just added, not replacing the selection. */
+	private adding = false;
+	/** The areas the last copy took, kept to draw its outline until the next change. */
+	private copiedAreas: Rect[] = [];
+	private copyMarqueeEls: HTMLElement[] = [];
 	private scrollFrame: number | null = null;
 	private fillDrag: { source: Rect; last: Rect } | null = null;
 	private cleanup: Array<() => void> = [];
@@ -493,6 +503,8 @@ export class GridHost {
 	/** Swaps in a new model/layout (undo, reload after an external change, table switch). */
 	replaceData(model: GridModel, layout: TableLayout, keepSelection = true): void {
 		this.cancelEdit();
+		this.copiedAreas = [];
+		this.copyMarqueeEls = [];
 		this.model = model;
 		this.layout = layout;
 		this.renderCache.clear();
@@ -723,6 +735,7 @@ export class GridHost {
 		const run = () => {
 			this.styles.applyGeometry(this.geometrySpec(), this.rowEls);
 			this.positionFillHandle();
+			this.paintCopied();
 		};
 		if (immediate) {
 			if (this.geometryTimer !== null) {
@@ -806,6 +819,13 @@ export class GridHost {
 	 * and to the left, lost the starting cell after the first step.
 	 */
 	setSelection(rect: Rect, active?: { row: number; col: number }): void {
+		this.selection = this.clampToGrid(rect, active);
+		this.paintSelection();
+		this.ctx.callbacks.onSelectionChange(this.selection);
+	}
+
+	/** Bounds a range to the grid and keeps the active cell inside it. */
+	private clampToGrid(rect: Rect, active?: { row: number; col: number }): Selection {
 		const norm = normalizeRect(rect);
 		const bounded: Rect = {
 			r1: Math.max(0, Math.min(norm.r1, this.rows - 1)),
@@ -814,15 +834,48 @@ export class GridHost {
 			c2: Math.max(0, Math.min(norm.c2, this.cols - 1)),
 		};
 		const act = active ?? { row: bounded.r1, col: bounded.c1 };
-		this.selection = {
+		return {
 			rect: bounded,
 			active: {
 				row: Math.max(bounded.r1, Math.min(act.row, bounded.r2)),
 				col: Math.max(bounded.c1, Math.min(act.col, bounded.c2)),
 			},
 		};
+	}
+
+	/**
+	 * Ctrl+click: the range joins the selection instead of replacing it. The new range becomes
+	 * the primary one, so typing, the formula bar and single-range actions keep working on it.
+	 * A range that is already in the selection moves to primary instead of being added twice —
+	 * Ctrl+clicking the same cells again must not double them in a copy.
+	 */
+	private addSelection(rect: Rect, active?: { row: number; col: number }): void {
+		const next = this.clampToGrid(rect, active);
+		const previous = this.areas().filter(
+			(area) => area.r1 !== next.rect.r1 || area.c1 !== next.rect.c1 || area.r2 !== next.rect.r2 || area.c2 !== next.rect.c2,
+		);
+		this.selection = { ...next, extra: previous };
 		this.paintSelection();
 		this.ctx.callbacks.onSelectionChange(this.selection);
+	}
+
+	/** Extends a range being added with Ctrl+drag, leaving the earlier areas alone. */
+	private extendPrimary(rect: Rect): void {
+		const next = this.clampToGrid(rect, this.selection.active);
+		this.selection = { ...next, extra: this.selection.extra };
+		this.paintSelection();
+		this.ctx.callbacks.onSelectionChange(this.selection);
+	}
+
+	/** Every range of the selection: the extras in the order added, the primary one last. */
+	private areas(): Rect[] {
+		const extra = this.selection.extra;
+		return extra !== undefined && extra.length > 0 ? [...extra, this.selection.rect] : [this.selection.rect];
+	}
+
+	/** The selection's ranges as data sees them — whole rows and columns stop at the used range. */
+	getSelectionAreas(): Rect[] {
+		return this.effectiveAreas();
 	}
 
 	/** Selects one cell and brings it into view — used by find and by the formula bar. */
@@ -843,7 +896,10 @@ export class GridHost {
 
 	private extendTo(row: number, col: number): void {
 		const { active } = this.selection;
-		this.setSelection({ r1: active.row, c1: active.col, r2: row, c2: col }, active);
+		const rect = { r1: active.row, c1: active.col, r2: row, c2: col };
+		// A Ctrl+drag is still building the range it has just added; the older areas stay.
+		if (this.adding) this.extendPrimary(rect);
+		else this.setSelection(rect, active);
 	}
 
 	private paintSelection(): void {
@@ -852,40 +908,49 @@ export class GridHost {
 		for (const el of this.selectedHeads) el.removeClass("is-selected");
 		this.selectedHeads = [];
 
-		const { rect, active } = this.selection;
-		const single = rect.r1 === rect.r2 && rect.c1 === rect.c2;
-		for (let r = rect.r1; r <= rect.r2; r++) {
-			const rowEl = this.rowEls.get(r);
-			if (!rowEl) continue;
-			const head = rowEl.firstElementChild;
-			if (head !== null && head.instanceOf(HTMLElement)) {
+		const { active } = this.selection;
+		const areas = this.areas();
+		const oneCellAlone =
+			areas.length === 1 && this.selection.rect.r1 === this.selection.rect.r2 && this.selection.rect.c1 === this.selection.rect.c2;
+		for (let i = 0; i < areas.length; i++) {
+			const rect = areas[i];
+			const primary = i === areas.length - 1;
+			const oneCell = rect.r1 === rect.r2 && rect.c1 === rect.c2;
+			for (let r = rect.r1; r <= rect.r2; r++) {
+				const rowEl = this.rowEls.get(r);
+				if (!rowEl) continue;
+				const head = rowEl.firstElementChild;
+				if (head !== null && head.instanceOf(HTMLElement)) {
+					head.addClass("is-selected");
+					this.selectedHeads.push(head);
+				}
+				for (let c = rect.c1; c <= rect.c2; c++) {
+					const el = this.cellEl(r, c);
+					if (!el) continue;
+					// A lone cell stays untinted so the active-cell ring is all it shows; every
+					// other area is tinted, single cells added with Ctrl included.
+					if (!oneCell || !primary) el.addClass("is-selected");
+					// The range is drawn as one outline; the cells on its edges carry the border.
+					if (r === rect.r1) el.addClass("is-sel-top");
+					if (r === rect.r2) el.addClass("is-sel-bottom");
+					if (c === rect.c1) el.addClass("is-sel-left");
+					if (c === rect.c2) el.addClass("is-sel-right");
+					this.selectedEls.push(el);
+				}
+			}
+			for (let c = rect.c1; c <= rect.c2; c++) {
+				const head = this.colHeadEls.get(c);
+				if (!head) continue;
 				head.addClass("is-selected");
 				this.selectedHeads.push(head);
 			}
-			for (let c = rect.c1; c <= rect.c2; c++) {
-				const el = this.cellEl(r, c);
-				if (!el) continue;
-				// The range is drawn as one outline; the cells on its edges carry the border.
-				if (!single) el.addClass("is-selected");
-				if (r === rect.r1) el.addClass("is-sel-top");
-				if (r === rect.r2) el.addClass("is-sel-bottom");
-				if (c === rect.c1) el.addClass("is-sel-left");
-				if (c === rect.c2) el.addClass("is-sel-right");
-				this.selectedEls.push(el);
-			}
-		}
-		for (let c = rect.c1; c <= rect.c2; c++) {
-			const head = this.colHeadEls.get(c);
-			if (!head) continue;
-			head.addClass("is-selected");
-			this.selectedHeads.push(head);
 		}
 		const activeEl = this.cellEl(active.row, active.col);
 		if (activeEl) {
 			activeEl.addClass("is-active");
 			if (!this.selectedEls.includes(activeEl)) this.selectedEls.push(activeEl);
 		}
-		if (this.ctx.settings.highlightActiveLine && single) {
+		if (this.ctx.settings.highlightActiveLine && oneCellAlone) {
 			// A faint cross through the active cell's row and column, within the used range.
 			const used = this.model.usedRange;
 			for (let c = 0; c < Math.max(used.cols, active.col + 1); c++) {
@@ -1079,13 +1144,17 @@ export class GridHost {
 	 * every row in the DOM — a hundred or more past the table — and copying or filling all of
 	 * that would write a block of empty cells; whole rows and columns stop at the used range.
 	 */
-	private effectiveRect(): Rect {
-		const rect = this.selection.rect;
+	private effectiveRect(rect: Rect = this.selection.rect): Rect {
 		const used = this.model.usedRange;
 		const out = { ...rect };
 		if (rect.r1 === 0 && rect.r2 === this.rows - 1 && used.rows > 0) out.r2 = Math.max(0, used.rows - 1);
 		if (rect.c1 === 0 && rect.c2 === this.cols - 1 && used.cols > 0) out.c2 = Math.max(0, used.cols - 1);
 		return out;
+	}
+
+	/** Every range of the selection as data sees it. */
+	private effectiveAreas(): Rect[] {
+		return this.areas().map((rect) => this.effectiveRect(rect));
 	}
 
 	/* --------------------------------------------------------------- editing */
@@ -1502,6 +1571,8 @@ export class GridHost {
 		if (mode === "all") this.repaintAll();
 		this.applyGeometry(true);
 		this.applyFilters();
+		// Whatever the copy outline marked is now part of the history, not the pending block.
+		this.clearCopied();
 		this.ctx.callbacks.onDirty(label);
 		this.ctx.callbacks.onSelectionChange(this.selection);
 	}
@@ -1531,7 +1602,10 @@ export class GridHost {
 	/* ------------------------------------------------------------ operations */
 
 	clearSelectionContents(): void {
-		this.mutate("Clear cells", () => clearRange(this.model, this.selection.rect));
+		const areas = this.effectiveAreas();
+		this.mutate("Clear cells", () => {
+			for (const rect of areas) this.clearVisibleCells(rect);
+		});
 	}
 
 	insertRowsAt(where: "above" | "below"): void {
@@ -1716,15 +1790,15 @@ export class GridHost {
 	 * screen. Filtering itself stays display-only and never touches the note (§11).
 	 */
 	selectionValues(): string[][] {
-		return this.visibleValues(this.effectiveRect());
+		return this.visibleValues(this.effectiveAreas());
 	}
 
 	/**
-	 * Reads a rectangle of the model for a copy, dropping the rows a filter hides. The rows stay
-	 * in the note; only the block handed to the clipboard is shortened.
+	 * Reads the selected ranges for a copy, dropping the rows a filter hides. The rows stay in
+	 * the note; only the block handed to the clipboard is shortened.
 	 */
-	private visibleValues(rect: Rect): string[][] {
-		return selectionBlock(this.model, rect, this.hiddenRows);
+	private visibleValues(areas: Rect[]): string[][] {
+		return areasBlock(this.model, areas, this.hiddenRows);
 	}
 
 	/** Sorts every data row by one column; the header row never moves. */
@@ -1742,7 +1816,10 @@ export class GridHost {
 	}
 
 	format(kind: InlineFormat): void {
-		this.mutate("Format cells", () => applyInlineFormat(this.model, this.selection.rect, kind));
+		const areas = this.areas();
+		this.mutate("Format cells", () => {
+			for (const rect of areas) applyInlineFormat(this.model, rect, kind);
+		});
 	}
 
 	/* --------------------------------------------------------------- sizing */
@@ -2032,6 +2109,8 @@ export class GridHost {
 		}
 		for (const [r, rowEl] of this.rowEls) rowEl.toggleClass("is-filtered", this.hiddenRows.has(r));
 		this.hostEl.toggleClass("has-filter", this.filters.length > 0);
+		// A filter changes which rows a copied block shows, and so where its frame sits.
+		this.paintCopied();
 	}
 
 	/* ------------------------------------------------------------ quick calc */
@@ -2067,24 +2146,90 @@ export class GridHost {
 	/* -------------------------------------------------------------- clipboard */
 
 	copySelection(): string {
-		const rect = this.effectiveRect();
-		const text = toTsv(this.visibleValues(rect));
-		// Formulas pasted back shift from the first row the person could see, since that is the
-		// row the eye counts from when the block is placed.
-		const first = visibleRows(rect, this.hiddenRows)[0] ?? rect.r1;
-		this.copiedBlock = { r1: first, c1: rect.c1, text };
+		const areas = this.effectiveAreas();
+		const text = toTsv(this.visibleValues(areas));
+		// Formulas pasted back shift from the first row the person could see in the first area.
+		// A block made of several areas has no single origin to shift from, so it keeps its
+		// references as they are — the same rule as a block pasted from outside the grid.
+		const first = areas[0];
+		if (areas.length === 1 && first !== undefined) {
+			const top = visibleRows(first, this.hiddenRows)[0] ?? first.r1;
+			this.copiedBlock = { r1: top, c1: first.c1, text };
+		} else {
+			this.copiedBlock = null;
+		}
+		this.showCopied(areas);
 		return text;
 	}
 
 	cutSelection(): string {
 		const text = this.copySelection();
-		const rect = this.effectiveRect();
-		const rows = visibleRows(rect, this.hiddenRows);
+		const areas = this.effectiveAreas();
 		this.mutate("Cut", () => {
-			if (rows.length === rect.r2 - rect.r1 + 1) clearRange(this.model, rect);
-			else for (const row of rows) clearRange(this.model, { r1: row, c1: rect.c1, r2: row, c2: rect.c2 });
+			for (const rect of areas) this.clearVisibleCells(rect);
 		});
+		// The block is gone from the note, but the outline still says where it came from.
+		this.showCopied(areas);
 		return text;
+	}
+
+	/** Clears the cells of a range that are on screen, leaving rows a filter hides untouched. */
+	private clearVisibleCells(rect: Rect): void {
+		const rows = visibleRows(rect, this.hiddenRows);
+		if (rows.length === rect.r2 - rect.r1 + 1) clearRange(this.model, rect);
+		else for (const row of rows) clearRange(this.model, { r1: row, c1: rect.c1, r2: row, c2: rect.c2 });
+	}
+
+	/** Outlines what a copy took: a dashed frame around every range, until the next change. */
+	markCopied(): void {
+		this.showCopied(this.effectiveAreas());
+	}
+
+	hasCopied(): boolean {
+		return this.copiedAreas.length > 0;
+	}
+
+	clearCopied(): void {
+		if (this.copiedAreas.length === 0) return;
+		this.copiedAreas = [];
+		this.paintCopied();
+	}
+
+	private showCopied(areas: Rect[]): void {
+		this.copiedAreas = areas.map((rect) => ({ ...rect }));
+		this.paintCopied();
+	}
+
+	/**
+	 * Positions one dashed frame per copied range. Geometry comes from row and cell offsets, not
+	 * from the viewport: a frozen row is sticky, so its box moves with the scroll while the
+	 * cell it holds does not.
+	 */
+	private paintCopied(): void {
+		for (const el of this.copyMarqueeEls) el.detach();
+		this.copyMarqueeEls = [];
+		for (const area of this.copiedAreas) {
+			const rows = visibleRows(area, this.hiddenRows);
+			if (rows.length === 0) continue;
+			const top = this.rowEls.get(rows[0]);
+			const bottom = this.rowEls.get(rows[rows.length - 1]);
+			const left = this.cellEl(rows[0], area.c1);
+			const right = this.cellEl(rows[0], area.c2);
+			if (!top || !bottom || !left || !right) continue;
+			const x = left.offsetLeft;
+			const y = top.offsetTop;
+			const w = right.offsetLeft + right.offsetWidth - x;
+			const h = bottom.offsetTop + bottom.offsetHeight - y;
+			if (w <= 0 || h <= 0) continue;
+			const el = this.canvasEl.createDiv({ cls: "mds-copy-marquee" });
+			el.setCssProps({
+				"--mds-copy-x": `${x}px`,
+				"--mds-copy-y": `${y}px`,
+				"--mds-copy-w": `${w}px`,
+				"--mds-copy-h": `${h}px`,
+			});
+			this.copyMarqueeEls.push(el);
+		}
 	}
 
 	/**
@@ -2124,7 +2269,7 @@ export class GridHost {
 
 	/** Markdown of the current selection, for `Export ▸ Copy as markdown`. */
 	selectionAsMarkdown(): string[][] {
-		return this.visibleValues(this.effectiveRect());
+		return this.visibleValues(this.effectiveAreas());
 	}
 
 	/* ------------------------------------------------------------------ fill */
@@ -2470,7 +2615,7 @@ export class GridHost {
 			return;
 		}
 		// Mod+click on a link in a rendered cell follows it; see `onClick`.
-		if (target !== null && (evt.ctrlKey || evt.metaKey) && target.closest("a") !== null) return;
+		if (target !== null && evt.altKey && target.closest("a") !== null) return;
 
 		const hit = this.hit(evt);
 		// The arrow in a column header opens sort and filter; the rest of the header selects.
@@ -2505,6 +2650,8 @@ export class GridHost {
 		if (this.editing) this.commitEdit(0, 0, false);
 		this.focus();
 
+		const add = evt.ctrlKey || evt.metaKey;
+		this.adding = false;
 		switch (hit.kind) {
 			case "cell": {
 				if (this.pendingCalc) {
@@ -2513,10 +2660,19 @@ export class GridHost {
 				}
 				this.dragging = "cells";
 				if (evt.shiftKey) this.extendTo(hit.row, hit.col);
-				else this.setSelection({ r1: hit.row, c1: hit.col, r2: hit.row, c2: hit.col }, { row: hit.row, col: hit.col });
+				else if (add) {
+					this.adding = true;
+					this.addSelection({ r1: hit.row, c1: hit.col, r2: hit.row, c2: hit.col }, { row: hit.row, col: hit.col });
+				} else this.setSelection({ r1: hit.row, c1: hit.col, r2: hit.row, c2: hit.col }, { row: hit.row, col: hit.col });
 				break;
 			}
 			case "colhead": {
+				if (add) {
+					this.adding = true;
+					this.dragging = "cols";
+					this.addSelection({ r1: 0, c1: hit.col, r2: this.rows - 1, c2: hit.col }, { row: 0, col: hit.col });
+					break;
+				}
 				// Pressing on a column that is already selected on its own picks it up to move it.
 				if (!evt.shiftKey && this.isWholeColumn(hit.col)) {
 					this.headerDrag = { kind: "col", from: hit.col, to: hit.col, moved: false };
@@ -2528,6 +2684,12 @@ export class GridHost {
 				break;
 			}
 			case "rowhead": {
+				if (add) {
+					this.adding = true;
+					this.dragging = "rows";
+					this.addSelection({ r1: hit.row, c1: 0, r2: hit.row, c2: this.cols - 1 }, { row: hit.row, col: 0 });
+					break;
+				}
 				if (!evt.shiftKey && hit.row > 0 && this.isWholeRow(hit.row)) {
 					this.headerDrag = { kind: "row", from: hit.row, to: hit.row, moved: false };
 					break;
@@ -2620,8 +2782,13 @@ export class GridHost {
 			const hit = this.hit(evt);
 			const { active } = this.selection;
 			if (this.dragging === "cells" && hit.kind === "cell") this.extendTo(hit.row, hit.col);
-			else if (this.dragging === "cols" && hit.col >= 0) this.selectColumns(active.col, hit.col);
-			else if (this.dragging === "rows" && hit.row >= 0) this.selectRows(active.row, hit.row);
+			else if (this.dragging === "cols" && hit.col >= 0) {
+				if (this.adding) this.extendPrimary({ r1: 0, c1: active.col, r2: this.rows - 1, c2: hit.col });
+				else this.selectColumns(active.col, hit.col);
+			} else if (this.dragging === "rows" && hit.row >= 0) {
+				if (this.adding) this.extendPrimary({ r1: active.row, c1: 0, r2: hit.row, c2: this.cols - 1 });
+				else this.selectRows(active.row, hit.row);
+			}
 			return;
 		}
 
@@ -2668,7 +2835,7 @@ export class GridHost {
 		const link = target?.closest("a") ?? null;
 		if (link === null || !link.instanceOf(HTMLElement)) return;
 		evt.preventDefault();
-		if (!(evt.ctrlKey || evt.metaKey)) return;
+		if (!evt.altKey) return;
 		evt.stopPropagation();
 		this.followLink(link);
 	}
@@ -2706,6 +2873,7 @@ export class GridHost {
 		this.pointDrag = false;
 		this.pointing = null;
 		this.dragging = null;
+		this.adding = false;
 		const drag = this.headerDrag;
 		if (drag) {
 			this.headerDrag = null;
@@ -2775,7 +2943,7 @@ export class GridHost {
 		}
 
 		if (hit.kind === "colhead") {
-			if (!rectCols(this.selection.rect).includes(hit.col)) this.selectColumns(hit.col);
+			if (!this.areas().some((r) => hit.col >= r.c1 && hit.col <= r.c2)) this.selectColumns(hit.col);
 			menu.addItem((i) => i.setTitle("Insert column left").setIcon(iconName("colLeft")).onClick(() => this.insertColsAt("left")));
 			menu.addItem((i) => i.setTitle("Insert column right").setIcon(iconName("colRight")).onClick(() => this.insertColsAt("right")));
 			menu.addItem((i) => i.setTitle("Delete column").setIcon(iconName("remove")).onClick(() => this.deleteSelectedCols()));
@@ -2786,7 +2954,7 @@ export class GridHost {
 			menu.addItem((i) => i.setTitle("Autofit width").setIcon(iconName("autofitCols")).onClick(() => this.autofitColumns(rectCols(this.selection.rect))));
 			menu.addItem((i) => i.setTitle("Wrap text").setIcon(iconName("wrap")).onClick(() => this.toggleWrap(rectCols(this.selection.rect))));
 		} else if (hit.kind === "rowhead") {
-			if (!rectRows(this.selection.rect).includes(hit.row)) this.selectRows(hit.row);
+			if (!this.areas().some((r) => hit.row >= r.r1 && hit.row <= r.r2)) this.selectRows(hit.row);
 			menu.addItem((i) =>
 				i
 					.setTitle("Insert row above")
@@ -2842,8 +3010,7 @@ export class GridHost {
 	}
 
 	private rectContains(row: number, col: number): boolean {
-		const r = this.selection.rect;
-		return row >= r.r1 && row <= r.r2 && col >= r.c1 && col <= r.c2;
+		return this.areas().some((r) => row >= r.r1 && row <= r.r2 && col >= r.c1 && col <= r.c2);
 	}
 
 	/* ---------------------------------------------------------------- resize */
