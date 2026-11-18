@@ -49,7 +49,14 @@ const app: any = {
 	workspace: { trigger: () => {}, getLeaf: () => ({}), openLinkText: async (t: string) => { (window as any).openedLink = t; } },
 };
 const store: { data: unknown } = { data: null };
-const plugin: any = { loadData: async () => store.data, saveData: async (d: unknown) => (store.data = d), setStatusBarText: () => {}, clearStatusBar: () => {} };
+const plugin: any = {
+	loadData: async () => store.data,
+	saveData: async (d: unknown) => (store.data = d),
+	setStatusBarText: () => {},
+	clearStatusBar: () => {},
+	// The shim has no `ribbon-toolbar` plugin, so the grid keeps its own toolbar.
+	usesExternalRibbon: () => false,
+};
 (async () => {
 	plugin.sidecar = new Sidecar(plugin);
 	await plugin.sidecar.load();
