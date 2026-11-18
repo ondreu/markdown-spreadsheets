@@ -769,6 +769,24 @@
 	outline-offset: -2px;
 }
 
+/*
+ * What the last copy took: a static dashed frame around each range, so the block stays visible
+ * while the person moves to where it should go. Not Excel's marching ants — a copy here is one
+ * action, and the frame only has to say what it was. Removed by the next change or Escape.
+ */
+.mds-copy-marquee {
+	position: absolute;
+	left: var(--mds-copy-x, 0);
+	top: var(--mds-copy-y, 0);
+	width: var(--mds-copy-w, 0);
+	height: var(--mds-copy-h, 0);
+	border: 2px dashed var(--color-green, #08b94e);
+	background-color: color-mix(in srgb, var(--color-green, #08b94e) 5%, transparent);
+	box-sizing: border-box;
+	pointer-events: none;
+	z-index: 2;
+}
+
 /* The cell a formula is pointing at, while the editor still has focus. */
 .mds-cell.is-point-preview {
 	outline: 1px dashed var(--mds-accent);
