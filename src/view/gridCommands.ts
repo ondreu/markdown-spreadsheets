@@ -24,6 +24,7 @@ export const GRID_COMMANDS: Array<[id: string, name: string]> = [
 	["italic", "Toggle italic"],
 	["code", "Toggle code"],
 	["strike", "Toggle strikethrough"],
+	["highlight", "Toggle highlight"],
 	["link", "Toggle link"],
 	["wrap", "Toggle wrap text"],
 	["render", "Toggle raw and rendered cells"],
