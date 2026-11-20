@@ -75,4 +75,20 @@ export const GRID_COMMANDS: Array<[id: string, name: string]> = [
 	["copy-json", "Copy selection as JSON"],
 	["reload", "Reload from the note"],
 	["open-note", "Open the note"],
+	// Clipboard, history and the cell-level formatting that has no hotkey of its own. A host that
+	// draws its own ribbon (Ribbon toolbar) builds the buttons from this list, so these need a
+	// command even though the grid also handles them from the keyboard.
+	["copy", "Copy the selection"],
+	["cut", "Cut the selection"],
+	["paste", "Paste into the grid"],
+	["copy-tsv", "Copy the selection as text"],
+	["undo", "Undo in the grid"],
+	["redo", "Redo in the grid"],
+	["save", "Save the grid to the note"],
+	["cf", "Conditional formatting"],
+	["insert-formula", "Insert a formula"],
+	["flatten", "Flatten formulas"],
+	["date-format", "Show the selection as a date"],
+	["reset-row", "Reset row height"],
+	["restore", "Restore a version of the table"],
 ];
